@@ -1,0 +1,39 @@
+import type { ChatMessage, ToolSpec } from './types.ts';
+
+export const SAFETY_MARGIN = 1.15;
+export const IMAGE_TOKENS = 1600;
+
+const CJK = /[　-ヿ㐀-䶿一-鿿豈-﫿＀-￯가-힯]/u;
+
+export function estimateTextTokens(text: string): number {
+  let cjk = 0; let other = 0;
+  for (const ch of text) { if (CJK.test(ch)) cjk++; else other++; }
+  return Math.ceil(cjk + other / 3.5);
+}
+
+export function estimateMessageTokens(message: ChatMessage): number {
+  let tokens = 4;
+  if (message.role === 'user') {
+    tokens += estimateTextTokens(message.content) + (message.images?.length ?? 0) * IMAGE_TOKENS;
+  } else if (message.role === 'assistant') {
+    tokens += estimateTextTokens(message.content);
+    for (const call of message.toolCalls ?? []) tokens += 8 + estimateTextTokens(call.name) + estimateTextTokens(call.raw ?? JSON.stringify(call.arguments ?? {}));
+  } else {
+    tokens += 8 + estimateTextTokens(message.content);
+  }
+  return tokens;
+}
+
+export function estimateToolTokens(tools: readonly ToolSpec[]): number {
+  return tools.reduce((sum, t) => sum + 12 + Math.ceil(JSON.stringify(t).length / 3.5), 0);
+}
+
+export interface Estimate {
+  raw: number;
+  tokens: number;
+}
+
+export function estimateRequest(system: string, messages: readonly ChatMessage[], tools: readonly ToolSpec[], factor = 1): Estimate {
+  const raw = 16 + estimateTextTokens(system) + messages.reduce((s, m) => s + estimateMessageTokens(m), 0) + estimateToolTokens(tools);
+  return { raw, tokens: Math.ceil(raw * factor * SAFETY_MARGIN) };
+}

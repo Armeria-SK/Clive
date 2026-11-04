@@ -1,0 +1,78 @@
+import { mkdirSync } from 'node:fs';
+import { parseArgs } from 'node:util';
+import { App } from './app.ts';
+import { ConfigError } from './config/store.ts';
+import { loadEnvFile, resolvePaths } from './paths.ts';
+import { isLoopbackHost } from './shared/url.ts';
+import { createWebServer } from './web/server.ts';
+
+const log = (line: string) => process.stdout.write(`${new Date().toISOString()} ${line}\n`);
+
+// node src/main.ts [doctor] [--data-dir <dir>]（--data-dir は環境変数 CLIVE_DATA_DIR より優先）
+const { values: args, positionals } = parseArgs({ options: { 'data-dir': { type: 'string' } }, allowPositionals: true });
+const dataDir = args['data-dir'] ?? process.env.CLIVE_DATA_DIR;
+
+async function start(): Promise<void> {
+  loadEnvFile();
+  const paths = resolvePaths(dataDir);
+  mkdirSync(paths.data, { recursive: true });
+  const app = new App({ paths, log });
+  const config = app.config();
+  if (!isLoopbackHost(config.server.host)) {
+    throw new ConfigError(`server.host は 127.0.0.1 などのループバックにしてください（今は ${config.server.host}）。ほかの端末からは Tailscale Serve 経由で開きます（docs/config.md）`);
+  }
+  log('[INFO] モデルのコンテキスト長を確認しています…');
+  const results = await app.status.probeAll(config);
+  for (const r of results) log(`[${r.status === 'ok' ? 'INFO' : 'WARN'}] ${r.modelId}: ${r.status} — ${r.message}`);
+  const web = createWebServer(app);
+  await new Promise<void>((resolve, reject) => {
+    web.server.once('error', reject);
+    web.server.listen(config.server.port, config.server.host, resolve);
+  });
+  log(`[INFO] Clive が起動しました: http://${config.server.host}:${config.server.port}/`);
+  log('[INFO] ログインはありません。この URL を開ける人（この PC のほかのプログラムを含む）は誰でも Clive を操作できます');
+  app.worker.start();
+  log(`[INFO] ワーカー: ${config.worker.enabled ? `動いています（自発行動: ${config.worker.autonomy ? 'あり' : 'なし'}）` : '止めています（worker.enabled = false）'}`);
+  let closing = false;
+  const shutdown = () => {
+    if (closing) return;
+    closing = true;
+    log('[INFO] 終了しています…');
+    web.server.close();
+    web.server.closeAllConnections();
+    app.close();
+    process.exit(0);
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+}
+
+async function doctor(): Promise<number> {
+  loadEnvFile();
+  const paths = resolvePaths(dataDir);
+  const app = new App({ paths, log: () => undefined });
+  try {
+    const config = app.config();
+    process.stdout.write(`設定ファイル: ${paths.config}（OK）\n`);
+    const results = await app.status.probeAll(config);
+    let bad = 0;
+    for (const r of results) {
+      const used = config.routing.chat.includes(r.modelId) || config.routing.background.includes(r.modelId);
+      const mark = r.status === 'ok' ? 'OK ' : used ? 'NG ' : '-- ';
+      if (r.status !== 'ok' && used) bad++;
+      process.stdout.write(`${mark} ${r.modelId}: ${r.message}${r.hint ? `\n     直し方: ${r.hint}` : ''}\n`);
+    }
+    if (!config.routing.chat.some(id => app.status.usable(id))) { process.stdout.write('NG  チャットで使えるモデルがありません\n'); bad++; }
+    return bad ? 1 : 0;
+  } finally { app.close(); }
+}
+
+const command = positionals[0];
+try {
+  if (command === 'doctor') process.exitCode = await doctor();
+  else await start();
+} catch (error) {
+  if (error instanceof ConfigError) process.stderr.write(`設定エラー: ${error.message}\n`);
+  else process.stderr.write(`起動できませんでした: ${(error as Error).stack ?? error}\n`);
+  process.exitCode = 1;
+}

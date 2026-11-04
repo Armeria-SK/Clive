@@ -1,0 +1,38 @@
+{
+  "name": "clive",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clive — いつも動いている個人用 AI エージェント",
+  "type": "module",
+  "engines": {
+    "node": ">=24.16.0"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "dev": "node --watch src/main.ts",
+    "doctor": "node src/main.ts doctor",
+    "test": "node --test --test-reporter=spec \"tests/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
+    "build:web": "vite build --config web/vite.config.mjs",
+    "dev:web": "vite --config web/vite.config.mjs",
+    "check": "npm run typecheck && npm test && npm run build:web"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.132.1",
+    "@sinclair/typebox": "0.34.41",
+    "croner": "9.1.0",
+    "parse5": "8.0.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.0.4",
+    "typescript": "5.9.3",
+    "vite": "6.4.3"
+  }
+}
