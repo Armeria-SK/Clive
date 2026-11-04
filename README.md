@@ -34,7 +34,8 @@ Windows と Linux で動き、クラウドの API（Anthropic など）とロー
 
 - ファイルの読み書きとシェルの実行ができる。触れてよいフォルダを決めておき、その外や危ない操作（消す・秘密を読む・外へ送るなど）は、実行の前に止めるか、画面で承認を求める
 - 承認は「今回だけ許可／この会話では許可／拒否」から選ぶ
-- 実行の前に、自分で用意したコマンドで判定を足せる（Claude Code の PreToolUse フックと同じ約束）
+- シェルの判定はコマンドの文字列を見て止める仕組みで、完全な閉じ込めではない（許可したフォルダにスクリプトを書いてから実行する、などで回り道できる）。守りたいものがある環境では、OS の側でも閉じ込める（Linux は下の systemd の設定、Windows は権限の低い別のユーザーで動かす）
+- 実行の前に、自分で用意したコマンドで判定を足せる（下の「[実行前のフック](#実行前のフック)」）
 - Web の検索（DuckDuckGo か自分で立てた SearXNG。API キーは要らない）と、公開されているページの読み取りができる。ローカルや LAN の宛先は読まない。Web や添付の内容を読んだ後は、シェルと書き込みが承認制になる
 - API キーは設定ファイルにも画面にも出さない
 
@@ -68,7 +69,7 @@ npm start                   # http://127.0.0.1:4777/ を開く
 ```
 
 初回の起動で `data/config.json` が作られます。画面の「設定」で、モデルのコンテキスト長の確認結果と直し方が見られます。
-ローカル LLM を使うときは、先に [docs/config.md](docs/config.md) の「コンテキスト長」を読んでください。
+ローカル LLM を使うときは、先に下の「[ローカル LLM のコンテキスト長](#ローカル-llm-のコンテキスト長)」を読んでください。
 
 | コマンド | 内容 |
 |---|---|
@@ -88,17 +89,63 @@ Clive は 127.0.0.1 でだけ待ち受けます。スマートフォンなどか
 tailscale serve --bg 4777
 ```
 
-表示された `https://<machine>.<tailnet>.ts.net` を `config.json` の `server.origins` に足し、再起動してください。
+表示された `https://<machine>.<tailnet>.ts.net` を `config.json` の `server.origins` に足し、再起動してください。使える人を絞るときは、その人の Tailscale のログイン名を `server.tailscaleLogins` に足します（空なら、同じ tailnet の人なら誰でも使えます）。
 
-## ドキュメント
+### Linux で常駐させる
 
-| ファイル | 内容 |
-|---|---|
-| [docs/config.md](docs/config.md) | 設定（モデル・道具・記憶・ワーカー・見た目）と、ローカル LLM のコンテキスト長 |
-| [docs/hooks.md](docs/hooks.md) | シェルの判定と、自分で足せる実行前のフック |
-| [docs/security.md](docs/security.md) | 安全のための仕組みと、その限界 |
-| [docs/deploy.md](docs/deploy.md) | Windows と Linux（systemd ＋ Tailscale）での動かし方 |
-| [featuer.md](featuer.md) | 画面の機能と API・イベントの一覧（画面を作る人向け） |
+[deploy/clive.service](deploy/clive.service) が systemd の設定です（先頭に手順があります）。Clive が書き込める場所をデータのフォルダだけに絞ってあるので、シェルの道具に対する OS 側の閉じ込めにもなります。
+
+## ローカル LLM のコンテキスト長
+
+Clive は毎回、system（ルール・人格・記憶の枠・道具の説明）と会話をまとめて送ります。モデルのコンテキスト長が足りないと、送らずにエラーにします。
+必要な長さは、画面の「設定」の「必要」の列に出ます（`minContext`（既定 65,536）と、system＋道具の説明＋会話の最低量 8,192＋出力の上限、の大きいほう）。目安は最低 32k、道具や記憶を使うなら 64k 以上です。
+
+| サーバー | `providers[].server` | 長さの直し方 | Clive が確かめる場所 |
+|---|---|---|---|
+| Ollama | （`kind: "ollama"`） | `models[].contextLength` を必要量以上にする（毎回 `num_ctx` として送る） | `/api/show` |
+| LM Studio | `lmstudio` | モデルを読み込むときの Context Length を必要量以上にして読み込み直す | `/api/v0/models` |
+| llama.cpp | `llamacpp` | `llama-server -c <長さ>`（`-np` でスロットを増やすと、`-c` が分割される） | `/props` |
+| vLLM | `vllm` | `--max-model-len <長さ>` で起動する | `/v1/models` |
+| TabbyAPI | `tabbyapi` | `config.yml` の `max_seq_len`（と `cache_size`）を必要量以上にして読み込み直す | `/v1/model` |
+| そのほか | `generic` | サーバー側で長さを設定する | `/v1/models` に長さが載っていれば使う |
+
+どのサーバーでも、`models[].contextLength` はサーバー側の長さに合わせて書いてください。実際に使うのは「設定値」と「サーバーが報告した長さ」の小さいほうです。
+
+```json
+"providers": [
+  { "id": "local", "kind": "openai_compatible", "server": "generic", "baseUrl": "http://127.0.0.1:8080/v1", "apiKeyEnv": "LOCAL_LLM_API_KEY", "maxParallel": 1, "timeoutMs": 600000 }
+],
+"models": [
+  { "id": "local-model", "provider": "local", "model": "<サーバーでのモデル名>", "contextLength": 65536, "minContext": 32768, "maxOutputTokens": 8192, "toolMode": "native", "vision": false }
+],
+"routing": { "chat": ["local-model"], "background": ["local-model"], "retriesPerModel": 2 }
+```
+
+- キーが要らないサーバーなら `apiKeyEnv` は書かない。要るなら `.env` に `LOCAL_LLM_API_KEY=...` のように書く
+- ツール呼び出しが苦手なモデルは、`toolMode` を `json_fallback` にするか、`maxTools` で渡す道具の数を絞る
+
+## 実行前のフック
+
+道具を実行する前に、自分で用意したコマンドに判定させられます（Claude Code の PreToolUse フックと同じ約束なので、Claude Code 用のフックもそのまま使えます）。`config.json` に書きます。
+
+```json
+"tools": {
+  "hooks": {
+    "preToolUse": [
+      { "matcher": "shell_run|file_.*", "command": ["node", "/path/to/my-hook.js"], "timeoutMs": 30000, "onError": "deny" }
+    ]
+  }
+}
+```
+
+- `matcher` は道具の名前の正規表現。`command` はシェルを通さずに起動する
+- 標準入力に `{ "hook_event_name": "PreToolUse", "tool_name", "tool_input", "cwd", "run_id", "conversation_id" }` の JSON が渡る
+- 終了コード 2 で拒否（標準エラーの文が理由になる）。0 で終わり、標準出力に `{ "decision": "allow" | "ask" | "deny" | "block", "reason": "..." }`（または Claude Code の `hookSpecificOutput.permissionDecision`）を返すと、その判定になる
+- 時間切れ・起動の失敗・ほかの終了コードは `onError`（既定は拒否）。いちばん厳しい判定が使われるので、フックで組み込みの判定（拒否・承認）を緩めることはできない
+
+## 画面を作る人へ
+
+画面の機能と、API・イベントの一覧は [featuer.md](featuer.md) にあります。
 
 ## 仕組み
 
@@ -134,7 +181,6 @@ src/
 web/src/           画面
 templates/         ルール（rules.ja.md）と SOUL / USER / CURIOSITY の初期値
 deploy/            systemd の設定
-docs/
 tests/
 data/              実行時データ（.gitignore 対象）
 ```

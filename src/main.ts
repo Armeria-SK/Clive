@@ -19,7 +19,7 @@ async function start(): Promise<void> {
   const app = new App({ paths, log });
   const config = app.config();
   if (!isLoopbackHost(config.server.host)) {
-    throw new ConfigError(`server.host は 127.0.0.1 などのループバックにしてください（今は ${config.server.host}）。ほかの端末からは Tailscale Serve 経由で開きます（docs/config.md）`);
+    throw new ConfigError(`server.host は 127.0.0.1 などのループバックにしてください（今は ${config.server.host}）。ほかの端末からは Tailscale Serve 経由で開きます（README の「ほかの端末から使う」）`);
   }
   log('[INFO] モデルのコンテキスト長を確認しています…');
   const results = await app.status.probeAll(config);

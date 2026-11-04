@@ -59,7 +59,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
 
       <h2>モデルとコンテキスト長</h2>
       <p className="muted">
-        「必要」を下回るモデルは使いません（黙って切り捨てないため）。ローカル LLM のコンテキスト長の決め方は docs/config.md を見てください。
+        「必要」を下回るモデルは使いません（黙って切り捨てないため）。ローカル LLM のコンテキスト長の決め方は、README の「ローカル LLM のコンテキスト長」を見てください。
       </p>
       <div className="table-wrap">
         <table className="models">

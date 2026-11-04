@@ -61,7 +61,7 @@ export function semanticProblems(config: AppConfig): string[] {
     const provider = config.providers.find(p => p.id === model.provider);
     if (!provider) { problems.push(`models.${model.id}: プロバイダ「${model.provider}」がありません`); continue; }
     if (provider.kind !== 'anthropic' && model.contextLength === undefined) {
-      problems.push(`models.${model.id}: ローカル LLM や OpenAI 互換では contextLength が必須です（docs/config.md を参照）`);
+      problems.push(`models.${model.id}: ローカル LLM や OpenAI 互換では contextLength が必須です（README の「ローカル LLM のコンテキスト長」を参照）`);
     }
     // contextLength < minContext は保存を止めない（使う前の確認で「使えない」と知らせる）。
     // 起動や保存を拒否すると、メタデータの誤りで全体が止まってしまう

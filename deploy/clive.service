@@ -1,4 +1,4 @@
-# Clive を Linux の systemd で常駐させる（docs/deploy.md を参照）
+# Clive を Linux の systemd で常駐させる（clive ユーザーで /opt/clive に置き、npm ci と npm run build:web を済ませておく）
 #   sudo cp deploy/clive.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now clive
 #   journalctl -u clive -f
