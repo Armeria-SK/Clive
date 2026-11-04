@@ -7,8 +7,9 @@
   --color-accent-text: var(--color-accent-700);
   --color-accent-text-hover: var(--color-accent-800);
   --color-text-muted: color-mix(in srgb, var(--color-text) 67%, transparent);
-  --color-text-muted-soft: color-mix(in srgb, var(--color-text) 67%, transparent);
-  --color-text-muted-faint: color-mix(in srgb, var(--color-text) 67%, transparent);
+  --color-text-muted-soft: var(--color-text-muted);
+  --color-text-muted-faint: var(--color-text-muted);
+  --color-placeholder: var(--color-text-muted);
   --color-divider: color-mix(in srgb, #201f1d 16%, transparent);
 
   --color-neutral-100: #f8f4f4;
@@ -75,6 +76,7 @@
   --color-text-muted: color-mix(in srgb, var(--color-text) 60%, transparent);
   --color-text-muted-soft: color-mix(in srgb, var(--color-text) 55%, transparent);
   --color-text-muted-faint: color-mix(in srgb, var(--color-text) 50%, transparent);
+  --color-placeholder: color-mix(in srgb, var(--color-text) 45%, transparent);
   --color-accent-100: #33271a;
   --color-accent-200: #45331c;
   --color-accent-600: #e1ad66;

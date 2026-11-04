@@ -4,7 +4,7 @@
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--color-text) 14%, transparent); border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-textarea::placeholder, input::placeholder { color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+textarea::placeholder, input::placeholder { color: var(--color-placeholder); }
 
 .text-muted { color: var(--color-text-muted-soft); }
 

@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+// このテストが確かめる範囲（これ以外は見ていない。画面の見た目の代わりにはならない）:
+// - 文字色を重ねて薄めた場合（opacity: 0.8 など、文字の上に透明度を重ねる書き方）は計算に入れていない
+// - 文字の下の面は「背景」「面」と、それに文字色を 7% 以下かぶせた面（選択・ホバー）だけ。それより濃い面の上は見ていない
+// - 読める値は #rrggbb、var(--名前)、color-mix(in srgb, <色> N%, transparent) の形だけ。ほかの書き方は「読めない値」で落ちる
+// - CSS の文字色の検査は、`color` の宣言が var(--color-accent) そのもの、または var(--color-text) N%（N < 67）の直書きになっていないかだけ
 type Rgb = [number, number, number];
 type Rgba = [number, number, number, number];
 
@@ -68,6 +73,10 @@ test('ライト: 薄い文字の 3 段階は、背景・面・選択の面の上
   for (const name of ['--color-text-muted', '--color-text-muted-soft', '--color-text-muted-faint']) assertAA(light, name, g);
 });
 
+test('ライト: 入力欄の薄い案内の文字（placeholder）も、背景・面・選択の面の上で 4.5:1 以上', () => {
+  assertAA(light, '--color-placeholder', grounds(light));
+});
+
 test('ライト: 塗りのアクセント色（--color-accent）は変えていない（金色のまま）', () => {
   assert.deepEqual(token(light, '--color-accent'), [0xb6, 0x82, 0x35, 1]);
 });
@@ -80,6 +89,7 @@ test('ダーク: 文字の色はデザインの値のまま（アクセントは
   assert.deepEqual(token(dark, '--color-text-muted'), at(0.6));
   assert.deepEqual(token(dark, '--color-text-muted-soft'), at(0.55));
   assert.deepEqual(token(dark, '--color-text-muted-faint'), at(0.5));
+  assert.deepEqual(token(dark, '--color-placeholder'), at(0.45), 'ダークの placeholder はデザインの 45%');
   assertAA(dark, '--color-accent-text', grounds(dark));
 });
 
@@ -101,7 +111,7 @@ test('CSS: 文字色にアクセントの塗りの色を直接使わず、薄い
   assert.deepEqual(rawAccent, [], '文字色は --color-accent-text を使う');
   const thin = all.filter(d => {
     const m = /^color-mix\(in srgb, var\(--color-text\) (\d+(?:\.\d+)?)%, transparent\)$/.exec(d.value);
-    return m && Number(m[1]) < 67 && !d.selector.includes('::placeholder');
+    return m && Number(m[1]) < 67;
   });
-  assert.deepEqual(thin, [], '薄い文字は --color-text-muted 系のトークンを使う（placeholder だけは対象外）');
+  assert.deepEqual(thin, [], '薄い文字は --color-text-muted 系のトークンを使う（placeholder も含む）');
 });
