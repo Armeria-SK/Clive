@@ -118,23 +118,31 @@
 ### 画面 — `web/src`（React 19 + Vite）
 - 経路は URL のハッシュ（`#/c/<id>` `#/tasks[/<id>]` `#/today` `#/notifications` `#/review` `#/memory` `#/skills` `#/curiosity` `#/settings` `#/runs`）。サーバーとは `api.ts`（HTTP）と `events.ts`（SSE。出来事の型はサーバーの `RunEvent` の手書きの写し）だけで話す。
 - ファイル:
-  - `main.tsx` `App.tsx`: 入口。経路、サイドバー、全体の状態（作成中の返事・承認待ち・ワーカー・未読）、ブラウザ通知。
+  - `main.tsx` `App.tsx`: 入口。`main.tsx` はテーマと言語を決め、サーバーの設定（`/api/settings`）からタイムゾーンを読んでから最初の描画をする（3 秒待って読めなければ既定の Asia/Tokyo）。`App.tsx` は経路、サイドバー、全体の状態（作成中の返事・承認待ち・ワーカー・未読）、ブラウザ通知。
   - `Chat.tsx`: 会話、承認の札、道具の行（この 2 つは `Tasks.tsx` も使う）、添付、入力欄。
-  - `Tasks.tsx`: タスクの一覧・新規・詳細とワーカーの操作。ほかの画面が使う `fmtTime` `STATUS_LABEL` `WorkerBar` もここにある。
+  - `Tasks.tsx`: タスクの一覧・新規・詳細とワーカーの操作。ほかの画面が使う `STATUS_LABEL` `WorkerBar` もここにある。新規の「日時を指定」は、サーバーのタイムゾーンの時刻として読んでから送る。
   - `Today.tsx`（きょう）、`Notifications.tsx`（通知）。
   - `Review.tsx`: 3 つのページ。`ReviewPage`（スキルの下書き・自発タスクの提案・振り返りの記録）、`SkillsPage`、`CuriosityPage`。
   - `Memory.tsx`: 記憶 2 冊の一覧・追加・編集・削除・履歴・取り消しと、過去の会話の検索。
   - `Runs.tsx`: 実行の表。道具の記録（`/api/tool-calls`）は画面から使っていない。
-  - `Settings.tsx`（モデルの確認・API キーの有無・設定ファイルの JSON 編集）と `Profile.tsx`（名前・色・動き・形）。
+  - `Settings.tsx`（表示の言語・モデルの確認・API キーの有無・設定ファイルの JSON 編集）と `Profile.tsx`（名前・色・動き・形）。
   - `Avatar.tsx` `avatar.ts` `avatars/*.svg`: 姿（20 種）と動き、様子の一言（`presenceOf`）。
   - `Markdown.tsx`: 返事の Markdown 表示。
   - `styles/tokens.css`: デザインの色・字体・余白・角丸・影のトークン。`:root` がライト、`:root[data-theme="dark"]` がダークの上書き。文字用のアクセント色（`--color-accent-text`）と薄い文字の 3 段階（`--color-text-muted*`）は、ライトで WCAG AA（4.5:1）に届くようデザインより少し濃くしてある。
   - `styles/components.css`: デザインの部品クラス（`.btn*` `.input` `.field` `.radio` `.seg` `.card*` `.tag*` `.table` `.dialog*` `.hr`）、スクロールバー、keyframes、`prefers-reduced-motion`。
   - `styles.css`: 全体の CSS（1 ファイル）。古いトークン名（`--bg` など）を新しいトークンへの別名にしてあり、既存の画面はこのまま新しい色と字体になる。ダークは `data-theme` だけで決まり、OS の設定には直接従わない。
   - `icons.tsx`: アイコン 49 個（Lucide、ISC。デザインの `ICON` と添付の `paperclip`）を `<Icon name>` で出す。出どころとライセンス文はファイルの先頭。
+  - `i18n/`: 画面の多言語化（日本語・英語。ライブラリは使わない）。
+    - `ja.ts` が元の辞書（値は文字列か、差し込み用の関数）。`en.ts` は `types.ts` の型（ja から作る）で書くので、キーの漏れ・余り・引数の型の違いは `tsc` で落ちる。未訳を日本語で埋める仕組みは無い。
+    - `index.ts`: `t(key, ...args)` と、言語やタイムゾーンが変わると描き直す `useT()`。
+    - `state.ts`: 今の言語とタイムゾーンの保持。言語は 保存した設定（`localStorage` の `clive.language`）→ `navigator.languages` の主の部分（`en-GB` なら `en`）→ ja の順で決め、`<html lang>` を合わせる。
+    - `format.ts`: 日時・相対時刻・数・並べる文を `Intl` で整える。日時はブラウザではなくサーバーの `timezone` で表示し、`datetime-local` の入力もその時刻として読む（`parseZonedInput`）。
+    - 訳すのは表示の文字だけ。API に送る値（曜日の `月`〜`日` など）は訳さない。この段階で辞書に入っているのは、サイドバーと経路名、画面が自分で組み立てる文、ブラウザ通知、曜日のラベル、言語の切り替えの文。各画面の文字は、その画面を作り直す段階で足す。サーバーから来る文字は訳していない。
+  - `weekdays.ts`: 曜日の値（`月`〜`日`。サーバーの `src/tasks/schedule.ts` の `DAY_MAP` と対）と、ラベルの辞書キー。
+  - `ZoneNote.tsx`: 日時を出す画面に添える、タイムゾーン名（例: `Asia/Tokyo (UTC+09:00)`）の小さな注記。
   - `theme.ts`: テーマ（`auto` `light` `dark`）の保存（`localStorage` の `clive.theme`）と `<html data-theme>` への反映、`auto` のときの OS の変化への追従。`main.tsx` が起動時に `initTheme()` を呼ぶ。
 - ビルド:
-  - `web/index.html`: `<head>` で `web/public/theme-init.js` を同期で読む。最初の描画の前に `data-theme` を決め、再読み込みで違うテーマが一瞬出るのを防ぐ（CSP が `script-src 'self'` なので外部ファイル）。
+  - `web/index.html`: `<head>` で `web/public/theme-init.js` を同期で読む。最初の描画の前に `data-theme` を決め、再読み込みで違うテーマが一瞬出るのを防ぐ（CSP が `script-src 'self'` なので外部ファイル）。`<html lang>` は初期値が ja で、起動時に `i18n/state.ts` が決めた言語へ書き換える。
   - `web/vite.config.mjs`: 出力は `web/dist`、小さなファイルも埋め込まない `assetsInlineLimit: 0`、開発時は `/api` を `npm start` のサーバーへ転送。プラグイン `clive-woff2-only` は @fontsource の CSS から woff の指定を外し、woff2 だけを `web/dist/assets/` に出す（外さないと出力が倍になる）。
   - フォント: `@fontsource/cormorant-garamond` `@fontsource/lora` `@fontsource/noto-serif-jp`（版を固定、`main.tsx` で必要な太さだけ読む）。外部へは取りに行かない。SIL OFL 1.1 のライセンス文は `web/fonts-LICENSE.md`（配信物には入れない）。
   - `web/public/icon.svg`。
@@ -147,7 +155,7 @@
 - 使うもの: `node src/main.ts`、環境変数 `CLIVE_DATA_DIR`、`/etc/clive/env`
 
 ### テスト — `tests/`
-- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `memory` `providers` `review` `schedule` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
+- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `memory` `providers` `review` `schedule` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
 - `helpers.ts`: 一時フォルダ（`tempDir`）、偽のサーバー（`fakeServer`）、偽のモデル窓口（`FakeAdapter`）と返事の台本（`reply` `fail`）。
 - 入口: `tests/helpers.ts`
 - 使うもの: `src/` の各部品（`App` で組み立てるものが多い）

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type Book, type BookView, type HistoryHit, type MemoryEvent, type MemoryItem } from './api.ts';
+import { formatDateTime, formatNumber } from './i18n/index.ts';
+import { ZoneNote } from './ZoneNote.tsx';
 
 const BOOK_TITLE: Record<Book, string> = { user: 'ユーザーについての記憶', notes: 'Clive のメモと教訓' };
 const ACTION: Record<string, string> = { create: '作成', update: '書き直し', forget: '削除', restore: '復元' };
 const ACTOR: Record<string, string> = { clive: 'Clive', user: 'あなた', review: '振り返り' };
-const time = (ms: number) => new Date(ms).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+const time = (ms: number) => formatDateTime(ms, 'full');
 
 function Item({ item, onChanged, setError }: { item: MemoryItem; onChanged: () => void; setError: (m: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -74,13 +76,13 @@ export function Memory() {
   return (
     <section className="page">
       <h1>記憶</h1>
-      <p className="muted">Clive が会話の中で覚えたことです。次の会話から使われます。上限を超えると、Clive は似た記憶をまとめるか消してから覚えます。</p>
+      <p className="muted">Clive が会話の中で覚えたことです。次の会話から使われます。上限を超えると、Clive は似た記憶をまとめるか消してから覚えます。<ZoneNote /></p>
       {error && <div className="error-panel"><p>{error}</p></div>}
       {(['user', 'notes'] as const).map(book => {
         const b = books[book];
         return (
           <div key={book} className="book">
-            <h2>{BOOK_TITLE[book]} <span className="muted small">{b.used.toLocaleString()} / {b.max.toLocaleString()} 文字</span></h2>
+            <h2>{BOOK_TITLE[book]} <span className="muted small">{formatNumber(b.used)} / {formatNumber(b.max)} 文字</span></h2>
             <div className="meter" aria-hidden><span style={{ width: `${Math.min(100, (b.used / b.max) * 100)}%` }} className={b.used / b.max > 0.9 ? 'high' : ''} /></div>
             {b.items.length ? <ul className="memory-list">{b.items.map(m => <Item key={m.id} item={m} onChanged={load} setError={setError} />)}</ul> : <p className="muted">まだありません</p>}
             <div className="row">

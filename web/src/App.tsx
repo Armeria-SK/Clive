@@ -4,6 +4,7 @@ import { Avatar } from './Avatar.tsx';
 import { presenceOf } from './avatar.ts';
 import { Chat, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
+import { useT, type DictKey } from './i18n/index.ts';
 import { Memory } from './Memory.tsx';
 import { NotificationsPage } from './Notifications.tsx';
 import { Runs } from './Runs.tsx';
@@ -34,8 +35,10 @@ function parseRoute(hash: string): Route {
 }
 
 const BROWSER_NOTIFY = new Set(['approval_needed', 'task_waiting']);
+const MEMORY_NOTICE = { create: 'notice.memoryCreate', update: 'notice.memoryUpdate', forget: 'notice.memoryForget' } as const satisfies Record<'create' | 'update' | 'forget', DictKey>;
 
 export function App() {
+  const t = useT();
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -81,7 +84,7 @@ export function App() {
         break;
       case 'model.switch':
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, modelId: e.to, text: '' } : d));
-        addNotice(e.conversationId, { runId: e.runId, kind: 'switch', message: `${e.from} が使えなかったため ${e.to} に切り替えました（${e.reason}）` });
+        addNotice(e.conversationId, { runId: e.runId, kind: 'switch', message: t('notice.modelSwitch', e.from, e.to, e.reason) });
         break;
       case 'text.delta':
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, text: d.text + e.text } : d));
@@ -99,17 +102,17 @@ export function App() {
         break;
       case 'tool.result':
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined } : d));
-        if (e.decision === 'deny') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', message: `「${e.name}」は実行しませんでした: ${e.preview.split('\n').slice(1, 3).join(' ')}` });
+        if (e.decision === 'deny') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', message: t('notice.toolDenied', e.name, e.preview.split('\n').slice(1, 3).join(' ')) });
         break;
       case 'approval.requested':
         setApprovals(list => [...list.filter(a => a.id !== e.approval.id), { ...e.approval, runId: e.runId, conversationId: e.conversationId }]);
-        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('Clive: 承認が必要です', { body: e.approval.title });
+        if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification(t('browser.approvalNeeded'), { body: e.approval.title });
         break;
       case 'approval.resolved':
         setApprovals(list => list.filter(a => a.id !== e.approvalId));
         break;
       case 'memory.changed':
-        addNotice(e.conversationId, { runId: e.runId, kind: 'memory', message: `${e.action === 'create' ? '記憶しました' : e.action === 'update' ? '記憶を書き直しました' : '記憶を消しました'}: ${e.content}`, eventId: e.eventId });
+        addNotice(e.conversationId, { runId: e.runId, kind: 'memory', message: t(MEMORY_NOTICE[e.action], e.content), eventId: e.eventId });
         break;
       case 'run.end':
         setDrafts(ds => ds.filter(d => d.runId !== e.runId));
@@ -117,7 +120,7 @@ export function App() {
         refreshList();
         refreshWorker();
         if (!e.ok && e.errorKind !== 'cancelled') {
-          addNotice(e.conversationId, { runId: e.runId, kind: 'error', message: `返事を作れませんでした: ${e.errorMessage ?? e.errorKind}`, hint: e.detail?.hint });
+          addNotice(e.conversationId, { runId: e.runId, kind: 'error', message: t('notice.runFailed', e.errorMessage ?? e.errorKind ?? ''), hint: e.detail?.hint });
         }
         break;
       case 'task.changed':
@@ -138,11 +141,11 @@ export function App() {
         setUnread(n => n + 1);
         setNotificationRevision(n => n + 1);
         if (BROWSER_NOTIFY.has(e.notification.kind) && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-          new Notification(`Clive: ${e.notification.title}`, { body: e.notification.body ?? '' });
+          new Notification(t('browser.notification', e.notification.title), { body: e.notification.body ?? '' });
         }
         break;
     }
-  }, [refreshList, refreshWorker]);
+  }, [t, refreshList, refreshWorker]);
 
   const onResync = useCallback((serverDrafts: Draft[]) => {
     setDrafts(serverDrafts);
@@ -178,28 +181,28 @@ export function App() {
             ? <Avatar shape={profile.shape} color={profile.color} motion={profile.motion} runtime={presence.runtime} sleeping={presence.sleeping} size={28} seed={profile.name} />
             : <img src="/icon.svg" alt="" width={24} height={24} />}
           <span>{profile?.name ?? 'Clive'}</span>
-          <span className={`dot ${connected ? 'on' : 'off'}`} title={connected ? '接続中' : '切断中（自動で繋ぎ直します）'} />
+          <span className={`dot ${connected ? 'on' : 'off'}`} title={connected ? t('connection.on') : t('connection.off')} />
         </a>
-        <a className="new" href="#/">＋ 新しい会話</a>
+        <a className="new" href="#/">{t('nav.newChat')}</a>
         <ul className="conversations">
           {conversations.map(c => (
             <li key={c.id} className={c.id === current ? 'active' : ''}>
-              <a href={`#/c/${encodeURIComponent(c.id)}`}>{c.title ?? '（無題）'}</a>
-              {approvals.some(a => a.conversationId === c.id) && <span className="tag attention" title="承認が必要です">承認待ち</span>}
-              {drafts.some(d => d.conversationId === c.id) && <span className="dot on" title="返事を作っています" />}
+              <a href={`#/c/${encodeURIComponent(c.id)}`}>{c.title ?? t('conversation.untitled')}</a>
+              {approvals.some(a => a.conversationId === c.id) && <span className="tag attention" title={t('conversation.needsApprovalTip')}>{t('conversation.needsApproval')}</span>}
+              {drafts.some(d => d.conversationId === c.id) && <span className="dot on" title={t('conversation.generating')} />}
             </li>
           ))}
         </ul>
         <div className="nav-bottom">
-          {navLink('#/today', 'today', 'きょう')}
-          {navLink('#/tasks', 'tasks', 'タスク', waiting.size > 0 ? <span className="tag attention">返事待ち {waiting.size}</span> : null)}
-          {navLink('#/notifications', 'notifications', '通知', unread > 0 ? <span className="count-badge">{unread}</span> : null)}
-          {navLink('#/review', 'review', 'レビュー')}
-          {navLink('#/memory', 'memory', '記憶')}
-          {navLink('#/skills', 'skills', 'スキル')}
-          {navLink('#/curiosity', 'curiosity', '好奇心')}
-          {navLink('#/settings', 'settings', '設定')}
-          {navLink('#/runs', 'runs', '実行ログ')}
+          {navLink('#/today', 'today', t('nav.today'))}
+          {navLink('#/tasks', 'tasks', t('nav.tasks'), waiting.size > 0 ? <span className="tag attention">{t('nav.tasksWaiting', waiting.size)}</span> : null)}
+          {navLink('#/notifications', 'notifications', t('nav.notifications'), unread > 0 ? <span className="count-badge">{unread}</span> : null)}
+          {navLink('#/review', 'review', t('nav.review'))}
+          {navLink('#/memory', 'memory', t('nav.memory'))}
+          {navLink('#/skills', 'skills', t('nav.skills'))}
+          {navLink('#/curiosity', 'curiosity', t('nav.curiosity'))}
+          {navLink('#/settings', 'settings', t('nav.settings'))}
+          {navLink('#/runs', 'runs', t('nav.runs'))}
         </div>
       </nav>
       <main>

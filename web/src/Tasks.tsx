@@ -1,7 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type Approval, type Message, type NewTask, type Task, type TaskEvent, type WorkerStatus } from './api.ts';
 import { ApprovalCard, ToolMessage } from './Chat.tsx';
+import { formatDateTime, parseZonedInput, useT } from './i18n/index.ts';
 import { Markdown } from './Markdown.tsx';
+import { WEEKDAYS } from './weekdays.ts';
+import { ZoneNote } from './ZoneNote.tsx';
 
 export const STATUS_LABEL: Record<Task['status'], string> = {
   inbox: '提案', ready: '実行待ち', running: '実行中', waiting: '返事待ち', scheduled: '繰り返し', done: '完了', failed: '失敗', cancelled: '取り消し',
@@ -11,9 +14,7 @@ const EVENT_LABEL: Record<string, string> = {
   created: '作成', note: 'メモ', requeued: '再開待ち', question: '質問', approval: '承認待ち', answer: '答え', run: '実行',
   done: '完了', failed: '失敗', cancelled: '取り消し', approved: '承認', reopened: 'やり直し', skipped: '見送り', edited: '編集', context: '経緯',
 };
-const DAYS = ['月', '火', '水', '木', '金', '土', '日'];
 
-export const fmtTime = (ms: number | null | undefined) => (ms ? new Date(ms).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—');
 const errorText = (error: unknown) => (error instanceof ApiError ? error.message : '送れませんでした');
 
 function section(task: Task, now: number): 'active' | 'scheduled' | 'inbox' | 'finished' {
@@ -36,7 +37,7 @@ export function WorkerBar({ worker, onChange }: { worker: WorkerStatus | null; o
           : worker.running ? <>実行中: {worker.running.kind === 'task' && worker.running.taskId ? <a href={`#/tasks/${worker.running.taskId}`}>{worker.running.title}</a> : <a href="#/review">{worker.running.title}</a>}</>
           : worker.quiet ? '静かにする時間帯' : '待機中'}
       </span>
-      <span className="muted small">この1時間 {worker.runsLastHour}/{worker.maxRunsPerHour} 回{worker.nextWakeAt ? ` ・次に確かめる ${fmtTime(worker.nextWakeAt)}` : ''}</span>
+      <span className="muted small">この1時間 {worker.runsLastHour}/{worker.maxRunsPerHour} 回{worker.nextWakeAt ? ` ・次に確かめる ${formatDateTime(worker.nextWakeAt)}` : ''}</span>
       <label className="toggle"><input type="checkbox" checked={worker.autonomy} onChange={e => set({ autonomy: e.target.checked })} /> 自発行動</label>
       <button className="secondary" onClick={() => set({ paused: !worker.paused })}>{worker.paused ? '再開' : '一時停止'}</button>
       {worker.running && <button className="stop" onClick={() => void api.stop(worker.running!.runId)}>止める</button>}
@@ -46,6 +47,7 @@ export function WorkerBar({ worker, onChange }: { worker: WorkerStatus | null; o
 }
 
 function NewTaskForm({ onCreated }: { onCreated: () => void }) {
+  const t = useT();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [priority, setPriority] = useState(2);
@@ -53,7 +55,7 @@ function NewTaskForm({ onCreated }: { onCreated: () => void }) {
   const [at, setAt] = useState('');
   const [freq, setFreq] = useState('daily');
   const [time, setTime] = useState('09:00');
-  const [day, setDay] = useState('月');
+  const [day, setDay] = useState<string>(WEEKDAYS[0].value);
   const [minute, setMinute] = useState('0');
   const [interval, setIntervalMin] = useState('30');
   const [error, setError] = useState('');
@@ -64,8 +66,9 @@ function NewTaskForm({ onCreated }: { onCreated: () => void }) {
     if (!title.trim()) return;
     const task: NewTask = { title: title.trim(), priority, ...(body.trim() ? { body: body.trim() } : {}) };
     if (when === 'at') {
-      if (!at) { setError('日時を入れてください'); return; }
-      task.when = new Date(at).toISOString();
+      const ms = parseZonedInput(at);
+      if (ms === null) { setError('日時を入れてください'); return; }
+      task.when = new Date(ms).toISOString();
     }
     if (when === 'repeat') task.repeat = { freq, values: { time, day, minute, interval } };
     setBusy(true); setError('');
@@ -83,13 +86,13 @@ function NewTaskForm({ onCreated }: { onCreated: () => void }) {
       <div className="row wrap">
         <label>優先度 <select value={priority} onChange={e => setPriority(Number(e.target.value))}><option value={1}>1（高）</option><option value={2}>2</option><option value={3}>3（低）</option></select></label>
         <label>いつ <select value={when} onChange={e => setWhen(e.target.value as typeof when)}><option value="now">今すぐ</option><option value="at">日時を指定</option><option value="repeat">繰り返し</option></select></label>
-        {when === 'at' && <input type="datetime-local" value={at} onChange={e => setAt(e.target.value)} />}
+        {when === 'at' && <><input type="datetime-local" value={at} onChange={e => setAt(e.target.value)} /><ZoneNote input /></>}
         {when === 'repeat' && (
           <>
             <select value={freq} onChange={e => setFreq(e.target.value)}>
               <option value="daily">毎日</option><option value="weekday">平日</option><option value="weekly">毎週</option><option value="hourly">毎時</option><option value="interval">N分ごと</option>
             </select>
-            {freq === 'weekly' && <select value={day} onChange={e => setDay(e.target.value)}>{DAYS.map(d => <option key={d} value={d}>{d}曜</option>)}</select>}
+            {freq === 'weekly' && <select value={day} onChange={e => setDay(e.target.value)}>{WEEKDAYS.map(d => <option key={d.value} value={d.value}>{t(d.label)}</option>)}</select>}
             {(freq === 'daily' || freq === 'weekday' || freq === 'weekly') && <input type="time" value={time} onChange={e => setTime(e.target.value)} />}
             {freq === 'hourly' && <label><input type="number" min={0} max={59} value={minute} onChange={e => setMinute(e.target.value)} /> 分</label>}
             {freq === 'interval' && <label><input type="number" min={1} max={59} value={interval} onChange={e => setIntervalMin(e.target.value)} /> 分ごと</label>}
@@ -110,7 +113,7 @@ function TaskRow({ task }: { task: Task }) {
       <span className="muted small">
         {ORIGIN_LABEL[task.origin]} ・ 優先度 {task.priority}
         {task.cron_text ? ` ・ ${task.cron_text}` : ''}
-        {task.run_at ? ` ・ ${task.status === 'scheduled' ? '次回' : '開始'} ${fmtTime(task.run_at)}` : ''}
+        {task.run_at ? ` ・ ${task.status === 'scheduled' ? '次回' : '開始'} ${formatDateTime(task.run_at)}` : ''}
         {task.attempts ? ` ・ 試行 ${task.attempts}/${task.max_attempts}` : ''}
       </span>
       {task.status === 'waiting' && task.waiting_text && <p className="small waiting-text">{task.waiting_text}</p>}
@@ -139,6 +142,7 @@ function TaskList({ revision, worker, onWorker }: { revision: number; worker: Wo
     <section className="page">
       <h1>タスク</h1>
       <WorkerBar worker={worker} onChange={onWorker} />
+      <p><ZoneNote /></p>
       <NewTaskForm onCreated={() => setTick(n => n + 1)} />
       {!data ? <p className="muted">読み込み中…</p> : (
         <>
@@ -192,8 +196,8 @@ function TaskDetail({ id, revision }: { id: string; revision: number }) {
       <h1>{task.title} <span className="badge">{STATUS_LABEL[task.status]}</span></h1>
       <p className="muted small">
         {ORIGIN_LABEL[task.origin]} ・ 優先度 {task.priority}{task.cron_text ? ` ・ ${task.cron_text}` : ''}
-        {task.run_at ? ` ・ ${task.status === 'scheduled' ? '次回' : '開始'} ${fmtTime(task.run_at)}` : ''}
-        ・ 試行 {task.attempts}/{task.max_attempts} ・ 更新 {fmtTime(task.updated_at)}
+        {task.run_at ? ` ・ ${task.status === 'scheduled' ? '次回' : '開始'} ${formatDateTime(task.run_at)}` : ''}
+        ・ 試行 {task.attempts}/{task.max_attempts} ・ 更新 {formatDateTime(task.updated_at)} ・ <ZoneNote />
       </p>
       <div className="row wrap">
         {task.status === 'inbox' && <button onClick={() => act('approve')}>承認する</button>}
@@ -239,7 +243,7 @@ function TaskDetail({ id, revision }: { id: string; revision: number }) {
       <h2>経過</h2>
       <ul className="task-events">
         {data.events.map(e => (
-          <li key={e.id}><span className="muted small">{fmtTime(e.created_at)} {EVENT_LABEL[e.kind] ?? e.kind}（{e.actor}）</span>{e.content && <span className="pre"> {e.content}</span>}</li>
+          <li key={e.id}><span className="muted small">{formatDateTime(e.created_at)} {EVENT_LABEL[e.kind] ?? e.kind}（{e.actor}）</span>{e.content && <span className="pre"> {e.content}</span>}</li>
         ))}
       </ul>
 

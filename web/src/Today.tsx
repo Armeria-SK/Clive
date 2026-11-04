@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { api, type Profile, type Task, type WorkerStatus } from './api.ts';
 import { Avatar } from './Avatar.tsx';
 import type { Runtime } from './avatar.ts';
-import { fmtTime, STATUS_LABEL, WorkerBar } from './Tasks.tsx';
+import { formatDateTime, startOfDay } from './i18n/index.ts';
+import { STATUS_LABEL, WorkerBar } from './Tasks.tsx';
+import { ZoneNote } from './ZoneNote.tsx';
 
 interface Props {
   profile: Profile | null;
@@ -18,8 +20,8 @@ export function Today({ profile, presence, approvals, unread, worker, onWorker, 
   const [tasks, setTasks] = useState<{ active: Task[]; finished: Task[] } | null>(null);
   useEffect(() => { void api.tasks().then(setTasks).catch(() => undefined); }, [revision]);
   const active = tasks?.active ?? [];
-  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-  const finishedToday = (tasks?.finished ?? []).filter(t => (t.completed_at ?? 0) >= startOfDay.getTime());
+  const todayStart = startOfDay(Date.now());
+  const finishedToday = (tasks?.finished ?? []).filter(t => (t.completed_at ?? 0) >= todayStart);
   const upcoming = active.filter(t => t.run_at && t.run_at > Date.now()).sort((a, b) => a.run_at! - b.run_at!).slice(0, 5);
   const count = (label: string, n: number, href: string) => <a className="count" href={href}><strong>{n}</strong><span>{label}</span></a>;
   return (
@@ -32,6 +34,7 @@ export function Today({ profile, presence, approvals, unread, worker, onWorker, 
         </div>
       </div>
       <WorkerBar worker={worker} onChange={onWorker} />
+      <p><ZoneNote /></p>
       <div className="counts">
         {count('進行中のタスク', active.filter(t => t.status === 'ready' || t.status === 'running').length, '#/tasks')}
         {count('返事待ち', active.filter(t => t.status === 'waiting').length, '#/tasks')}
@@ -47,7 +50,7 @@ export function Today({ profile, presence, approvals, unread, worker, onWorker, 
       <h2>次の予定</h2>
       {upcoming.length ? (
         <ul className="task-list">{upcoming.map(t => (
-          <li key={t.id}><a href={`#/tasks/${t.id}`}>{t.title}</a> <span className="muted small">{fmtTime(t.run_at)}{t.cron_text ? `（${t.cron_text}）` : ''}</span></li>
+          <li key={t.id}><a href={`#/tasks/${t.id}`}>{t.title}</a> <span className="muted small">{formatDateTime(t.run_at)}{t.cron_text ? `（${t.cron_text}）` : ''}</span></li>
         ))}</ul>
       ) : <p className="muted small">予定はありません</p>}
     </section>

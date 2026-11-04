@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { api, ApiError, type Approval, type Message, type UploadView } from './api.ts';
 import type { Draft } from './events.ts';
+import { formatList } from './i18n/index.ts';
 import { Markdown } from './Markdown.tsx';
 
 export function ApprovalCard({ approval }: { approval: Approval }) {
@@ -155,7 +156,7 @@ export function Chat({ conversationId, drafts, notices, approvals, revision, onC
             <article key={m.id} className={`message ${m.role}`}>
               {m.role === 'assistant' ? <Markdown text={m.text} /> : <p className="plain">{m.text}</p>}
               {m.attachments?.length ? <p className="attachments">{m.attachments.map(a => <span key={a.id} className="tag">{a.kind === 'image' ? '画像' : a.kind === 'pdf' ? 'PDF' : 'ファイル'}: {a.name}</span>)}</p> : null}
-              {m.toolCalls?.length ? <p className="muted tool-hint">ツールを使います: {m.toolCalls.map(c => c.name).join('、')}</p> : null}
+              {m.toolCalls?.length ? <p className="muted tool-hint">ツールを使います: {formatList(m.toolCalls.map(c => c.name))}</p> : null}
             </article>
           );
         })}

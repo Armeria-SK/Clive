@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type ModelView, type Profile, type SettingsView } from './api.ts';
+import { formatNumber, getLanguagePreference, LANGUAGES, setLanguagePreference, setTimezone, useT, type LanguagePreference } from './i18n/index.ts';
 import { ProfileEditor } from './Profile.tsx';
 
 const STATUS_LABEL: Record<string, string> = {
   ok: '使えます', too_small: 'コンテキスト不足', exceeds_model: 'モデル上限超え', unknown: '長さ不明',
   unreachable: '接続できません', no_api_key: 'API キー未設定', not_found: 'モデルがありません', error: 'エラー',
 };
-const fmt = (n?: number) => (typeof n === 'number' ? n.toLocaleString('en-US') : '—');
+const fmt = (n?: number) => (typeof n === 'number' ? formatNumber(n) : '—');
+const syncTimezone = (config: Record<string, any>) => { if (typeof config.timezone === 'string') setTimezone(config.timezone); };
 
 export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
+  const t = useT();
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [models, setModels] = useState<ModelView[]>([]);
   const [draft, setDraft] = useState('');
@@ -18,7 +21,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
 
   async function load() {
     const [s, m] = await Promise.all([api.settings(), api.models()]);
-    setSettings(s); setModels(m.models); setDraft(JSON.stringify(s.config, null, 2));
+    setSettings(s); setModels(m.models); setDraft(JSON.stringify(s.config, null, 2)); syncTimezone(s.config);
   }
   useEffect(() => { void load(); }, []);
 
@@ -34,7 +37,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
     setBusy(true);
     try {
       const result = await api.saveSettings(parsed);
-      setSettings(result); setModels(result.models); setDraft(JSON.stringify(result.config, null, 2)); setSaved(true);
+      setSettings(result); setModels(result.models); setDraft(JSON.stringify(result.config, null, 2)); setSaved(true); syncTimezone(result.config);
     } catch (error) {
       if (error instanceof ApiError) setProblems(error.body?.problems?.length ? error.body.problems : [error.message]);
       else setProblems(['保存できませんでした']);
@@ -53,6 +56,16 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
         </div>
       )}
       {settings.restartRequired && <p className="notice warning">server の設定を変えました。反映するには Clive を再起動してください。</p>}
+
+      <h2>{t('settings.appearance')}</h2>
+      <div className="field">
+        <label htmlFor="display-language">{t('settings.language')}</label>
+        <select id="display-language" value={getLanguagePreference()} onChange={e => setLanguagePreference(e.target.value as LanguagePreference)}>
+          <option value="auto">{t('settings.language.auto')}</option>
+          {LANGUAGES.map(lang => <option key={lang} value={lang}>{t(`lang.${lang}`)}</option>)}
+        </select>
+        <p className="muted small">{t('settings.language.hint')}</p>
+      </div>
 
       <h2>名前と姿</h2>
       <ProfileEditor onSaved={p => { onProfile(p); void load(); }} />

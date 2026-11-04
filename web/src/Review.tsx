@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type CuriosityItem, type ReviewJob, type SkillDraft, type SkillSummary, type Task } from './api.ts';
-import { fmtTime } from './Tasks.tsx';
+import { formatDateTime } from './i18n/index.ts';
+import { ZoneNote } from './ZoneNote.tsx';
 
 const errorText = (error: unknown) => (error instanceof ApiError ? error.message : '送れませんでした');
 
@@ -19,11 +20,12 @@ export function ReviewPage({ revision }: { revision: number }) {
   return (
     <section className="page">
       <h1>レビュー</h1>
+      <p><ZoneNote /></p>
       {error && <p className="error-text">{error}</p>}
       <h2>スキルの下書き</h2>
       {!data ? <p className="muted">読み込み中…</p> : !data.skillDrafts.length ? <p className="muted small">承認待ちの下書きはありません</p> : data.skillDrafts.map(d => (
         <div key={d.id} className="draft">
-          <p><strong>{d.name}</strong> <span className="badge">{d.current ? '修正' : '新規'}</span> <span className="muted small">{fmtTime(d.created_at)}</span></p>
+          <p><strong>{d.name}</strong> <span className="badge">{d.current ? '修正' : '新規'}</span> <span className="muted small">{formatDateTime(d.created_at)}</span></p>
           {d.reason && <p className="small">理由: {d.reason}</p>}
           <div className={d.current ? 'diff' : ''}>
             {d.current && (
@@ -57,7 +59,7 @@ export function ReviewPage({ revision }: { revision: number }) {
       {!jobs ? null : !jobs.jobs.length ? <p className="muted small">まだありません</p> : (
         <ul className="task-events">{jobs.jobs.map(j => (
           <li key={j.id}>
-            <span className="muted small">{fmtTime(j.created_at)} {j.triggerLabel} ・ {j.status === 'done' ? '済み' : j.status === 'failed' ? '失敗' : j.status === 'running' ? '実行中' : '待ち'}</span>
+            <span className="muted small">{formatDateTime(j.created_at)} {j.triggerLabel} ・ {j.status === 'done' ? '済み' : j.status === 'failed' ? '失敗' : j.status === 'running' ? '実行中' : '待ち'}</span>
             {j.note && <span className="pre"> {j.note}</span>}
             {j.changes.length > 0 && <ul className="small">{j.changes.map(c => (
               <li key={c.id}>{c.action === 'create' ? '足した' : c.action === 'update' ? '直した' : c.action === 'forget' ? '消した' : c.action === 'restore' ? '戻した' : c.action}: {c.after ?? c.before}{c.undone_at ? '（取り消し済み）' : ''}</li>
@@ -86,6 +88,7 @@ export function SkillsPage() {
     <section className="page">
       <h1>スキル</h1>
       <p className="muted small">Clive の手順書です。名前と説明は会話のはじめに Clive に渡り、本文は必要なときに読まれます。Clive が作ったものは「レビュー」で承認すると、ここに入ります。</p>
+      <p><ZoneNote /></p>
       <div className="row"><button className="secondary" onClick={() => setEditing({ name: '', description: '', body: '', isNew: true })}>新しく書く</button></div>
       {editing && (
         <form className="task-form" onSubmit={save}>
@@ -104,7 +107,7 @@ export function SkillsPage() {
         <div className="table-wrap"><table>
           <thead><tr><th>名前</th><th>説明</th><th>使った回数</th><th>最後に使った</th></tr></thead>
           <tbody>{skills.map(s => (
-            <tr key={s.name}><td><button className="link" onClick={() => open(s.name)}>{s.name}</button></td><td>{s.description}</td><td>{s.uses}</td><td>{fmtTime(s.lastUsedAt)}</td></tr>
+            <tr key={s.name}><td><button className="link" onClick={() => open(s.name)}>{s.name}</button></td><td>{s.description}</td><td>{s.uses}</td><td>{formatDateTime(s.lastUsedAt)}</td></tr>
           ))}</tbody>
         </table></div>
       )}
@@ -133,6 +136,7 @@ export function CuriosityPage({ revision }: { revision: number }) {
     <section className="page">
       <h1>好奇心</h1>
       <p className="muted small">Clive が気になっていること。自発行動がオンのとき、Clive が自分で調べます（1日の上限は設定の worker.curiosityPerDay）。</p>
+      <p><ZoneNote /></p>
       <form className="task-form" onSubmit={add}>
         <div className="row"><input value={topic} onChange={e => setTopic(e.target.value)} placeholder="気になること" maxLength={200} /><button type="submit" disabled={!topic.trim()}>足す</button></div>
         <input value={why} onChange={e => setWhy(e.target.value)} placeholder="なぜ気になるか（任意）" maxLength={500} />
@@ -144,7 +148,7 @@ export function CuriosityPage({ revision }: { revision: number }) {
           <li key={i.id} className="task-row">
             <strong>{i.topic}</strong>
             <span className={`badge ${i.status === 'done' ? 'ok' : ''}`}>{CURIOSITY_STATUS[i.status]}</span>
-            <span className="muted small">{i.source === 'user' ? 'あなた' : 'Clive'} ・ {fmtTime(i.updated_at)}</span>
+            <span className="muted small">{i.source === 'user' ? 'あなた' : 'Clive'} ・ {formatDateTime(i.updated_at)}</span>
             {i.why && <p className="small muted">{i.why}</p>}
             {i.result && <p className="small pre">{i.result}</p>}
             <p className="row">

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { api, type RunRow } from './api.ts';
+import { formatDateTime, formatNumber } from './i18n/index.ts';
+import { ZoneNote } from './ZoneNote.tsx';
 
-const time = (ms: number) => new Date(ms).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-const n = (v: number | null) => (v === null ? '—' : v.toLocaleString('en-US'));
+const time = (ms: number) => formatDateTime(ms, 'precise');
+const n = (v: number | null) => (v === null ? '—' : formatNumber(v));
 
 export function Runs() {
   const [runs, setRuns] = useState<RunRow[]>([]);
@@ -10,6 +12,7 @@ export function Runs() {
   return (
     <section className="page">
       <h1>実行ログ</h1>
+      <p><ZoneNote /></p>
       <button className="secondary" onClick={() => void api.runs().then(r => setRuns(r.runs))}>更新</button>
       <div className="table-wrap">
         <table>
