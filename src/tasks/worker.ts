@@ -15,6 +15,7 @@ const IDLE_POLL_MS = 5 * 60_000;
 const LEASE_MS = 30 * 60_000;
 const RETRY_DELAYS_MIN = [1, 5, 15];
 const STAGNATION_LIMIT = 3;
+const STOPPED_RESUME_MS = 20_000;
 
 export type TickResult = 'ran' | 'idle' | 'busy' | 'paused' | 'disabled' | 'budget' | 'no_model';
 
@@ -354,7 +355,7 @@ export class Worker {
       return;
     }
     if (result.errorKind === 'cancelled') {
-      tasks.setReady(task.id, { runAt: now + 60 * 60_000, reason: '止められたので 1 時間休みます' });
+      tasks.setReady(task.id, { runAt: now + STOPPED_RESUME_MS, reason: '止められたので、少し休んでから再開します' });
       return;
     }
     const attempts = task.attempts + 1;
