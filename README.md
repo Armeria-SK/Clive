@@ -143,10 +143,6 @@ Clive は毎回、system（ルール・人格・記憶の枠・道具の説明�
 - 終了コード 2 で拒否（標準エラーの文が理由になる）。0 で終わり、標準出力に `{ "decision": "allow" | "ask" | "deny" | "block", "reason": "..." }`（または Claude Code の `hookSpecificOutput.permissionDecision`）を返すと、その判定になる
 - 時間切れ・起動の失敗・ほかの終了コードは `onError`（既定は拒否）。いちばん厳しい判定が使われるので、フックで組み込みの判定（拒否・承認）を緩めることはできない
 
-## 画面を作る人へ
-
-画面の機能と、API・イベントの一覧は [featuer.md](featuer.md) にあります。
-
 ## 仕組み
 
 | 項目 | 使っているもの |
