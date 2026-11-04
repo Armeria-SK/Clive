@@ -155,6 +155,8 @@ Clive は毎回、system（ルール・人格・記憶の枠・道具の説明�
 | テスト | `node:test` |
 | 依存 | `@anthropic-ai/sdk`、TypeBox、`croner`（タイムゾーン対応の cron）、`parse5`（HTML の解析）、React 一式、`react-markdown` |
 
+部品ごとの役割・入口のファイル・使っているものは [map.md](map.md) にあります。
+
 ```
 src/
   main.ts          起動（環境変数 → 設定 → DB → コンテキストの確認 → Web）と doctor
