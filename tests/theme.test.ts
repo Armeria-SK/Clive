@@ -6,14 +6,13 @@ import { getThemeMode, initTheme, setThemeMode } from '../web/src/theme.ts';
 
 const initScript = readFileSync(new URL('../web/public/theme-init.js', import.meta.url), 'utf8');
 
-function makeEnv(init: { stored?: string; prefersDark: boolean; storageThrows?: boolean; noMatchMedia?: boolean }) {
+function makeEnv(init: { stored?: string; prefersDark: boolean; storageThrows?: boolean; noMatchMedia?: boolean; legacyQuery?: boolean }) {
   const store = new Map<string, string>();
   if (init.stored !== undefined) store.set('clive.theme', init.stored);
   const listeners: Array<() => void> = [];
-  const query = {
-    matches: init.prefersDark,
-    addEventListener: (_type: string, fn: () => void) => { listeners.push(fn); },
-  };
+  const query: { matches: boolean; addEventListener?: (type: string, fn: () => void) => void; addListener?: (fn: () => void) => void } = { matches: init.prefersDark };
+  if (init.legacyQuery) query.addListener = fn => { listeners.push(fn); };
+  else query.addEventListener = (_type, fn) => { listeners.push(fn); };
   const dataset: Record<string, string> = {};
   const localStorage = {
     getItem: (k: string) => { if (init.storageThrows) throw new Error('blocked'); return store.get(k) ?? null; },
@@ -24,7 +23,7 @@ function makeEnv(init: { stored?: string; prefersDark: boolean; storageThrows?: 
     store, dataset, localStorage, query,
     document: { documentElement: { dataset } },
     ...(init.noMatchMedia ? {} : { matchMedia }),
-    window: { matchMedia },
+    window: init.noMatchMedia ? {} : { matchMedia },
     setOsDark: (dark: boolean) => { query.matches = dark; for (const fn of listeners) fn(); },
   };
 }
@@ -104,5 +103,36 @@ test('theme.ts: 起動時に保存した値を読み、保存先が使えなく�
     setThemeMode('dark');
     assert.equal(blocked.dataset.theme, 'dark');
     assert.equal(getThemeMode(), 'dark');
+  });
+});
+
+test('theme.ts: window.matchMedia が無い環境でも落ちず、ライトで始まる（保存した値は効く）', () => {
+  const plain = makeEnv({ prefersDark: true, noMatchMedia: true });
+  withGlobals(plain, () => {
+    initTheme();
+    assert.equal(plain.dataset.theme, 'light');
+    setThemeMode('dark');
+    assert.equal(plain.dataset.theme, 'dark');
+    setThemeMode('auto');
+    assert.equal(plain.dataset.theme, 'light');
+  });
+  const saved = makeEnv({ stored: 'dark', prefersDark: false, noMatchMedia: true });
+  withGlobals(saved, () => {
+    initTheme();
+    assert.equal(saved.dataset.theme, 'dark');
+  });
+});
+
+test('theme.ts: addEventListener が無い古い MediaQueryList（addListener だけ）でも落ちず、OS の変化に追従する', () => {
+  const env = makeEnv({ prefersDark: false, legacyQuery: true });
+  withGlobals(env, () => {
+    initTheme();
+    assert.equal(env.dataset.theme, 'light');
+    env.setOsDark(true);
+    assert.equal(env.dataset.theme, 'dark');
+    setThemeMode('light');
+    env.setOsDark(false);
+    env.setOsDark(true);
+    assert.equal(env.dataset.theme, 'light');
   });
 });

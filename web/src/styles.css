@@ -1,6 +1,6 @@
 :root {
   --bg: var(--color-bg); --panel: var(--color-surface); --text: var(--color-text);
-  --muted: color-mix(in srgb, var(--color-text) 60%, transparent); --line: var(--color-divider);
+  --muted: var(--color-text-muted); --line: var(--color-divider);
   --accent: var(--color-accent); --accent-text: #201f1d; --user: color-mix(in srgb, var(--color-text) 7%, transparent);
   --ok: #2e7d4f; --bad: #b3261e; --warn: var(--color-accent-700);
   --radius: var(--radius-md);
@@ -11,8 +11,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; }
 h1, h2, h3, h4, h5, h6 { font-family: var(--font-heading); font-weight: var(--font-heading-weight); }
-a { color: var(--accent); }
-a:hover { color: var(--color-accent-600); }
+a { color: var(--color-accent-text); }
+a:hover { color: var(--color-accent-text-hover); }
 code { font-family: var(--font-mono); font-size: 0.9em; }
 .muted { color: var(--muted); }
 .pre { white-space: pre-wrap; }
@@ -102,7 +102,7 @@ th { color: var(--muted); font-weight: 600; white-space: nowrap; }
 .tag.attention { color: var(--warn); border-color: var(--warn); }
 
 .notice.memory { border-color: var(--accent); color: var(--text); }
-button.link { background: none; border: 0; padding: 0 4px; color: var(--accent); cursor: pointer; font-size: 0.9em; text-decoration: underline; }
+button.link { background: none; border: 0; padding: 0 4px; color: var(--color-accent-text); cursor: pointer; font-size: 0.9em; text-decoration: underline; }
 .small { font-size: 0.85em; }
 .book { margin-bottom: 28px; }
 .meter { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; margin: 4px 0 12px; }
