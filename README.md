@@ -156,6 +156,8 @@ Clive は毎回、system（ルール・人格・記憶の枠・道具の説明�
 | 依存 | `@anthropic-ai/sdk`、TypeBox、`croner`（タイムゾーン対応の cron）、`parse5`（HTML の解析）、React 一式、`react-markdown`、画面のフォント（`@fontsource`） |
 | 画面の文字と絵 | Cormorant Garamond・Lora・Noto Serif JP（SIL Open Font License 1.1）は `@fontsource` から同梱し、外部へは取りに行かない。ライセンス文は [`web/fonts-LICENSE.md`](web/fonts-LICENSE.md)。アイコンは Lucide（ISC）で、出どころは `web/src/icons.tsx` の先頭に書いてある |
 
+部品ごとの役割・入口のファイル・使っているものは [map.md](map.md) にあります。
+
 ```
 src/
   main.ts          起動（環境変数 → 設定 → DB → コンテキストの確認 → Web）と doctor
