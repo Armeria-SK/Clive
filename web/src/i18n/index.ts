@@ -5,6 +5,7 @@ import { getLanguage, getVersion, subscribe, type Lang } from './state.ts';
 import type { ArgsOf, Dict, DictKey } from './types.ts';
 
 export { formatDateTime, formatList, formatNumber, formatRelative, parseZonedInput, pluralEn, startOfDay, timezoneLabel, type DateStyle } from './format.ts';
+export { loadTimezone, type LoadTimezoneOptions, type TimezoneSettingsView } from './load-timezone.ts';
 export {
   DEFAULT_LANGUAGE, DEFAULT_TIMEZONE, LANGUAGES, getLanguage, getLanguagePreference, getTimezone, initLanguage, resolveLanguage, setLanguagePreference, setTimezone,
   type Lang, type LanguagePreference,

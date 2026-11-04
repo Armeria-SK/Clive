@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { DAY_MAP } from '../src/tasks/schedule.ts';
 import { en } from '../web/src/i18n/en.ts';
 import {
-  formatDateTime, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getTimezone, initLanguage, parseZonedInput, pluralEn,
+  formatDateTime, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getTimezone, initLanguage, loadTimezone, parseZonedInput, pluralEn,
   resolveLanguage, setLanguagePreference, setTimezone, startOfDay, t, timezoneLabel,
 } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
@@ -255,4 +255,73 @@ test('WEEKDAYS: API に送る値はサーバーの曜日の読み取りと同じ
   assert.deepEqual(WEEKDAYS.map(d => t(d.label)), ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']);
   assert.deepEqual(WEEKDAYS.map(d => d.value), Object.keys(DAY_MAP), 'en でも値は変わらない');
   reset();
+});
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+async function quietly<T>(fn: () => Promise<T>): Promise<T> {
+  const warn = console.warn;
+  console.warn = () => undefined;
+  try { return await fn(); } finally { console.warn = warn; }
+}
+
+test('loadTimezone: 待ち時間のうちに届いた設定のタイムゾーンを反映する', async () => {
+  reset();
+  await loadTimezone(async () => ({ config: { timezone: 'America/New_York' } }), { waitMs: 200 });
+  assert.equal(getTimezone(), 'America/New_York');
+  reset();
+});
+
+test('loadTimezone: 待ち時間のあとに届いた設定も捨てず、届いた時点でタイムゾーンを反映する', async () => {
+  reset();
+  const started = Date.now();
+  await loadTimezone(async () => { await sleep(120); return { config: { timezone: 'America/New_York' } }; }, { waitMs: 20 });
+  assert.ok(Date.now() - started < 100, '最初の描画は待ち時間で先へ進む');
+  assert.equal(getTimezone(), 'Asia/Tokyo', '届くまでは既定のまま');
+  await sleep(200);
+  assert.equal(getTimezone(), 'America/New_York', '遅れて届いた設定で入れ替わる');
+  reset();
+});
+
+test('loadTimezone: 読めなかったときは一度だけやり直し、それでも読めなければ既定のまま', async () => {
+  reset();
+  let calls = 0;
+  await quietly(async () => {
+    await loadTimezone(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('down');
+      return { config: { timezone: 'Europe/Paris' } };
+    }, { waitMs: 200, retryMs: 20 });
+    assert.equal(getTimezone(), 'Asia/Tokyo', '最初の読み込みは失敗');
+    await sleep(120);
+    assert.equal(calls, 2);
+    assert.equal(getTimezone(), 'Europe/Paris', 'やり直しで届いた設定を反映する');
+  });
+  let failures = 0;
+  await quietly(async () => {
+    await loadTimezone(async () => { failures += 1; throw new Error('down'); }, { waitMs: 200, retryMs: 20 });
+    await sleep(150);
+  });
+  assert.equal(failures, 2, '最初の 1 回とやり直しの 1 回だけ');
+  assert.equal(getTimezone(), 'Europe/Paris', '失敗では書き換えない');
+  reset();
+});
+
+test('loadTimezone: timezone が文字列でなければ何もしない', async () => {
+  reset();
+  await loadTimezone(async () => ({ config: {} }), { waitMs: 200 });
+  await loadTimezone(async () => ({ config: { timezone: 9 } }), { waitMs: 200 });
+  assert.equal(getTimezone(), 'Asia/Tokyo');
+});
+
+test('t(): 引数が違うキーの和集合は型で断り、引数が同じ和集合は呼べる', () => {
+  reset();
+  const mixed = 'nav.tasks' as 'nav.tasks' | 'nav.tasksWaiting';
+  // @ts-expect-error 文字列の項目と関数の項目の和集合は、引数が決まらないので呼べない
+  const rejected = () => t(mixed);
+  assert.equal(typeof rejected, 'function');
+  const memory = 'notice.memoryCreate' as 'notice.memoryCreate' | 'notice.memoryUpdate';
+  assert.equal(t(memory, 'x'), '記憶しました: x');
+  const plain = 'nav.tasks' as 'nav.tasks' | 'nav.memory';
+  assert.equal(t(plain), 'タスク');
 });

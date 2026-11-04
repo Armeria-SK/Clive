@@ -118,7 +118,7 @@
 ### 画面 — `web/src`（React 19 + Vite）
 - 経路は URL のハッシュ（`#/c/<id>` `#/tasks[/<id>]` `#/today` `#/notifications` `#/review` `#/memory` `#/skills` `#/curiosity` `#/settings` `#/runs`）。サーバーとは `api.ts`（HTTP）と `events.ts`（SSE。出来事の型はサーバーの `RunEvent` の手書きの写し）だけで話す。
 - ファイル:
-  - `main.tsx` `App.tsx`: 入口。`main.tsx` はテーマと言語を決め、サーバーの設定（`/api/settings`）からタイムゾーンを読んでから最初の描画をする（3 秒待って読めなければ既定の Asia/Tokyo）。`App.tsx` は経路、サイドバー、全体の状態（作成中の返事・承認待ち・ワーカー・未読）、ブラウザ通知。
+  - `main.tsx` `App.tsx`: 入口。`main.tsx` はテーマと言語を決め、サーバーの設定（`/api/settings`）からタイムゾーンを読んでから最初の描画をする（最初の描画は 3 秒までしか待たない。遅れて届いた設定も捨てず、届いた時点で反映する。読めなければ一度だけやり直し、それまでは既定の Asia/Tokyo。読み込みは `i18n/load-timezone.ts`）。`App.tsx` は経路、サイドバー、全体の状態（作成中の返事・承認待ち・ワーカー・未読）、ブラウザ通知。
   - `Chat.tsx`: 会話、承認の札、道具の行（この 2 つは `Tasks.tsx` も使う）、添付、入力欄。
   - `Tasks.tsx`: タスクの一覧・新規・詳細とワーカーの操作。ほかの画面が使う `STATUS_LABEL` `WorkerBar` もここにある。新規の「日時を指定」は、サーバーのタイムゾーンの時刻として読んでから送る。
   - `Today.tsx`（きょう）、`Notifications.tsx`（通知）。
@@ -136,6 +136,7 @@
     - `ja.ts` が元の辞書（値は文字列か、差し込み用の関数）。`en.ts` は `types.ts` の型（ja から作る）で書くので、キーの漏れ・余り・引数の型の違いは `tsc` で落ちる。未訳を日本語で埋める仕組みは無い。
     - `index.ts`: `t(key, ...args)` と、言語やタイムゾーンが変わると描き直す `useT()`。
     - `state.ts`: 今の言語とタイムゾーンの保持。言語は 保存した設定（`localStorage` の `clive.language`）→ `navigator.languages` の主の部分（`en-GB` なら `en`）→ ja の順で決め、`<html lang>` を合わせる。
+    - `load-timezone.ts`: 起動時にサーバーの `timezone` を読む `loadTimezone`。最初の描画は待ち時間（3 秒）までしか待たないが、遅れて届いた設定も捨てずに反映し、読めなければ一度だけやり直す（捨てると、日時の入力が違う時刻として読まれる）。
     - `format.ts`: 日時・相対時刻・数・並べる文を `Intl` で整える。日時はブラウザではなくサーバーの `timezone` で表示し、`datetime-local` の入力もその時刻として読む（`parseZonedInput`）。
     - 訳すのは表示の文字だけ。API に送る値（曜日の `月`〜`日` など）は訳さない。この段階で辞書に入っているのは、サイドバーと経路名、画面が自分で組み立てる文、ブラウザ通知、曜日のラベル、言語の切り替えの文。各画面の文字は、その画面を作り直す段階で足す。サーバーから来る文字は訳していない。
   - `weekdays.ts`: 曜日の値（`月`〜`日`。サーバーの `src/tasks/schedule.ts` の `DAY_MAP` と対）と、ラベルの辞書キー。
