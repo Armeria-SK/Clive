@@ -7,7 +7,7 @@ import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, cl
 import { en } from '../web/src/i18n/en.ts';
 import { formatElapsed, formatRelativeCompact, setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
-import { registerEscapeUnlessInert, saveKeyHandler } from '../web/src/inert.ts';
+import { hideWhenInert, registerEscapeUnlessInert, saveKeyHandler } from '../web/src/inert.ts';
 import { closeTopLayer, ESC_ORDER, isComposing, modLabel, registerEscape, shortcutOf } from '../web/src/keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference } from '../web/src/layout.ts';
 import { notificationIcon, notificationKindLabel, notificationLink } from '../web/src/notification-meta.ts';
@@ -484,4 +484,13 @@ test('inert: 設定のモーダルが開いている間、後ろのページの 
   live(press('s', false));
   live(press('k'));
   assert.deepEqual({ saved, prevented }, { saved: 1, prevented: 1 }, '別のキーは何もしない');
+});
+
+test('hideWhenInert: 設定が開いているあいだ、後ろの窓（確かめ・スキルの窓・新しいタスク）は背景も本体も隠す', () => {
+  assert.deepEqual(hideWhenInert(true), { display: 'none' });
+  assert.equal(hideWhenInert(false), undefined, '設定が開いていなければ、そのまま出す');
+  for (const file of ['ChatDialog.tsx', 'SkillDialog.tsx', 'NewTaskDialog.tsx']) {
+    const source = readFileSync(new URL(`../web/src/${file}`, import.meta.url), 'utf8');
+    assert.equal(source.match(/style=\{(hidden|hideWhenInert\(inert\))\}/g)?.length, 2, `${file}: 背景と本体の 2 つに隠す指定を付ける`);
+  }
 });

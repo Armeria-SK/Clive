@@ -142,6 +142,7 @@ export function App() {
   const shown = pageBehind(route, behindSettings.current);
   const settingsOpen = route.page === 'settings';
   const settingsExit = useExit(settingsOpen, 220);
+  const settingsCovers = settingsExit.mounted;
   const closeSettings = useCallback(() => {
     if (behindSettings.current) history.back();
     else location.replace('#/');
@@ -417,8 +418,8 @@ export function App() {
 
   return (
     <div className="shell" ref={rootRef} data-mode={mode}>
-      <div className="shell-body" inert={settingsOpen}>
-        <InertContext.Provider value={settingsOpen}>
+      <div className="shell-body" inert={settingsCovers}>
+        <InertContext.Provider value={settingsCovers}>
         <Sidebar
           mode={mode} drawerOpen={drawerOpen} route={shown} profile={profile} presence={presence}
           conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
@@ -477,7 +478,7 @@ export function App() {
         <StatusBar
           connected={connected} worker={worker} runStartedAt={runningId ? runStarts[runningId] : undefined} approvals={approvals.length}
           modelName={modelName} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
-          onOpenApproval={openApproval} onOpenNotifications={toggleNotifications} inert={settingsOpen}
+          onOpenApproval={openApproval} onOpenNotifications={toggleNotifications} inert={settingsCovers}
         />
       )}
       <NotificationBubble
@@ -489,7 +490,7 @@ export function App() {
         onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
       {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} kept={keptSettings} />}
-      <NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} />
+      <InertContext.Provider value={settingsCovers}><NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} /></InertContext.Provider>
       <ToastHost mode={mode} />
       <Tooltip disabled={narrow} />
     </div>

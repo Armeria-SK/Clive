@@ -1,6 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscapeLayer } from './hooks.ts';
+import { hideWhenInert, useInert } from './inert.ts';
 import { Icon } from './icons.tsx';
 import { useT } from './i18n/index.ts';
 
@@ -19,6 +20,7 @@ interface Props {
 export function ChatDialog({ eyebrow, title, subtitle, wide, actions, onClose, children }: Props) {
   const t = useT();
   const root = useRef<HTMLDivElement>(null);
+  const hidden = hideWhenInert(useInert());
   useEscapeLayer('dialog', true, onClose);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -38,8 +40,8 @@ export function ChatDialog({ eyebrow, title, subtitle, wide, actions, onClose, c
   const host = document.querySelector('.shell') ?? document.body;
   return createPortal(
     <>
-      <div className="chat-dialog-backdrop" onClick={onClose} />
-      <div className="chat-dialog-wrap">
+      <div className="chat-dialog-backdrop" style={hidden} onClick={onClose} />
+      <div className="chat-dialog-wrap" style={hidden}>
         <div ref={root} className={`dialog chat-dialog${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" tabIndex={-1} onKeyDown={trapTab}>
           <div className="chat-dialog-head">
             <div className="chat-dialog-titles">

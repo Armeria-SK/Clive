@@ -1,6 +1,7 @@
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { api } from './api.ts';
 import { useEscapeLayer, useExit } from './hooks.ts';
+import { hideWhenInert, useInert } from './inert.ts';
 import { formatDateTime, useT } from './i18n/index.ts';
 import { Icon } from './icons.tsx';
 import { isComposing } from './keys.ts';
@@ -54,6 +55,7 @@ function Seg<V extends string | number>({ name, value, options, onPick, small }:
 
 function NewTaskForm({ narrow, leaving, onClose }: Props & { leaving: boolean }) {
   const t = useT();
+  const hidden = hideWhenInert(useInert());
   const [draft, setDraft] = useState<TaskDraft>(emptyDraft);
   const { pending, run: once } = usePending();
   const busy = pending.has('create');
@@ -86,8 +88,8 @@ function NewTaskForm({ narrow, leaving, onClose }: Props & { leaving: boolean })
 
   return (
     <>
-      <div className={`tk-modal-bg${leaving ? ' leaving' : ''}`} onClick={onClose} />
-      <div className={`tk-modal-wrap${narrow ? ' narrow' : ''}`}>
+      <div className={`tk-modal-bg${leaving ? ' leaving' : ''}`} style={hidden} onClick={onClose} />
+      <div className={`tk-modal-wrap${narrow ? ' narrow' : ''}`} style={hidden}>
         <div className={`dialog tk-dialog${leaving ? ' leaving' : ''}`} role="dialog" aria-modal="true" aria-label={t('tasks.new')}>
           <div className="tk-dialog-head">
             <span className="dialog-title">{t('tasks.new')}</span>
