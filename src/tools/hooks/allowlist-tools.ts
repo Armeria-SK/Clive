@@ -459,7 +459,12 @@ register(['curl'], (words, acc, ctx) => {
         sends = true;
         if (name === '-T' || name === '--upload-file') { acc.read(value); uploads.push(value); }
         else if (value.text.startsWith('@')) acc.read({ ...value, text: value.text.slice(1) });
-        else if (/^(?:-F|--form)$/u.test(name) && /=[@<]/u.test(value.text)) acc.read({ ...value, text: value.text.replace(/^[^=]*=[@<]/u, '').replace(/[;].*$/u, '') });
+        else if (name === '--data-urlencode' && !value.text.includes('=') && value.text.includes('@')) acc.read({ ...value, text: value.text.slice(value.text.indexOf('@') + 1) });
+        else if (/^(?:-F|--form)$/u.test(name) && /=[@<]/u.test(value.text)) {
+          const file = value.text.replace(/^[^=]*=[@<]/u, '').replace(/[;].*$/u, '');
+          acc.read({ ...value, text: file });
+          if (file.includes(',')) for (const part of file.split(',')) acc.read({ ...value, text: part.trim() });
+        }
         break;
       }
       if (name === '--output-dir') { dir = value; saves = true; }

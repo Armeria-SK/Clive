@@ -14,10 +14,11 @@ const HOME_PATHS = [
   '.gitconfig', '.gitattributes', '.config/git', '.curlrc', '_curlrc', 'Application Data/.curlrc', 'Application Data/_curlrc', '.config/curlrc', '.wgetrc', '.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmrc', '.config/yarn', '.config/pnpm', '.config/pip', '.pip', '.pypirc',
   '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.bash_aliases', '.profile', '.kshrc', '.zlogout', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.inputrc', '.config/fish', '.config/powershell', '.jq', '.ripgreprc', '.cargo/config', '.cargo/config.toml',
   '.docker', '.ssh', '.gnupg', '.aws', '.kube',
+  '.local/lib', 'Library/Python', 'AppData/Roaming/Python', '.config/go/env', 'Library/Application Support/go/env', 'AppData/Roaming/go/env',
   'Documents/WindowsPowerShell', 'Documents/PowerShell', 'OneDrive/Documents/WindowsPowerShell', 'OneDrive/Documents/PowerShell',
 ];
-const APPDATA_PATHS = ['_curlrc', '.curlrc', 'pip', 'npm/etc', 'git', 'Microsoft/Windows/PowerShell'];
-const XDG_PATHS = ['git', 'curlrc', 'powershell', 'pip', 'yarn', 'pnpm', 'fish'];
+const APPDATA_PATHS = ['_curlrc', '.curlrc', 'pip', 'npm/etc', 'git', 'Microsoft/Windows/PowerShell', 'Python', 'go/env'];
+const XDG_PATHS = ['git', 'curlrc', 'powershell', 'pip', 'yarn', 'pnpm', 'fish', 'go/env'];
 const POSIX_SYSTEM = ['/etc/gitconfig', '/etc/gitattributes', '/etc/wgetrc', '/etc/npmrc', '/etc/profile', '/etc/profile.d', '/etc/bash.bashrc', '/etc/environment', '/etc/zsh', '/etc/pip.conf', '/usr/local/etc/gitconfig', '/usr/local/etc/wgetrc'];
 
 function windowsSystem(env: Env): string[] {
@@ -39,6 +40,8 @@ export function toolConfigPaths(env: Env = process.env): string[] {
   if (env.XDG_CONFIG_HOME) for (const rel of XDG_PATHS) out.push(join(env.XDG_CONFIG_HOME, ...rel.split('/')));
   if (env.CURL_HOME) out.push(join(env.CURL_HOME, '.curlrc'), join(env.CURL_HOME, '_curlrc'));
   if (env.WGETRC) out.push(env.WGETRC);
+  if (env.PYTHONUSERBASE) out.push(env.PYTHONUSERBASE);
+  if (env.GOENV && env.GOENV !== 'off') out.push(env.GOENV);
   out.push(...POSIX_SYSTEM, ...windowsSystem(env));
   return out;
 }
@@ -49,9 +52,12 @@ const PROFILE_NAME = /^(?:microsoft\.powershell_profile|microsoft\.vscode_profil
 // どのフォルダにあっても、この名前のファイルは curl・wget の設定（作業フォルダのものも、cd のあとの curl・wget が読む場所になりうる）
 const RC_NAME = /^(?:\.curlrc|_curlrc|\.wgetrc)$/iu;
 
+// どこにあっても、この名前のファイルは python の起動のたびに動く（venv の site-packages など）。.pth は PyTorch の重みと名前が同じなので、user-site の下だけ
+const PY_STARTUP_NAME = /^(?:sitecustomize|usercustomize)\.py$/iu;
+
 export function isToolConfigPath(abs: string, env: Env = process.env): boolean {
   const name = abs.split(/[\\/]/u).pop() ?? '';
-  if (PROFILE_NAME.test(name) || RC_NAME.test(name)) return true;
+  if (PROFILE_NAME.test(name) || RC_NAME.test(name) || PY_STARTUP_NAME.test(name)) return true;
   return toolConfigPaths(env).some(p => isInside(p, abs));
 }
 

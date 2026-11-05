@@ -291,3 +291,46 @@ test('ホームが外のとき、`~` で書いた設定ファイルへの書き�
   for (const c of ['Add-Content ~\\.curlrc x', 'Set-Content ~\\.gitconfig x', 'Set-Content ~/.bashrc x', "Add-Content '~\\.wgetrc' x"]) assert.equal(f.ps(c).onceOnly, true, c);
   assert.equal(f.bash('echo x > ~/notes.txt').onceOnly, false);
 });
+
+// 9 回目の審査（中）: Python の user-site の .pth・sitecustomize.py・usercustomize.py は、python を起こすたびに動く（pip --version・pip list も python を起こす。python --version は動かない）。
+// Go の env ファイル（%APPDATA%\go\env・$XDG_CONFIG_HOME/go/env・~/.config/go/env。GOENV で場所を変えられる）は、go のコマンドすべてに GOFLAGS・GOTOOLCHAIN などを渡す。
+// どれも書き込みは今回だけ（実機で .pth・sitecustomize・usercustomize が python -c では動き、--version では動かないことは tests/shell-lang-version.test.ts の調べで確かめた）
+test('Python の user-site（.pth・sitecustomize.py・usercustomize.py）と Go の env ファイルへの書き込みは今回だけ。PYTHONUSERBASE・GOENV で動かした場所も', t => {
+  const f = fixture(t);
+  const userbase = join(f.base, 'pyuser');
+  const goenv = join(f.base, 'elsewhere', 'goenvfile');
+  const env = { ...f.env, PYTHONUSERBASE: userbase, GOENV: goenv };
+  const yes = [
+    'AppData/Roaming/Python/Python314/site-packages/x.pth', 'AppData/Roaming/Python/Python314/site-packages/usercustomize.py', 'AppData/Roaming/Python/Python312/site-packages/sitecustomize.py',
+    '.local/lib/python3.12/site-packages/x.pth', '.local/lib/python3.12/site-packages/usercustomize.py', 'Library/Python/3.12/lib/python/site-packages/x.pth',
+    'AppData/Roaming/go/env', '.config/go/env', 'Library/Application Support/go/env',
+    // どこにあっても、この名前のファイルは python の起動で動く（venv の site-packages など）
+    'workspace/venv/Lib/site-packages/sitecustomize.py', 'workspace/usercustomize.py', 'workspace/.venv/lib/python3.12/site-packages/usercustomize.py',
+  ];
+  assert.deepEqual(yes.filter(rel => !isToolConfigPath(join(f.home, ...rel.split('/')), env)), []);
+  assert.equal(isToolConfigPath(join(userbase, 'lib', 'python3.12', 'site-packages', 'x.pth'), env), true, 'PYTHONUSERBASE');
+  assert.equal(isToolConfigPath(join(userbase, 'Python314', 'site-packages', 'x.pth'), env), true, 'PYTHONUSERBASE（Windows）');
+  assert.equal(isToolConfigPath(goenv, env), true, 'GOENV');
+  assert.equal(isToolConfigPath(join(f.home, '.config', 'go', 'env'), { HOME: f.home }), true, 'XDG_CONFIG_HOME が無くても ~/.config/go/env');
+  assert.equal(isToolConfigPath(join(f.home, 'AppData', 'Roaming', 'go', 'env'), { HOME: f.home }), true, 'APPDATA が無くても ~/AppData/Roaming/go/env');
+  assert.equal(isToolConfigPath(join(f.home, 'AppData', 'Roaming', 'Python', 'Python314', 'site-packages', 'x.pth'), { HOME: f.home }), true, 'APPDATA が無くても ~/AppData/Roaming/Python');
+  // APPDATA・XDG_CONFIG_HOME がホームの外にあっても
+  const far = { HOME: f.home, APPDATA: join(f.base, 'roaming'), XDG_CONFIG_HOME: join(f.base, 'xdg') };
+  assert.equal(isToolConfigPath(join(f.base, 'roaming', 'Python', 'Python314', 'site-packages', 'x.pth'), far), true, 'APPDATA の下の Python');
+  assert.equal(isToolConfigPath(join(f.base, 'roaming', 'go', 'env'), far), true, 'APPDATA の下の go/env');
+  assert.equal(isToolConfigPath(join(f.base, 'xdg', 'go', 'env'), far), true, 'XDG_CONFIG_HOME の下の go/env');
+  const no = ['workspace/model.pth', 'workspace/checkpoints/best.pth', 'workspace/sitecustomize.md', 'workspace/go/env.md', 'workspace/go.mod', 'workspace/env', 'AppData/Roaming/Pythonista/x.pth', 'AppData/Roaming/Code/settings.json', '.local/share/x', '.config/gopls/config'];
+  assert.deepEqual(no.filter(rel => isToolConfigPath(join(f.home, ...rel.split('/')), env)), []);
+  // シェルからの書き込みは今回だけ（許可フォルダの中でも外でも）
+  const h = f.home.replaceAll('\\', '/');
+  const run = (command: string) => checkShellCommand(command, f.ws, { policy: { roots: [{ path: f.home, mode: 'write' }], deny: [] }, outsideRoots: 'ask', shell: 'bash', windows: false, env });
+  for (const command of [
+    `echo x > ${h}/AppData/Roaming/go/env`, `echo 'import os' > ${h}/AppData/Roaming/Python/Python314/site-packages/x.pth`, `cp a.txt ${h}/.local/lib/python3.12/site-packages/usercustomize.py`, `touch ${h}/workspace/sitecustomize.py`,
+    `echo x >> ${h}/.config/go/env`, `mv x ${userbase.replaceAll('\\', '/')}/lib/python3.12/site-packages/x.pth`, `echo x > ${goenv.replaceAll('\\', '/')}`,
+  ]) {
+    const v = run(command);
+    assert.equal(v.onceOnly, true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+  }
+  assert.equal(run('echo x > notes.md').decision, 'allow');
+  assert.equal(run('echo x > model.pth').decision, 'allow', 'PyTorch の .pth は対象外');
+});
