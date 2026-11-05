@@ -28,6 +28,7 @@ const EVENT_KEYS = {
   created: 'tasks.event.created', note: 'tasks.event.note', requeued: 'tasks.event.requeued', question: 'tasks.event.question', approval: 'tasks.event.approval',
   answer: 'tasks.event.answer', run: 'tasks.event.run', done: 'tasks.event.done', failed: 'tasks.event.failed', cancelled: 'tasks.event.cancelled',
   approved: 'tasks.event.approved', reopened: 'tasks.event.reopened', skipped: 'tasks.event.skipped', edited: 'tasks.event.edited', context: 'tasks.event.context',
+  uncancelled: 'tasks.event.uncancelled',
 } as const satisfies Record<string, PlainKey>;
 export function eventKey(kind: string): PlainKey | null {
   return Object.hasOwn(EVENT_KEYS, kind) ? EVENT_KEYS[kind as keyof typeof EVENT_KEYS] : null;

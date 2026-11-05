@@ -150,7 +150,7 @@ export const api = {
   editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null }) =>
     call<{ task: Task }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   answerTask: (id: string, text: string) => call<{ task: Task }>(`/api/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
-  taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),
+  taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'uncancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),
   worker: () => call<WorkerStatus>('/api/worker'),
   setWorker: (patch: { paused?: boolean; autonomy?: boolean }) => call<WorkerStatus>('/api/worker', { method: 'POST', body: JSON.stringify(patch) }),
   notifications: () => call<{ notifications: NotificationItem[]; unread: number }>('/api/notifications'),

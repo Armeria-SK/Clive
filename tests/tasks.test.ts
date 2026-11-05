@@ -458,6 +458,233 @@ test('API: 完了の条件を PATCH で直せる。空文字と null で「未�
   assert.equal((await api(`/api/tasks/${id}`, { nextAction: '図書館へ' }, 'PATCH')).body.task.done_criteria, '残す', '送らなければ変えない');
 });
 
+// ── 取り消しを元に戻す（A11） ──
+
+function cancel(s: Awaited<ReturnType<typeof setup>>, id: string, actor = 'user') {
+  return s.app.tasks.finish(id, 'cancelled', '取り消しました', actor);
+}
+
+test('取り消しを戻すと、取り消す前の状態に返る（提案・実行待ち・返事待ち）。実行中だったものはすぐ選ばれる実行待ちに戻る', async t => {
+  const s = await setup(t);
+  const events = (id: string) => s.app.tasks.events(id);
+
+  const proposal = s.app.tasks.create({ title: '提案', origin: 'self', actor: 'clive', propose: true });
+  assert.equal(cancel(s, proposal.id).cancelled_from, 'inbox', '取り消す前の状態を覚える');
+  const backProposal = s.app.tasks.uncancel(proposal.id, 'user');
+  assert.deepEqual([backProposal.status, backProposal.cancelled_from, backProposal.completed_at, backProposal.result_summary], ['inbox', null, null, null], '承認なしでは動かない提案のまま');
+  assert.deepEqual([events(proposal.id)[0]!.kind, events(proposal.id)[0]!.actor], ['uncancelled', 'user']);
+
+  const later = s.clock.now + 3 * HOUR;
+  const ready = s.userTask('夕方の用事', { runAt: later });
+  cancel(s, ready.id);
+  const backReady = s.app.tasks.uncancel(ready.id, 'user');
+  assert.deepEqual([backReady.status, backReady.run_at], ['ready', later], '日時はそのまま');
+
+  const running = s.userTask('実行中だったもの', { runAt: s.clock.now - HOUR });
+  const conversation = s.app.conversations.create({ kind: 'task' }).id;
+  assert.equal(s.app.tasks.claim(running.id, 60_000, conversation), true);
+  assert.equal(cancel(s, running.id).cancelled_from, 'running');
+  const backRunning = s.app.tasks.uncancel(running.id, 'user');
+  assert.deepEqual([backRunning.status, backRunning.run_at, backRunning.lease_until, backRunning.attempts], ['ready', null, null, 0], '実行中だったものは、すぐ次に選ばれる');
+  assert.equal(s.app.tasks.pickNext({ allowSelf: false })?.id, running.id);
+
+  const waiting = s.userTask('返事待ちだったもの');
+  s.app.tasks.setWaiting(waiting.id, 'question', 'いつ行く？');
+  cancel(s, waiting.id);
+  assert.equal(s.app.tasks.get(waiting.id)!.waiting_text, 'いつ行く？', '取り消しでは質問の文を消さない');
+  const backWaiting = s.app.tasks.uncancel(waiting.id, 'user');
+  assert.deepEqual([backWaiting.status, backWaiting.waiting_kind, backWaiting.waiting_text], ['waiting', 'question', 'いつ行く？'], '質問を残したまま返事待ちに戻る');
+});
+
+test('取り消した繰り返しの予定を戻すと予定に戻り、過ぎた回は後からまとめて動かさず、次の回にする', async t => {
+  const s = await setup(t);
+  const template = s.userTask('朝のまとめ', { cron: '0 9 * * *', timezone: 'Asia/Tokyo' });
+  const firstRun = template.run_at!;
+  assert.equal(firstRun, Date.parse('2026-11-05T00:00:00Z'));
+  assert.equal(cancel(s, template.id).cancelled_from, 'scheduled');
+  const soon = s.app.tasks.uncancel(template.id, 'user');
+  assert.deepEqual([soon.status, soon.run_at], ['scheduled', firstRun], '次の回がまだ先なら、そのまま');
+
+  cancel(s, template.id);
+  s.clock.now = Date.parse('2026-11-07T03:00:00Z');
+  const late = s.app.tasks.uncancel(template.id, 'user');
+  assert.equal(late.status, 'scheduled');
+  assert.equal(late.run_at, Date.parse('2026-11-08T00:00:00Z'), '取り消していたあいだの回は飛ばして、次の回にする');
+  assert.equal(s.app.tasks.spawnDueSchedules().length, 0, '戻した途端に実行が作られない');
+});
+
+test('戻せないとき: 取り消した状態でない・取り消す前の記録が無い・同じ予定の別の実行が動いている', async t => {
+  const s = await setup(t);
+  const plain = s.userTask('ふつう');
+  assert.throws(() => s.app.tasks.uncancel(plain.id, 'user'), (e: any) => e.code === 'error.not_cancelled');
+  assert.throws(() => s.app.tasks.uncancel('missing', 'user'), (e: any) => e.code === 'error.not_found');
+
+  cancel(s, plain.id);
+  s.app.db.prepare('UPDATE tasks SET cancelled_from = NULL WHERE id = ?').run(plain.id);
+  assert.throws(() => s.app.tasks.uncancel(plain.id, 'user'), (e: any) => e.code === 'error.no_cancel_record', '記録の無い古い取り消しは戻せない');
+  assert.equal(s.app.tasks.get(plain.id)!.status, 'cancelled', '断ったら何も変えない');
+
+  const done = s.userTask('終わったもの');
+  s.app.tasks.finish(done.id, 'done', '済み', 'clive');
+  assert.throws(() => s.app.tasks.uncancel(done.id, 'user'), (e: any) => e.code === 'error.not_cancelled', '完了は戻せない');
+
+  const template = s.userTask('毎時の確認', { cron: '0 * * * *', timezone: 'UTC' });
+  const first = s.app.tasks.spawnNow(template.id)!;
+  cancel(s, first.id);
+  const second = s.app.tasks.spawnNow(template.id)!;
+  assert.ok(second, '取り消した前の実行は「動いている」に数えないので、次の実行が作れる');
+  assert.throws(() => s.app.tasks.uncancel(first.id, 'user'), (e: any) => e.code === 'error.sibling_open', '別の実行が動いているあいだは戻せない（重ねて動かさない）');
+  assert.equal(s.app.tasks.get(first.id)!.status, 'cancelled');
+  cancel(s, second.id);
+  assert.equal(s.app.tasks.uncancel(first.id, 'user').status, 'ready', '別の実行が片づけば戻せる');
+});
+
+test('取り消しの記録は、取り消した人が誰でも残る。二重に取り消しても、終わったものを取り消しても、記録を壊さない', async t => {
+  const s = await setup(t);
+  const byClive = s.userTask('Clive が取り消す');
+  assert.equal(cancel(s, byClive.id, 'clive').cancelled_from, 'ready', '道具からの取り消しも同じ finish を通る');
+  assert.equal(cancel(s, byClive.id, 'clive').cancelled_from, 'ready', '二重に取り消しても、前の記録を消さない');
+  assert.equal(s.app.tasks.uncancel(byClive.id, 'user').status, 'ready');
+
+  const finished = s.userTask('終わっていたもの');
+  s.app.tasks.finish(finished.id, 'done', '済み', 'clive');
+  assert.equal(cancel(s, finished.id, 'clive').cancelled_from, null, '終わったものを取り消した場合は、戻す先が決められない');
+
+  const failed = s.userTask('失敗するもの');
+  const afterFail = s.app.tasks.finish(failed.id, 'failed', 'だめでした', 'worker');
+  assert.equal(afterFail.cancelled_from, null);
+});
+
+test('取り消した好奇心のタスクを戻すと、まだ下ろしたままの興味は調べ中に戻る。別の操作で変わっていれば触らない', async t => {
+  const s = await setup(t);
+  const researchTask = (topic: string) => {
+    const item = s.app.curiosity.add({ topic, source: 'user' });
+    const task = s.app.tasks.create({ title: `調べる: ${topic}`, origin: 'curiosity', curiosityId: item.id, actor: 'user' });
+    s.app.curiosity.update(item.id, { status: 'researching', taskId: task.id });
+    return { item, task };
+  };
+  const a = researchTask('量子コンピュータ');
+  cancel(s, a.task.id);
+  assert.deepEqual([s.app.curiosity.get(a.item.id)!.status, s.app.curiosity.get(a.item.id)!.task_id], ['dropped', null], '取り消しで興味は下ろされる');
+  s.app.tasks.uncancel(a.task.id, 'user');
+  assert.deepEqual([s.app.curiosity.get(a.item.id)!.status, s.app.curiosity.get(a.item.id)!.task_id], ['researching', a.task.id]);
+
+  const b = researchTask('海の色');
+  cancel(s, b.task.id);
+  s.app.curiosity.update(b.item.id, { status: 'open' });
+  s.app.tasks.uncancel(b.task.id, 'user');
+  assert.deepEqual([s.app.curiosity.get(b.item.id)!.status, s.app.curiosity.get(b.item.id)!.task_id], ['open', null], '持ち主が気になることを戻していたら、触らない');
+
+  const c = researchTask('星の数');
+  cancel(s, c.task.id);
+  const other = s.app.tasks.create({ title: '別のタスク', origin: 'curiosity', curiosityId: c.item.id, actor: 'user' });
+  s.app.curiosity.update(c.item.id, { status: 'researching', taskId: other.id });
+  s.app.tasks.uncancel(c.task.id, 'user');
+  assert.deepEqual([s.app.curiosity.get(c.item.id)!.status, s.app.curiosity.get(c.item.id)!.task_id], ['researching', other.id], '別のタスクが引き継いでいたら、奪わない');
+});
+
+test('戻す書き換えはまとめて 1 つ: 途中で失敗したらタスクも興味も経過も元のまま。通知（task.changed）は書き終えてから 1 回', async t => {
+  const s = await setup(t);
+  const item = s.app.curiosity.add({ topic: '雲の形', source: 'user' });
+  const task = s.app.tasks.create({ title: '調べる', origin: 'curiosity', curiosityId: item.id, actor: 'user' });
+  s.app.curiosity.update(item.id, { status: 'researching', taskId: task.id });
+  cancel(s, task.id);
+  const eventsBefore = s.app.tasks.events(task.id).length;
+
+  const original = s.app.curiosity.onTaskRestored.bind(s.app.curiosity);
+  s.app.curiosity.onTaskRestored = () => { throw new Error('興味の書き込みに失敗'); };
+  assert.throws(() => s.app.tasks.uncancel(task.id, 'user'), /興味の書き込みに失敗/u);
+  assert.deepEqual([s.app.tasks.get(task.id)!.status, s.app.tasks.events(task.id).length], ['cancelled', eventsBefore], '失敗したらタスクも経過も元のまま');
+  s.app.curiosity.onTaskRestored = original;
+
+  const changes: Array<{ status: string }> = [];
+  s.app.bus.subscribe(e => { if (e.event.type === 'task.changed') changes.push({ status: e.event.task.status }); });
+  s.app.tasks.uncancel(task.id, 'user');
+  assert.deepEqual(changes, [{ status: 'ready' }], '知らせは 1 回で、書き終えた状態を伝える');
+  assert.equal(s.app.curiosity.get(item.id)!.status, 'researching');
+});
+
+test('API: POST /api/tasks/:id/uncancel は戻したタスクを返し、戻せないときは 409 と理由のコード', async t => {
+  const s = await setup(t);
+  const api = await serve(t, s);
+  const id = s.userTask('本を返す').id;
+  const early = await api(`/api/tasks/${id}/uncancel`, {});
+  assert.equal(early.status, 409);
+  assert.equal(early.body.code, 'task.error.not_cancelled');
+  assert.equal((await api(`/api/tasks/${id}/cancel`, {})).body.task.status, 'cancelled');
+  const back = await api(`/api/tasks/${id}/uncancel`, {});
+  assert.equal(back.status, 200);
+  assert.equal(back.body.task.status, 'ready');
+  const detail = await api(`/api/tasks/${id}`);
+  assert.deepEqual(detail.body.events.slice(0, 2).map((e: any) => [e.kind, e.actor]), [['uncancelled', 'user'], ['cancelled', 'user']]);
+
+  assert.equal((await api(`/api/tasks/${id}/cancel`, {})).status, 200, '戻したあとにまた取り消せる');
+  s.app.db.prepare('UPDATE tasks SET cancelled_from = NULL WHERE id = ?').run(id);
+  const old = await api(`/api/tasks/${id}/uncancel`, {});
+  assert.equal(old.status, 409);
+  assert.equal(old.body.code, 'task.error.no_cancel_record');
+  assert.equal((await api('/api/tasks/nothing/uncancel', {})).status, 404);
+});
+
+test('取り消した繰り返しの予定の「もう一度」は、予定に戻したうえで今回の実行を 1 つ作ってワーカーに頼む。前の実行が残っていれば何も変えず 409', async t => {
+  const s = await setup(t);
+  const api = await serve(t, s);
+  const template = s.userTask('朝のまとめ', { cron: '0 9 * * *', timezone: 'Asia/Tokyo' });
+  assert.equal((await api(`/api/tasks/${template.id}/cancel`, {})).body.task.status, 'cancelled');
+
+  const again = await api(`/api/tasks/${template.id}/run-now`, {});
+  assert.equal(again.status, 202);
+  assert.deepEqual([again.body.task.origin, again.body.task.status, again.body.task.parent_id], ['schedule', 'ready', template.id], '今回の実行が 1 つできる');
+  const parent = s.app.tasks.get(template.id)!;
+  assert.deepEqual([parent.status, parent.cron === '0 9 * * *', parent.run_at! > s.clock.now], ['scheduled', true, true], '親は予定に戻り、以後も予定どおり動く');
+  s.adapter().scripts.push(toolCall('task_complete', { summary: 'まとめました', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran', 'ワーカーが今回の実行を動かす');
+  assert.equal(s.app.tasks.get(again.body.task.id)!.status, 'done');
+});
+
+test('取り消した予定の「もう一度」: 前の実行がまだ動いていれば、予定を戻さずに 409', async t => {
+  const s = await setup(t);
+  const api = await serve(t, s);
+  const template = s.userTask('毎時の確認', { cron: '0 * * * *', timezone: 'UTC' });
+  const open = s.app.tasks.spawnNow(template.id)!;
+  assert.equal((await api(`/api/tasks/${template.id}/cancel`, {})).body.task.status, 'cancelled');
+  const refused = await api(`/api/tasks/${template.id}/run-now`, {});
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.code, 'task.error.previous_unfinished');
+  assert.equal(s.app.tasks.get(template.id)!.status, 'cancelled', '断ったら予定も戻さない');
+  assert.equal(s.app.tasks.get(open.id)!.status, 'ready');
+});
+
+test('実行中に取り消して戻しても、止めた実行の後始末は戻した状態を上書きしない', async t => {
+  const s = await setup(t);
+  const task = s.userTask('長い仕事');
+  s.adapter().scripts.push(hang());
+  const ticking = s.app.worker.tick();
+  await waitFor(() => s.app.tasks.get(task.id)?.status === 'running', 'タスクが実行中になる');
+  assert.equal(cancel(s, task.id).cancelled_from, 'running');
+  s.app.tasks.uncancel(task.id, 'user');
+  assert.equal(s.app.worker.stopTask(task.id), true, '止められた実行は、戻したあとに終わる');
+  assert.equal(await ticking, 'ran');
+  const after = s.app.tasks.get(task.id)!;
+  assert.deepEqual([after.status, after.run_at, after.attempts], ['ready', null, 0], '後始末は、実行中でなくなったタスクに何もしない');
+  s.adapter().scripts.push(toolCall('task_complete', { summary: '終わりました', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran', '戻したタスクは、そのまま次に動く');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+});
+
+test('「もう一度」で終わった一回きりのタスクを戻す動きは今までどおり（取り消しの記録は消える）', async t => {
+  const s = await setup(t);
+  const task = s.userTask('一回きり');
+  cancel(s, task.id);
+  const reopened = s.app.tasks.reopen(task.id, 'user');
+  assert.deepEqual([reopened.status, reopened.run_at, reopened.attempts, reopened.cancelled_from], ['ready', null, 0, null]);
+  const template = s.userTask('予定', { cron: '0 9 * * *', timezone: 'Asia/Tokyo' });
+  cancel(s, template.id);
+  const reopenedTemplate = s.app.tasks.reopen(template.id, 'user');
+  assert.deepEqual([reopenedTemplate.status, reopenedTemplate.cron, reopenedTemplate.cancelled_from], ['scheduled', '0 9 * * *', null], '予定のひな形は、一回きりの実行待ちではなく予定に戻る');
+  assert.ok(reopenedTemplate.run_at! > s.clock.now, '次の回が決まっている');
+});
+
 test('モデルが 0 個のあいだは、タスクも振り返りも選ばず、会話も通知も作らずに休む。モデルを足せば動く', async t => {
   const s = await setup(t, c => { c.memory.review = true; c.models = []; c.routing = { chat: [], background: [], retriesPerModel: 0 }; });
   const task = s.userTask('仕事');

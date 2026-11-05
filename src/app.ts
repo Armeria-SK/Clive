@@ -161,6 +161,7 @@ export class App {
       }
       this.worker.poke();
     };
+    this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
     this.notifications.onNotify = notification => this.bus.publish({ type: 'notification', notification });
     this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));

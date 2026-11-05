@@ -288,4 +288,8 @@ export const MIGRATIONS: readonly Migration[] = [
     created_at INTEGER NOT NULL
   ) STRICT;
   `,
+  // 7: 取り消しを元に戻すため、取り消す直前の状態を覚える（前に取り消したものは NULL = 戻せない）
+  `
+  ALTER TABLE tasks ADD COLUMN cancelled_from TEXT CHECK (cancelled_from IN ('inbox', 'ready', 'running', 'waiting', 'scheduled'));
+  `,
 ];

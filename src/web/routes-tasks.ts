@@ -130,7 +130,15 @@ export function registerTaskRoutes(router: Router, app: App): void {
       } else if (task.status === 'inbox') {
         task = app.tasks.approve(task.id);
       } else if (task.status !== 'ready' || task.attempts >= task.max_attempts) {
+        // 取り消した予定のひな形は、予定に戻したうえで今回の実行を 1 つ作る（前の実行が残っていれば、予定も戻さずに断る）
+        const template = task.cron !== null && task.parent_id === null;
+        if (template && app.tasks.hasOpenRun(task.id)) throw new TaskError('error.previous_unfinished');
         task = app.tasks.reopen(task.id, 'user', taskText(languageOf(app.config()), 'event.run_now'));
+        if (template) {
+          const child = app.tasks.spawnNow(task.id);
+          if (!child) throw new TaskError('error.previous_unfinished');
+          task = child;
+        }
       } else {
         task = app.tasks.update(task.id, { runAt: null }, 'user');
       }
@@ -153,6 +161,10 @@ export function registerTaskRoutes(router: Router, app: App): void {
     sendJson(res, 200, { task: view(updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));
+  router.add('POST', '/api/tasks/:id/uncancel', ({ res, params }) => {
+    const task = getTask(params[0]!);
+    try { sendJson(res, 200, { task: view(app.tasks.uncancel(task.id, 'user')) }); } catch (error) { taskProblem(error); }
+  });
   router.add('POST', '/api/tasks/:id/done', close('done'));
 
   // ── ワーカー ──
