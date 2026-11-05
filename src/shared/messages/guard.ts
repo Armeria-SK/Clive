@@ -115,6 +115,7 @@ const ja = {
   'code.self_touch': 'このコードは Clive 自身の設定・人格・承認・記憶に触れる文字を含みます: {markers}',
   'code.preview_missing': 'まだ無いファイルです（コマンドの中で作られます）。中身は見せられません',
   'code.preview_unreadable': '中身は見せられません',
+  'code.limits': 'このコマンドは、見せたファイルのほかに、読み込まれるファイルや入れた部品のコードも動かします。中身を確かめたのは見せたファイルだけです',
 
   'hard.fs_create': 'ファイルシステムの作成',
   'hard.disk_format': 'ディスクのフォーマット',
@@ -300,6 +301,7 @@ const en: Record<keyof typeof ja, string> = {
   'code.self_touch': 'This code contains text that touches Clive itself (its settings, persona, approvals or memory): {markers}',
   'code.preview_missing': 'This file does not exist yet (the command creates it). Its contents cannot be shown',
   'code.preview_unreadable': 'The contents cannot be shown',
+  'code.limits': 'This command also runs code from files it loads and from parts it installs, beyond the files shown. Only the files shown were checked',
 
   'hard.fs_create': 'Creating a filesystem',
   'hard.disk_format': 'Formatting a disk',

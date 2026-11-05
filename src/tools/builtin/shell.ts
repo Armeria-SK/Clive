@@ -11,7 +11,8 @@ import type { PreviewFile } from '../approvals.ts';
 import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, placePath } from '../hooks/scope.ts';
 import { checkShellCommand } from '../hooks/shell-guard.ts';
-import { resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
+import type { ShellKind } from '../hooks/shell-lex.ts';
+import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
 interface ShellInput { command: string; cwd?: string; timeoutSec?: number }
@@ -61,9 +62,12 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const cwd = resolveCwd(input, ctx);
   if ('problem' in cwd) return { decision: 'deny', reasons: [cwd.problem] };
   const shell = ctx.config.tools.shell;
+  const spec = resolveShell(shell.shell);
+  const childEnv = scrubEnv(shell.envAllow);
   const verdict = checkShellCommand(input.command, cwd.cwd, {
     policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny, language,
-    selfHosts: selfHostsOf(ctx.config),
+    selfHosts: selfHostsOf(ctx.config), shell: spec.name as ShellKind, windows: process.platform === 'win32', dataDir: ctx.paths.data,
+    which: name => findExecutable(name, childEnv, cwd.cwd, { powershell: spec.name === 'powershell' || spec.name === 'pwsh' }),
   });
   const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
     input: p.input, path: p.path ?? guardText(language, 'shell.unresolved_path'),
@@ -73,7 +77,8 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, details };
   const peeked = verdict.scripts.map(file => peek(file, language));
   const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));
-  const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...verdict.reasons] : verdict.reasons;
+  const base = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
+  const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
   return {
     decision: verdict.decision, reasons, details, onceOnly: true, askKinds: verdict.askKinds,
     preview: peeked.map(p => p.preview), bind: sha256(peeked.map(p => p.fingerprint).join('\n')),

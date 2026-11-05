@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, statSync, type WriteStream } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { isSensitiveName } from '../../shared/redaction.ts';
 
@@ -39,6 +39,23 @@ export function which(name: string): string | undefined {
   }
   whichCache.set(name, found);
   return found;
+}
+
+// 子プロセスの PATH で、名前から実際に起動されるファイルを探す（キャッシュしない）。PATH の空の項目と . は作業フォルダを指す
+export function findExecutable(name: string, env: Record<string, string>, cwd: string, opts: { windows?: boolean; powershell?: boolean } = {}): string | undefined {
+  const windows = opts.windows ?? WINDOWS;
+  const lookup = (key: string): string | undefined => env[key] ?? Object.entries(env).find(([k]) => k.toUpperCase() === key)?.[1];
+  const exts = windows ? [...(lookup('PATHEXT') ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(e => e.toLowerCase()), ...(opts.powershell ? ['.ps1'] : [])] : [''];
+  const named = windows && /\.[A-Za-z0-9]+$/u.test(name);
+  const names = windows ? [...(named ? [name] : []), ...exts.map(e => `${name}${e}`)] : [name];
+  for (const raw of (lookup('PATH') ?? '').split(windows ? ';' : delimiter)) {
+    const dir = raw === '' || raw === '.' ? cwd : raw;
+    for (const candidate of names) {
+      const file = join(dir, candidate);
+      try { if (statSync(file).isFile()) return file; } catch { /* 無い */ }
+    }
+  }
+  return undefined;
 }
 
 export type ShellChoice = 'auto' | 'pwsh' | 'powershell' | 'bash' | 'sh';

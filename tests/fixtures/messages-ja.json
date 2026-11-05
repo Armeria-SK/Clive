@@ -252,6 +252,7 @@
     "code.self_touch": "このコードは Clive 自身の設定・人格・承認・記憶に触れる文字を含みます: {markers}",
     "code.preview_missing": "まだ無いファイルです（コマンドの中で作られます）。中身は見せられません",
     "code.preview_unreadable": "中身は見せられません",
+    "code.limits": "このコマンドは、見せたファイルのほかに、読み込まれるファイルや入れた部品のコードも動かします。中身を確かめたのは見せたファイルだけです",
     "hard.fs_create": "ファイルシステムの作成",
     "hard.disk_format": "ディスクのフォーマット",
     "hard.disk_ops": "ディスクの操作",

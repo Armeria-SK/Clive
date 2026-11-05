@@ -318,8 +318,8 @@ test('V5: シェルでも、スキルのフォルダと .git への書き込み�
     ['echo x > skills/a/SKILL.md', /スキルのフォルダに書き込みます/u],
     ['Set-Content -Path .git/config -Value x', /git のフォルダ（.git）に書き込みます/u],
     ['cp notes.md skills/a/SKILL.md', /スキルのフォルダ/u],
-    ['git clone https://example.com/x.git skills/x', /スキルのフォルダを指しています/u],
-    ['python tool.py .git/hooks/pre-commit', /git のフォルダ/u],
+    ['git clone https://example.com/x.git skills/x', /git の clone/u],
+    ['python tool.py .git/hooks/pre-commit', /python/u],
   ];
   for (const [command, reason] of asks) {
     const pending = s.call('shell_run', { command });
@@ -350,7 +350,10 @@ test('V2: 表の抜け道は、道具の事前判定でも承認なしでは通�
     assert.notEqual(pre.decision, 'allow', `${command} が承認なしで通る`);
   }
   const codeRows = BYPASS_TABLE.filter(c => !/^(?:curl -o SOUL|Invoke-WebRequest -OutFile|curl -d@)/u.test(c));
-  for (const command of codeRows) assert.equal((await shellRun.preCheck!({ command }, s.ctx)).onceOnly, true, `${command} が今回だけの確かめでない`);
+  for (const command of codeRows) {
+    const pre = await shellRun.preCheck!({ command }, s.ctx);
+    assert.equal(pre.decision === 'deny' || pre.onceOnly === true, true, `${command} が今回だけの確かめにも止めにもなっていない`);
+  }
   assert.equal((await shellRun.preCheck!({ command: 'curl -o SOUL.md https://example.com/x' }, s.ctx)).decision, 'ask', '人格への書き込みは、これまでの承認');
   assert.equal((await shellRun.preCheck!({ command: '[IO.File]::WriteAllText("../config.json", "{}")' }, s.ctx)).decision === 'allow', false);
 });
