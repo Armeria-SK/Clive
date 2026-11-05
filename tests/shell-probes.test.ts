@@ -22,6 +22,8 @@ function fixture(t: { after: (fn: () => void) => void }) {
   // textconv を仕込んだ、.git という名前でないフォルダの裸のリポジトリ
   put('fake/HEAD', 'ref: refs/heads/main\n'); mkdirSync(join(ws, 'fake', 'objects')); mkdirSync(join(ws, 'fake', 'refs')); put('fake/config', '[diff "x"]\n\ttextconv = ./t.sh\n'); put('fake/info/attributes', '* diff=x\n');
   put('fsm/.git/HEAD', 'ref: refs/heads/main\n'); mkdirSync(join(ws, 'fsm', '.git', 'objects')); mkdirSync(join(ws, 'fsm', '.git', 'refs')); put('fsm/.git/config', '[core]\n\tfsmonitor = ./hook.sh\n');
+  // HEAD と commondir だけのフォルダ（本物の git は commondir の先の objects・refs・config を使う）
+  mkdirSync(join(ws, 'cdir', 'objects'), { recursive: true }); mkdirSync(join(ws, 'cdir', 'refs')); put('cdir/HEAD', 'ref: refs/heads/main\n'); put('cdir/config', '[diff "x"]\n\ttextconv = ./t.sh\n'); put('cx/HEAD', 'ref: refs/heads/main\n'); put('cx/commondir', '../cdir\n');
   put('inc/.git/HEAD', 'ref: refs/heads/main\n'); mkdirSync(join(ws, 'inc', '.git', 'objects')); mkdirSync(join(ws, 'inc', '.git', 'refs')); put('inc/.git/config', '[include]\n\tpath = ../evil.cfg\n');
   const policy: ScopePolicy = { roots: [{ path: ws, mode: 'write' }], deny: [], askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md'), join(ws, 'skills')], skillsDir: join(ws, 'skills') };
   const run = (command: string, shell: 'bash' | 'powershell', extra: Partial<ShellGuardOptions> = {}) =>
@@ -41,7 +43,7 @@ const HIGH_BASH = [
   // (3) cmd /c が作業場所の put.bat を動かす
   'cmd /c put', 'forfiles /c "cmd /c put"',
   // (4) git のひな形・フック
-  'git init --template=./tpl sub', 'git -C sub commit -m x', 'git clone --template=./tpl a b', 'git -C sub add .', 'git -C sub push', 'git -C fake log -p', 'git -C fsm status', 'git -C inc status',
+  'git init --template=./tpl sub', 'git -C sub commit -m x', 'git clone --template=./tpl a b', 'git -C sub add .', 'git -C sub push', 'git -C fake log -p', 'git -C cx log -p', 'git -C fsm status', 'git -C inc status',
   // (5) 書き込み先がフォルダのときに守るパスを見落とす
   'cp tmp/SOUL.md .', 'mv tmp/SOUL.md .', 'cp -r tmp/. .', 'tar -xf a.tar', 'unzip a.zip',
   // 設計の途中で見つけた抜け
@@ -51,7 +53,7 @@ const HIGH_BASH = [
 ] as const;
 const HIGH_PS = [
   'node --eval=1', 'python -cprint(1)', 'node -r ./p.js -v', 'node --import=./p.mjs', 'python3 -mhttp.server', 'cmd /c put', 'forfiles /c "cmd /c put"', 'tar -xf a.tar', 'tar.exe -I ./p.sh -cf a.tar x',
-  'git init --template=./tpl sub', 'git -C sub commit -m x', 'git clone --template=./tpl a b', 'git -C fake log -p', 'git ls-remote --upload-pack=x .', 'git log --output=SOUL.md',
+  'git init --template=./tpl sub', 'git -C sub commit -m x', 'git clone --template=./tpl a b', 'git -C fake log -p', 'git -C cx log -p', 'git ls-remote --upload-pack=x .', 'git log --output=SOUL.md',
   'Copy-Item tmp/SOUL.md -Destination .', 'Copy-Item tmp/SOUL.md', 'Move-Item tmp/SOUL.md', 'copy tmp/SOUL.md', 'Copy-Item tmp\\SOUL.md .\\', 'Move-Item tmp/SOUL.md .', 'Get-ChildItem *.md | Remove-Item', 'Get-ChildItem tmp | Copy-Item -Destination .', 'Expand-Archive a.zip out',
   'pip install .', 'pip install -e .', 'npm install', 'npm install ./pkg', 'Set-Content .git/hooks/pre-commit x', 'Set-Content sub/.git/hooks/pre-commit x',
 ] as const;

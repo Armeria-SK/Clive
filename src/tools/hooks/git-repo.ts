@@ -1,7 +1,7 @@
 // git のリポジトリの設定を調べる（security-self-api.md §11.3.3）。git は起こさず、ファイルを読むだけ。
 // 設定の項目がすべて「ふつうの設定」の一覧に入っていなければ、そのリポジトリでの git はすべて今回だけ（設定でコードを動かせるため）。
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { RepoInfo } from './allowlist-core.ts';
 
@@ -85,7 +85,7 @@ export function parseGitConfig(source: string): ConfigEntry[] | null {
 }
 
 // ── ふつうの設定の一覧 ──
-const PLAIN_CORE = new Set(['repositoryformatversion', 'filemode', 'bare', 'logallrefupdates', 'symlinks', 'ignorecase', 'precomposeunicode', 'autocrlf', 'eol', 'safecrlf', 'longpaths', 'worktree', 'hookspath']);
+const PLAIN_CORE = new Set(['repositoryformatversion', 'filemode', 'bare', 'logallrefupdates', 'symlinks', 'ignorecase', 'precomposeunicode', 'autocrlf', 'eol', 'safecrlf', 'longpaths', 'hookspath']);
 const PLAIN_BY_SUB: Record<string, ReadonlySet<string>> = {
   remote: new Set(['url', 'fetch', 'pushurl', 'tagopt', 'prune']),
   branch: new Set(['remote', 'merge', 'rebase', 'pushremote']),
@@ -121,17 +121,42 @@ export function unusualKey(entries: readonly ConfigEntry[]): string | null {
 // ── リポジトリの見つけ方（git と同じ: 各階層で .git → その階層自身が裸のリポジトリ → 上）──
 const isDir = (p: string): boolean => { try { return statSync(p).isDirectory(); } catch { return false; } };
 const isFile = (p: string): boolean => { try { return statSync(p).isFile(); } catch { return false; } };
-const isGitDir = (p: string): boolean => isFile(join(p, 'HEAD')) && isDir(join(p, 'objects')) && isDir(join(p, 'refs'));
+interface Found { gitDir: string; commonDir: string; broken?: boolean }
 
-interface Found { gitDir: string; broken?: boolean }
+const MAX_ADMIN_FILE = 4096;
+
+// git のフォルダの中の commondir・gitdir ファイルの中身。無ければ undefined、あるのに読めない・大きすぎる・空・複数行なら null
+function adminFile(dir: string, name: string): string | undefined | null {
+  const file = join(dir, name);
+  let st;
+  try { st = lstatSync(file); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR' ? undefined : null; }
+  if (!st.isFile() || st.size > MAX_ADMIN_FILE) return null;
+  try {
+    const text = readFileSync(file, 'utf8').trimEnd();
+    return text === '' || /[\r\n]/u.test(text) ? null : text;
+  } catch { return null; }
+}
+
+type Examined = { state: 'no' } | { state: 'ok'; commonDir: string } | { state: 'broken' };
+
+// git の is_git_directory と同じ: HEAD があり、objects/ と refs/ が（commondir があればその先に）ある。commondir・gitdir が読めないときは broken（今回だけ）
+function examine(p: string): Examined {
+  if (!isFile(join(p, 'HEAD'))) return { state: 'no' };
+  const commondir = adminFile(p, 'commondir');
+  if (commondir === null || adminFile(p, 'gitdir') === null) return { state: 'broken' };
+  const commonDir = commondir === undefined ? p : isAbsolute(commondir) ? commondir : resolve(p, commondir);
+  if (isDir(join(commonDir, 'objects')) && isDir(join(commonDir, 'refs'))) return { state: 'ok', commonDir };
+  return commondir === undefined ? { state: 'no' } : { state: 'broken' };
+}
 
 function viaGitFile(file: string): Found {
   try {
     const m = /^gitdir:\s*(.+?)\s*$/u.exec(readFileSync(file, 'utf8').split('\n')[0] ?? '');
-    if (!m) return { gitDir: dirname(file), broken: true };
+    if (!m) return { gitDir: dirname(file), commonDir: dirname(file), broken: true };
     const target = isAbsolute(m[1]!) ? m[1]! : resolve(dirname(file), m[1]!);
-    return isGitDir(target) ? { gitDir: target } : { gitDir: target, broken: true };
-  } catch { return { gitDir: dirname(file), broken: true }; }
+    const e = examine(target);
+    return e.state === 'ok' ? { gitDir: target, commonDir: e.commonDir } : { gitDir: target, commonDir: target, broken: true };
+  } catch { return { gitDir: dirname(file), commonDir: dirname(file), broken: true }; }
 }
 
 export function findGitDir(start: string): Found | null {
@@ -139,8 +164,14 @@ export function findGitDir(start: string): Found | null {
   for (let depth = 0; depth < 64; depth++) {
     const dotGit = join(dir, '.git');
     if (isFile(dotGit)) return viaGitFile(dotGit);
-    if (isDir(dotGit) && isGitDir(dotGit)) return { gitDir: dotGit };
-    if (isGitDir(dir)) return { gitDir: dir };
+    if (isDir(dotGit)) {
+      const inner = examine(dotGit);
+      if (inner.state === 'ok') return { gitDir: dotGit, commonDir: inner.commonDir };
+      if (inner.state === 'broken') return { gitDir: dotGit, commonDir: dotGit, broken: true };
+    }
+    const here = examine(dir);
+    if (here.state === 'ok') return { gitDir: dir, commonDir: here.commonDir };
+    if (here.state === 'broken') return { gitDir: dir, commonDir: dir, broken: true };
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -148,20 +179,12 @@ export function findGitDir(start: string): Found | null {
   return null;
 }
 
-function commonDirOf(gitDir: string): string {
-  try {
-    const rel = readFileSync(join(gitDir, 'commondir'), 'utf8').trim();
-    if (rel) return isAbsolute(rel) ? rel : resolve(gitDir, rel);
-  } catch { /* commondir が無ければ gitDir 自身 */ }
-  return gitDir;
-}
-
 export function inspectRepo(start: string): RepoInfo {
   const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false };
   const found = findGitDir(start);
   if (!found) return none;
   if (found.broken) return { ...none, found: true, unreadable: true };
-  const commonDir = commonDirOf(found.gitDir);
+  const commonDir = found.commonDir;
   const files = [...new Set([join(commonDir, 'config'), join(found.gitDir, 'config'), join(found.gitDir, 'config.worktree'), join(commonDir, 'config.worktree')])];
   const entries: ConfigEntry[] = [];
   for (const file of files) {

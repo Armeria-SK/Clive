@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { findGitDir, inspectRepo, parseGitConfig, unusualKey } from '../src/tools/hooks/git-repo.ts';
@@ -158,4 +158,89 @@ test('本物の git が読む項目の名前と、パーサーの名前が同じ
   writeFileSync(join(root, '.git', 'config'), '[core]\n\tfsmonitor = ./x\n');
   assert.equal(inspectRepo(root).configOk, false);
   assert.equal(findGitDir(join(root, 'sub'))?.gitDir, join(root, '.git'));
+});
+
+// 審査で見つかった: git の is_git_directory は commondir を辿って objects/ と refs/ を探す。HEAD と commondir だけのフォルダも git のフォルダ
+test('commondir: HEAD と commondir だけのフォルダも git のフォルダ。commondir の先の設定を読む（core.worktree も「ふつうでない」）', t => {
+  const root = tempDir(t);
+  makeGitDir(join(root, 'c'), `${PLAIN}[diff "x"]\n\ttextconv = ./t.sh\n`);
+  mkdirSync(join(root, 'x'));
+  writeFileSync(join(root, 'x', 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(root, 'x', 'commondir'), '../c\n');
+  const via = inspectRepo(join(root, 'x'));
+  assert.equal(via.found, true, 'objects と refs が commondir の先にあるフォルダを見つける');
+  assert.equal(via.configOk, false);
+  assert.equal(via.badKey, 'diff.x.textconv');
+  assert.equal(findGitDir(join(root, 'x'))?.gitDir, join(root, 'x'));
+  // 絶対パスの commondir
+  writeFileSync(join(root, 'x', 'commondir'), `${join(root, 'c')}\n`);
+  assert.equal(inspectRepo(join(root, 'x')).badKey, 'diff.x.textconv');
+  // 上のリポジトリがふつうでも、commondir のフォルダのほうを使う（git と同じ順: その階層自身が先）
+  const outer = repoWith(t, PLAIN);
+  mkdirSync(join(outer, 'x'));
+  writeFileSync(join(outer, 'x', 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(outer, 'x', 'commondir'), `${join(root, 'c')}\n`);
+  assert.equal(inspectRepo(join(outer, 'x')).configOk, false);
+
+  // core.worktree は作業フォルダを別の場所に向ける。ふつうの項目に入れない
+  assert.equal(inspectRepo(repoWith(t, `${PLAIN}[core]\n\tworktree = ../elsewhere\n`)).badKey, 'core.worktree');
+});
+
+test('commondir・gitdir: 読めない・先が無い・大きすぎるものは「読めない」（今回だけ）', t => {
+  const root = tempDir(t);
+  makeGitDir(join(root, 'c'), PLAIN);
+  const bad: Array<[string, string]> = [['dangling commondir', '../nowhere\n'], ['empty commondir', '\n'], ['commondir without objects', '../c/hooks\n']];
+  for (const [label, body] of bad) {
+    const dir = join(root, label.replaceAll(' ', '-'));
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'HEAD'), 'ref: refs/heads/main\n');
+    writeFileSync(join(dir, 'commondir'), body);
+    const info = inspectRepo(dir);
+    assert.equal(info.unreadable, true, label);
+  }
+  // commondir がフォルダ（読めない）
+  const asDir = join(root, 'commondir-is-dir');
+  mkdirSync(join(asDir, 'commondir'), { recursive: true });
+  writeFileSync(join(asDir, 'HEAD'), 'ref: refs/heads/main\n');
+  assert.equal(inspectRepo(asDir).unreadable, true);
+  // 大きすぎる
+  const big = join(root, 'big');
+  mkdirSync(big);
+  writeFileSync(join(big, 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(big, 'commondir'), `../c\n${'x'.repeat(10_000)}`);
+  assert.equal(inspectRepo(big).unreadable, true);
+  // gitdir（worktree の管理フォルダの中にある、作業フォルダの .git を指すファイル）が読めない
+  const admin = join(root, 'admin');
+  makeGitDir(admin, '');
+  writeFileSync(join(admin, 'commondir'), '../c\n');
+  mkdirSync(join(admin, 'gitdir'));
+  assert.equal(inspectRepo(admin).unreadable, true);
+  writeFileSync(join(root, 'ok-admin-gitdir'), 'x');
+});
+
+// 本物の git との突き合わせ: HEAD と commondir だけのフォルダで git log -p を動かすと、commondir の先の textconv が本当に動く
+test('本物の git: commondir だけのフォルダは git のフォルダで、その設定のコードが動く。ガードはそのフォルダを見つける', { skip: !gitAvailable && 'git が無い' }, t => {
+  const root = tempDir(t);
+  const git = (args: string[], cwd = root) => spawnSync('git', args, { encoding: 'utf8', cwd });
+  mkdirSync(join(root, 'wt'));
+  mkdirSync(join(root, 'x'));
+  git(['init', '--bare', '-q', 'c']);
+  writeFileSync(join(root, 'wt', 'a.txt'), 'hello\n');
+  git(['--git-dir=c', '--work-tree=wt', 'add', 'a.txt']);
+  git(['--git-dir=c', '--work-tree=wt', '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'one']);
+  const marker = join(root, 'marker');
+  const hook = join(root, 'hook.sh');
+  writeFileSync(hook, `#!/bin/sh\necho ran > "${marker.replaceAll('\\', '/')}"\ncat "$1"\n`);
+  appendFileSync(join(root, 'c', 'config'), `[diff "x"]\n\ttextconv = ${hook.replaceAll('\\', '/')}\n`);
+  mkdirSync(join(root, 'c', 'info'), { recursive: true });
+  writeFileSync(join(root, 'c', 'info', 'attributes'), '* diff=x\n');
+  writeFileSync(join(root, 'x', 'HEAD'), `ref: ${git(['--git-dir=c', 'symbolic-ref', 'HEAD']).stdout.trim()}\n`);
+  writeFileSync(join(root, 'x', 'commondir'), '../c\n');
+  assert.equal(git(['-C', 'x', 'rev-parse', '--git-dir']).stdout.trim(), '.', '本物の git は x を git のフォルダとして読む');
+  const info = inspectRepo(join(root, 'x'));
+  assert.equal(info.found, true);
+  assert.equal(info.configOk, false);
+  assert.equal(info.badKey, 'diff.x.textconv');
+  git(['-C', 'x', 'log', '-p', '--oneline']);
+  assert.equal(existsSync(marker), true, '前提: 本物の git は textconv のコードを動かす（ガードが見つけないと、許す になってしまう形）');
 });
