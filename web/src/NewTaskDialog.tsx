@@ -4,6 +4,7 @@ import { useEscapeLayer, useExit } from './hooks.ts';
 import { formatDateTime, useT } from './i18n/index.ts';
 import { Icon } from './icons.tsx';
 import { isComposing } from './keys.ts';
+import { usePending } from './pending.ts';
 import { buildNewTask, draftError, draftSummary, emptyDraft, FREQS, PRIORITIES, type DraftError, type DraftSummary, type TaskDraft, type When } from './task-form.ts';
 import { reportTaskError } from './task-actions.ts';
 import { toast } from './toast.tsx';
@@ -54,7 +55,8 @@ function Seg<V extends string | number>({ name, value, options, onPick, small }:
 function NewTaskForm({ narrow, leaving, onClose }: Props & { leaving: boolean }) {
   const t = useT();
   const [draft, setDraft] = useState<TaskDraft>(emptyDraft);
-  const [busy, setBusy] = useState(false);
+  const { pending, run: once } = usePending();
+  const busy = pending.has('create');
   const [shownError, setShownError] = useState<DraftError | null>(null);
   const [before] = useState(() => document.activeElement);
   useEffect(() => () => { if (before instanceof HTMLElement && before.isConnected) before.focus(); }, [before]);
@@ -64,21 +66,19 @@ function NewTaskForm({ narrow, leaving, onClose }: Props & { leaving: boolean })
   const summary = draftSummary(draft);
   const summaryLine = summary ? summaryText(summary, t) : '';
 
-  async function create() {
-    if (busy) return;
+  // 作る操作は 1 回だけ。Enter を続けて押したり、押しながらクリックしたりしても、2 つ作らない
+  const create = () => once('create', async () => {
     const built = buildNewTask(draft);
     if (!built.ok) { setShownError(built.error); return; }
-    setBusy(true);
     try {
       const { task } = await api.createTask(built.task);
-      toast({ kind: 'done', icon: 'plus', title: t('tasks.toast.created'), body: task.cron_text ? `${task.title}（${task.cron_text}）` : task.title });
+      toast({ kind: 'done', icon: 'plus', title: t('tasks.toast.created'), body: task.cron_text ? t('tasks.toast.createdWithCron', task.title, task.cron_text) : task.title });
       onClose();
       location.hash = `#/tasks/${encodeURIComponent(task.id)}`;
     } catch (error) {
       reportTaskError(error);
-      setBusy(false);
     }
-  }
+  });
 
   const onTitleKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.preventDefault(); void create(); }

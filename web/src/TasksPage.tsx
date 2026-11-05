@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Task, type WorkerStatus } from './api.ts';
 import { CuriositySection } from './CuriositySection.tsx';
 import { useEscapeLayer, useExit, useNow } from './hooks.ts';
+import { usePending } from './pending.ts';
 import { useT } from './i18n/index.ts';
 import { Icon } from './icons.tsx';
 import { answerTask, performTaskAction, type TaskAction } from './task-actions.ts';
@@ -10,7 +11,6 @@ import { SectionHead } from './TaskSection.tsx';
 import { TaskRow } from './TaskRow.tsx';
 import { TaskSheet } from './TaskSheet.tsx';
 import { ZoneNote } from './ZoneNote.tsx';
-import './styles/tasks.css';
 
 interface Props {
   taskId: string | null;
@@ -46,6 +46,7 @@ export function TasksPage({ taskId, section, revision, worker, runStartedAt, onN
   const hasRunning = tasks?.some(task => task.status === 'running' || (task.status === 'ready' && task.run_at !== null)) ?? false;
   const now = useNow(hasRunning ? 1000 : 15_000);
   const reload = useCallback(() => setTick(n => n + 1), []);
+  const { pending, run: once } = usePending();
 
   useEffect(() => {
     let live = true;
@@ -81,22 +82,23 @@ export function TasksPage({ taskId, section, revision, worker, runStartedAt, onN
   const nothingFound = loaded && searching && SECTION_ORDER.every(key => groups[key].length === 0);
   const toggle = (key: keyof Collapsed) => setCollapsed(c => ({ ...c, [key]: !c[key] }));
 
-  const act = async (action: TaskAction, task: Task) => {
+  // 行の操作と答えの送信は、同じタスクについて 1 つずつ（送信中の行はボタンを無効にし、Enter の 2 回目も送らない）
+  const act = (action: TaskAction, task: Task) => once(task.id, async () => {
     const here = runningTaskId === task.id;
     const ok = await performTaskAction(action, task, { runId: here ? runId : undefined, busyWithOther: Boolean(worker?.running) && !here });
     if (ok) reload();
-  };
-  const sendAnswer = async (task: Task) => {
+  });
+  const sendAnswer = (task: Task) => once(task.id, async () => {
     const text = (answers[task.id] ?? '').trim();
     if (!text) return;
     if (await answerTask(task, text)) { setAnswers(a => ({ ...a, [task.id]: '' })); reload(); }
-  };
+  });
 
   const renderRow = (task: Task) => {
     const here = runningTaskId === task.id;
     return (
       <TaskRow
-        key={task.id} task={task} now={now} selected={task.id === taskId} runningHere={here} fresh={isFresh(task)}
+        key={task.id} task={task} now={now} selected={task.id === taskId} runningHere={here} fresh={isFresh(task)} pending={pending.has(task.id)}
         elapsedMs={here && runStartedAt !== undefined ? now - runStartedAt : null}
         answer={answers[task.id] ?? ''} onAnswer={text => setAnswers(a => ({ ...a, [task.id]: text }))} onSendAnswer={() => void sendAnswer(task)}
         onOpen={() => { location.hash = `#/tasks/${encodeURIComponent(task.id)}`; }} onAction={action => void act(action, task)}

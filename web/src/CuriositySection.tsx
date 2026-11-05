@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, type CuriosityItem } from './api.ts';
 import { formatDateTime, useT } from './i18n/index.ts';
+import { usePending } from './pending.ts';
 import { SectionHead } from './TaskSection.tsx';
 import { CURIOSITY_STATUS_KEY } from './task-meta.ts';
 import { reportTaskError } from './task-actions.ts';
@@ -21,16 +22,20 @@ export function CuriositySection({ open, revision, onToggle }: Props) {
   const [topic, setTopic] = useState('');
   const [why, setWhy] = useState('');
   const [tick, setTick] = useState(0);
+  const { pending, run } = usePending();
   const reload = () => setTick(n => n + 1);
 
   useEffect(() => { void api.curiosity(all).then(r => setItems(r.items)).catch(() => undefined); }, [all, revision, tick]);
 
-  const act = (promise: Promise<unknown>) => { void promise.then(reload, reportTaskError); };
+  // 追加と、1 件ごとの操作は、それぞれ 1 つずつ（送信中は同じものを 2 回送らない）
+  const act = (key: string, send: () => Promise<unknown>) => run(key, async () => {
+    try { await send(); reload(); } catch (error) { reportTaskError(error); }
+  });
   const add = (e: FormEvent) => {
     e.preventDefault();
     const text = topic.trim();
     if (!text) return;
-    act(api.addCuriosity(text, why.trim() || undefined).then(() => { setTopic(''); setWhy(''); }));
+    void act('add', async () => { await api.addCuriosity(text, why.trim() || undefined); setTopic(''); setWhy(''); });
   };
   const count = items ? items.filter(isActive).length : 0;
 
@@ -43,7 +48,7 @@ export function CuriositySection({ open, revision, onToggle }: Props) {
           <form className="tk-curform" onSubmit={add}>
             <input className="input" value={topic} onChange={e => setTopic(e.target.value)} placeholder={t('curiosity.topic')} aria-label={t('curiosity.topic')} maxLength={200} />
             <input className="input" value={why} onChange={e => setWhy(e.target.value)} placeholder={t('curiosity.why')} aria-label={t('curiosity.why')} maxLength={500} />
-            <button className="btn btn-primary" type="submit" disabled={!topic.trim()}>{t('curiosity.add')}</button>
+            <button className="btn btn-primary" type="submit" disabled={pending.has('add') || !topic.trim()}>{t('curiosity.add')}</button>
           </form>
           <label className="tk-showall"><input type="checkbox" checked={all} onChange={e => setAll(e.target.checked)} />{t('curiosity.showAll')}</label>
           {!items ? <p className="tk-note">{t('tasks.loading')}</p> : !items.length ? <p className="tk-note">{t('curiosity.empty')}</p> : (
@@ -59,9 +64,9 @@ export function CuriositySection({ open, revision, onToggle }: Props) {
                   {item.result && <p className="tk-cur-result">{item.result}</p>}
                   <div className="tk-cur-actions">
                     {item.task_id && <a href={`#/tasks/${encodeURIComponent(item.task_id)}`}>{t('curiosity.viewTask')}</a>}
-                    {item.status === 'open' && <button className="btn btn-secondary" onClick={() => act(api.curiosityTask(item.id))}>{t('curiosity.research')}</button>}
-                    {isActive(item) && <button className="btn btn-ghost" onClick={() => act(api.updateCuriosity(item.id, { status: 'dropped' }))}>{t('curiosity.drop')}</button>}
-                    {(item.status === 'done' || item.status === 'dropped') && <button className="btn btn-ghost" onClick={() => act(api.updateCuriosity(item.id, { status: 'open' }))}>{t('curiosity.reopen')}</button>}
+                    {item.status === 'open' && <button className="btn btn-secondary" disabled={pending.has(`item:${item.id}`)} onClick={() => void act(`item:${item.id}`, () => api.curiosityTask(item.id))}>{t('curiosity.research')}</button>}
+                    {isActive(item) && <button className="btn btn-ghost" disabled={pending.has(`item:${item.id}`)} onClick={() => void act(`item:${item.id}`, () => api.updateCuriosity(item.id, { status: 'dropped' }))}>{t('curiosity.drop')}</button>}
+                    {(item.status === 'done' || item.status === 'dropped') && <button className="btn btn-ghost" disabled={pending.has(`item:${item.id}`)} onClick={() => void act(`item:${item.id}`, () => api.updateCuriosity(item.id, { status: 'open' }))}>{t('curiosity.reopen')}</button>}
                   </div>
                 </div>
               ))}

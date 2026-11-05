@@ -221,6 +221,7 @@ export const ja = {
   'tasks.toast.answered': '答えを送りました',
   'tasks.toast.answeredBody': '続きは実行待ちに入りました。',
   'tasks.toast.created': 'タスクを作りました',
+  'tasks.toast.createdWithCron': (title: string, cron: string) => `${title}（${cron}）`,
   'tasks.toast.saved': '保存しました',
   'tasks.sheet.label': 'タスクの詳細',
   'tasks.sheet.close': '閉じる',

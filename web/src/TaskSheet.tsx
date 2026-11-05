@@ -6,6 +6,7 @@ import { formatDateTime, formatElapsed, formatRelative, useT } from './i18n/inde
 import { Icon, type IconName } from './icons.tsx';
 import { isComposing } from './keys.ts';
 import { Markdown } from './Markdown.tsx';
+import { usePending } from './pending.ts';
 import { answerTask, performTaskAction, reportTaskError, type TaskAction } from './task-actions.ts';
 import { eventKey, isAccent, ORIGIN_KEY, priorityKey, sheetActions, STATUS_ICON, STATUS_KEY, type SheetAction } from './task-meta.ts';
 import { toast } from './toast.tsx';
@@ -63,7 +64,7 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
   const [answer, setAnswer] = useState('');
   const [editing, setEditing] = useState<Field | null>(null);
   const [draft, setDraft] = useState('');
-  const [busy, setBusy] = useState(false);
+  const { pending, run: once } = usePending();
   const [tick, setTick] = useState(0);
   const transcript = useRef<HTMLDetailsElement>(null);
   const reload = () => setTick(n => n + 1);
@@ -81,35 +82,31 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
     return () => { live = false; };
   }, [id, revision, tick]);
 
-  const run = async (action: TaskAction) => {
+  // シートでの送信は 1 つずつ。Enter を続けて押したり、押しながらクリックしたりしても 2 回は送らない
+  const busy = pending.size > 0;
+  const run = (action: TaskAction) => once('sheet', async () => {
     if (!data) return;
-    setBusy(true);
-    const ok = await performTaskAction(action, data.task, { runId, busyWithOther });
-    setBusy(false);
-    if (ok) reload();
-  };
-  const send = async () => {
+    if (await performTaskAction(action, data.task, { runId, busyWithOther })) reload();
+  });
+  const send = () => once('sheet', async () => {
     if (!data || !answer.trim()) return;
-    setBusy(true);
-    const ok = await answerTask(data.task, answer.trim());
-    setBusy(false);
-    if (ok) { setAnswer(''); reload(); }
-  };
+    if (await answerTask(data.task, answer.trim())) { setAnswer(''); reload(); }
+  });
   const startEdit = (field: Field) => {
     if (!data) return;
     setEditing(field);
     setDraft(field === 'title' ? data.task.title : field === 'body' ? data.task.body : data.task.next_action ?? '');
   };
-  const save = async () => {
+  const save = () => once('sheet', async () => {
     if (!data || !editing) return;
     const patch = editing === 'title' ? { title: draft.trim() } : editing === 'body' ? { body: draft } : { nextAction: draft.trim() || null };
     try {
       await api.editTask(data.task.id, patch);
-      toast({ kind: 'done', icon: 'check', title: t('tasks.toast.saved'), body: editing === 'title' ? data.task.title : t(FIELD_LABEL[editing]) });
+      toast({ kind: 'done', icon: 'check', title: t('tasks.toast.saved'), body: editing === 'title' ? draft.trim() : t(FIELD_LABEL[editing]) });
       setEditing(null);
       reload();
     } catch (error) { reportTaskError(error); }
-  };
+  });
   const editKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) { e.stopPropagation(); setEditing(null); }
   };
@@ -141,7 +138,7 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
           <textarea className="input" autoFocus value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={editKey} />
           <div className="tk-field-buttons">
             <button className="btn btn-ghost" onClick={() => setEditing(null)}>{t('tasks.field.cancel')}</button>
-            <button className="btn btn-primary" disabled={field === 'body' && !draft.trim()} onClick={() => void save()}>{t('tasks.field.save')}</button>
+            <button className="btn btn-primary" disabled={busy || (field === 'body' && !draft.trim())} onClick={() => void save()}>{t('tasks.field.save')}</button>
           </div>
         </div>
       ) : <span className={`tk-field-value${value ? '' : ' unset'}`}>{value || t('tasks.field.empty')}</span>}
@@ -165,7 +162,7 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
                   <input className="input" autoFocus value={draft} maxLength={200} onChange={e => setDraft(e.target.value)} aria-label={t('tasks.title.edit')}
                     onKeyDown={e => { editKey(e); if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode }) && draft.trim()) { e.preventDefault(); void save(); } }} />
                   <button className="btn btn-ghost" onClick={() => setEditing(null)}>{t('tasks.field.cancel')}</button>
-                  <button className="btn btn-primary" disabled={!draft.trim()} onClick={() => void save()}>{t('tasks.field.save')}</button>
+                  <button className="btn btn-primary" disabled={busy || !draft.trim()} onClick={() => void save()}>{t('tasks.field.save')}</button>
                 </div>
               ) : (
                 <div className="tk-title-row">
@@ -249,7 +246,7 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
               <div className="tk-timeline">
                 <div className="tk-field-head">
                   <span className="tk-field-label">{t('tasks.timeline')}</span>
-                  {task.conversation_id && <button className="tk-link" onClick={openConversation}>{t('tasks.openConversation')}</button>}
+                  {messages.length > 0 && <button className="tk-link" onClick={openConversation}>{t('tasks.openConversation')}</button>}
                 </div>
                 <div className="tk-events">
                   {data.events.map((event, i) => {

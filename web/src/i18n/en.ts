@@ -223,6 +223,7 @@ export const en: Dict = {
   'tasks.toast.answered': 'Answer sent',
   'tasks.toast.answeredBody': 'It is queued to continue.',
   'tasks.toast.created': 'Task created',
+  'tasks.toast.createdWithCron': (title, cron) => `${title} (${cron})`,
   'tasks.toast.saved': 'Saved',
   'tasks.sheet.label': 'Task details',
   'tasks.sheet.close': 'Close',

@@ -10,6 +10,7 @@ interface Props {
   now: number;
   selected: boolean;
   fresh: boolean;
+  pending: boolean;
   runningHere: boolean;
   elapsedMs: number | null;
   answer: string;
@@ -28,7 +29,7 @@ const QUICK: Record<QuickKind, { label: 'tasks.action.run' | 'tasks.action.runNo
 
 const isEnter = (e: KeyboardEvent): boolean => e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229;
 
-export function TaskRow({ task, now, selected, fresh, runningHere, elapsedMs, answer, onAnswer, onSendAnswer, onOpen, onAction }: Props) {
+export function TaskRow({ task, now, selected, fresh, pending, runningHere, elapsedMs, answer, onAnswer, onSendAnswer, onOpen, onAction }: Props) {
   const t = useT();
   const running = task.status === 'running';
   const waiting = task.status === 'waiting';
@@ -70,7 +71,7 @@ export function TaskRow({ task, now, selected, fresh, runningHere, elapsedMs, an
         <div className="tk-quick">
           {quick && (
             <button
-              className={QUICK[quick].className} onClick={e => stopClick(e, quick)}
+              className={QUICK[quick].className} disabled={pending} onClick={e => stopClick(e, quick)}
               {...(quick === 'stop' ? { 'data-tip': t('tasks.stopTip') } : {})}
             >
               <Icon name={QUICK[quick].icon} size={12} />{t(QUICK[quick].label)}
@@ -85,13 +86,13 @@ export function TaskRow({ task, now, selected, fresh, runningHere, elapsedMs, an
             className="input" value={answer} placeholder={t('tasks.answer.placeholder')} aria-label={t('tasks.answer.label')}
             onChange={e => onAnswer(e.target.value)} onKeyDown={e => { if (isEnter(e)) { e.preventDefault(); onSendAnswer(); } }}
           />
-          <button className="btn btn-primary" disabled={!answer.trim()} onClick={onSendAnswer}>{t('tasks.action.send')}</button>
+          <button className="btn btn-primary" disabled={pending || !answer.trim()} onClick={onSendAnswer}>{t('tasks.action.send')}</button>
         </div>
       )}
       {task.status === 'inbox' && (
         <div className="tk-propose">
-          <button className="btn btn-primary" onClick={() => onAction('approve')}><Icon name="check" size={12} />{t('tasks.action.approve')}</button>
-          <button className="btn btn-ghost" onClick={() => onAction('skip')}>{t('tasks.action.skip')}</button>
+          <button className="btn btn-primary" disabled={pending} onClick={() => onAction('approve')}><Icon name="check" size={12} />{t('tasks.action.approve')}</button>
+          <button className="btn btn-ghost" disabled={pending} onClick={() => onAction('skip')}>{t('tasks.action.skip')}</button>
         </div>
       )}
     </div>
