@@ -7,7 +7,6 @@ import type { Draft } from './events.ts';
 import { useNow, useTheme } from './hooks.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { formatRelativeCompact, useT, type PlainKey } from './i18n/index.ts';
-import { modLabel } from './keys.ts';
 import type { LayoutMode } from './layout.ts';
 import { chatHash, type Page, type Route } from './routes.ts';
 import { toggleTheme } from './theme.ts';
@@ -26,11 +25,10 @@ interface Props {
   restartRequired: boolean;
   onNavigate: () => void;
   onNewChat: () => void;
-  onSearch: () => void;
   onAvatar: () => void;
 }
 
-interface NavItem { page: Page | 'new' | 'search'; href: string; label: PlainKey; icon: IconName; badge?: ReactNode; badgeLabel?: string }
+interface NavItem { page: Page | 'new'; href: string; label: PlainKey; icon: IconName; badge?: ReactNode; badgeLabel?: string }
 
 const PAGE_LINKS: ReadonlyArray<{ page: Page; label: PlainKey; icon: IconName }> = [
   { page: 'tasks', label: 'nav.tasks', icon: 'tasks' },
@@ -58,7 +56,6 @@ export function Sidebar(props: Props) {
 
   const items: NavItem[] = [
     { page: 'new', href: '#/', label: 'nav.newChat', icon: 'plus' },
-    { page: 'search', href: '', label: 'nav.search', icon: 'search' },
     ...PAGE_LINKS.map((p): NavItem => ({ page: p.page, href: `#/${p.page}`, label: p.label, icon: p.icon })),
   ];
   const withBadges = items.map((item): NavItem => {
@@ -95,11 +92,9 @@ export function Sidebar(props: Props) {
             <>
               <span className="nav-icon"><Icon name={item.icon} size={16} /></span>
               <span className="nav-label">{t(item.label)}</span>
-              {item.page === 'search' && mode !== 'narrow' && <span className="nav-kbd">{modLabel()}K</span>}
               {item.badge !== undefined && <span className="nav-badge" aria-label={item.badgeLabel} data-tip={item.badgeLabel} data-tip-pos="right">{item.badge}</span>}
             </>
           );
-          if (item.page === 'search') return <button key={item.page} className="nav-item" onClick={() => { props.onNavigate(); props.onSearch(); }}>{body}</button>;
           return (
             <a key={item.page} href={item.href} className={`nav-item${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined} onClick={e => click(e, item)}>
               {body}

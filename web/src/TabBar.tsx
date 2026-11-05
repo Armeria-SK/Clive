@@ -18,11 +18,10 @@ interface Props {
   panelOpen: boolean;
   onClose: (key: string) => void;
   onNewChat: () => void;
-  onSearch: () => void;
   onTogglePanel: () => void;
 }
 
-export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chatTitles, panelOpen, onClose, onNewChat, onSearch, onTogglePanel }: Props) {
+export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chatTitles, panelOpen, onClose, onNewChat, onTogglePanel }: Props) {
   const t = useT();
   const bar = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ x: 0, w: 0 });
@@ -74,7 +73,6 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chat
       </div>
       <button className="btn btn-ghost btn-icon tab-tool" onClick={onNewChat} aria-label={t('nav.newChat')} data-tip={t('nav.newChat')} data-tip-pos="below"><Icon name="plus" size={15} /></button>
       <span className="tabbar-fill" />
-      <button className="btn btn-ghost btn-icon tab-tool" onClick={onSearch} aria-label={t('nav.search')} data-tip={t('nav.search')} data-kbd={`${modLabel()}K`} data-tip-pos="below"><Icon name="search" size={16} /></button>
       <button
         className={`btn btn-ghost btn-icon tab-tool${panelOpen ? ' on' : ''}`} onClick={onTogglePanel} aria-pressed={panelOpen}
         aria-label={t('panel.title')} data-tip={panelTip} data-kbd={kbd} data-tip-pos="below"

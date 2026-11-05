@@ -1,6 +1,5 @@
 export const ja = {
   'nav.newChat': '新しい会話',
-  'nav.search': '検索とコマンド',
   'nav.tasks': 'タスク',
   'nav.skills': 'スキル・ツール',
   'nav.runs': '実行ログ',

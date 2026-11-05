@@ -3,7 +3,6 @@ import type { Dict } from './types.ts';
 
 export const en: Dict = {
   'nav.newChat': 'New chat',
-  'nav.search': 'Search and commands',
   'nav.tasks': 'Tasks',
   'nav.skills': 'Skills & tools',
   'nav.runs': 'Run log',

@@ -161,7 +161,6 @@ export function App() {
     else showPanel(true);
   }, [showPanel]);
 
-  const openPalette = useCallback(() => { setNotifOpen(false); setPaletteOpen(true); }, []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const openNewTask = useCallback(() => { setNotifOpen(false); setNewTaskOpen(true); }, []);
   const closeNewTask = useCallback(() => setNewTaskOpen(false), []);
@@ -410,17 +409,17 @@ export function App() {
           mode={mode} drawerOpen={drawerOpen} route={route} profile={profile} presence={presence}
           conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
           waitingCount={waiting.size} restartRequired={restartRequired}
-          onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onSearch={openPalette} onAvatar={openPanel}
+          onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
         />
         {narrow && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
         <main className="main">
           {narrow
             ? <NarrowHeader title={title} phrase={presence.line} connected={connected} hasApproval={approvals.length > 0} unread={unread} onMenu={() => setDrawerOpen(true)} onApproval={openApproval}
-                onSearch={openPalette} onNotifications={toggleNotifications} notificationsOpen={notifOpen} />
+                onNotifications={toggleNotifications} notificationsOpen={notifOpen} />
             : (
               <TabBar
                 tabs={tabState.tabs} activeKey={tabState.activeKey} conversations={conversations} drafts={drafts} approvals={approvals} chatTitles={tabState.titles}
-                panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onSearch={openPalette} onTogglePanel={togglePanel}
+                panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onTogglePanel={togglePanel}
               />
             )}
           <LanguagePrompt />
