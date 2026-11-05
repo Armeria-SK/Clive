@@ -17,7 +17,7 @@ export type RunEvent =
   | { type: 'task.changed'; task: Task }
   | { type: 'notification'; notification: NotificationItem };
 
-export interface Draft { runId: string; conversationId: string; modelId: string; text: string; activeTool?: string | undefined }
+export interface Draft { runId: string; conversationId: string; modelId: string; text: string; activeTool?: string | undefined; activeInput?: string | undefined }
 
 export function useRunEvents(onEvent: (e: RunEvent) => void, onResync: (drafts: Draft[]) => void): { connected: boolean; reconnect: () => void } {
   const [connected, setConnected] = useState(false);

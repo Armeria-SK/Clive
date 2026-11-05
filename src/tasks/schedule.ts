@@ -1,7 +1,10 @@
 import { Cron } from 'croner';
+import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
+import { taskText } from '../shared/messages/tasks.ts';
 
 export const DAY_MAP: Record<string, string> = { 月: 'MON', 火: 'TUE', 水: 'WED', 木: 'THU', 金: 'FRI', 土: 'SAT', 日: 'SUN' };
 export const DAY_REV: Record<string, string> = Object.fromEntries(Object.entries(DAY_MAP).map(([k, v]) => [v, k]));
+const DAY_EN: Record<string, string> = { 月: 'Monday', 火: 'Tuesday', 水: 'Wednesday', 木: 'Thursday', 金: 'Friday', 土: 'Saturday', 日: 'Sunday' };
 
 export type Freq = 'daily' | 'weekday' | 'weekly' | 'hourly' | 'interval';
 
@@ -76,15 +79,15 @@ export function nextRunAt(cron: string, timezone: string, after: number): number
   } catch { return null; }
 }
 
-export function describeCron(cron: string): string {
+export function describeCron(cron: string, language: Language = DEFAULT_LANGUAGE): string {
   const freq = inferFreqFromCron(cron);
   if (!freq) return cron;
   const f = cronToFields(cron, freq);
   switch (freq) {
-    case 'daily': return `毎日 ${f.time}`;
-    case 'weekday': return `平日 ${f.time}`;
-    case 'weekly': return `毎週${f.day}曜 ${f.time}`;
-    case 'hourly': return `毎時 ${f.minute} 分`;
-    case 'interval': return `${f.interval} 分ごと`;
+    case 'daily': return taskText(language, 'cron.daily', { time: f.time! });
+    case 'weekday': return taskText(language, 'cron.weekday', { time: f.time! });
+    case 'weekly': return taskText(language, 'cron.weekly', { day: language === 'en' ? DAY_EN[f.day!] ?? f.day! : f.day!, time: f.time! });
+    case 'hourly': return taskText(language, 'cron.hourly', { minute: f.minute! });
+    case 'interval': return taskText(language, 'cron.interval', { interval: f.interval! });
   }
 }

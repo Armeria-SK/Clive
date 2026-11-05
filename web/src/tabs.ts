@@ -8,7 +8,7 @@ export const NEW_CHAT_TAB: Tab = { key: 'chat:new', hash: '#/' };
 
 export function toTab(hash: string): Tab | null {
   const route = parseRoute(hash);
-  if (route.page === 'today') return null;
+  if (route.page === 'today' || route.page === 'review') return null;
   const key = route.page === 'chat' ? `chat:${route.conversationId ?? 'new'}` : route.page;
   return { key, hash: routeHash(route) };
 }

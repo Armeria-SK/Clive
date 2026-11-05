@@ -50,13 +50,15 @@ export class FakeAdapter implements ProviderAdapter {
   readonly calls: ModelRequest[] = [];
   scripts: Script[];
   probeResult: Partial<ProbeResult> = {};
+  readonly probeLanguages: Array<string | undefined> = [];
   constructor(provider: ProviderConfig, scripts: Script[] = []) { this.provider = provider; this.scripts = scripts; }
   async *stream(req: ModelRequest): AsyncGenerator<StreamEvent> {
     this.calls.push(req);
     const script = this.scripts.shift() ?? reply('（台本なし）');
     yield* script(req);
   }
-  async probe(model: ModelConfig, required: number): Promise<ProbeResult> {
+  async probe(model: ModelConfig, required: number, language?: string): Promise<ProbeResult> {
+    this.probeLanguages.push(language);
     const effective = model.contextLength ?? 200_000;
     return { modelId: model.id, server: 'fake', required, declared: model.contextLength, effective, status: effective >= required ? 'ok' : 'too_small', message: 'fake', checkedAt: Date.now(), ...this.probeResult };
   }

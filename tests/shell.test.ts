@@ -23,7 +23,7 @@ test('parseRoute: 古い経路（通知のリンクに保存されているも�
   assert.deepEqual(parseRoute('#/notifications'), { page: 'notifications' });
   assert.deepEqual(parseRoute('#/review'), { page: 'review' });
   assert.deepEqual(parseRoute('#/memory'), { page: 'memory' });
-  assert.deepEqual(parseRoute('#/curiosity'), { page: 'curiosity' });
+  assert.deepEqual(parseRoute('#/curiosity'), { page: 'tasks', taskId: null, section: 'curiosity' }, '好奇心はタスクの「気になること」の節を開く');
   assert.deepEqual(parseRoute('#/skills'), { page: 'skills' });
   assert.deepEqual(parseRoute('#/settings'), { page: 'settings' });
   assert.deepEqual(parseRoute('#/runs'), { page: 'runs' });
@@ -292,7 +292,7 @@ test('辞書: 枠の文字は ja と en の両方にあり、en は ja の写し
 });
 
 test('PAGE_META: 全ページに名前と絵があり、名前は辞書にある', () => {
-  for (const page of ['chat', 'tasks', 'today', 'notifications', 'settings', 'runs', 'memory', 'review', 'skills', 'curiosity'] as const) {
+  for (const page of ['chat', 'tasks', 'today', 'notifications', 'settings', 'runs', 'memory', 'review', 'skills'] as const) {
     const meta = PAGE_META[page];
     assert.ok(meta.icon, `${page}: 絵が無い`);
     assert.ok(typeof (ja as Record<string, unknown>)[meta.label] === 'string', `${page}: ${meta.label} が辞書に無い`);

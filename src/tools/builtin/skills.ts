@@ -1,13 +1,18 @@
 import { Type } from '@sinclair/typebox';
+import { languageOf } from '../../shared/language.ts';
+import { toolText } from '../../shared/messages/tools.ts';
 import { SkillError, type SkillStore } from '../skills/store.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 function store(ctx: ToolContext): SkillStore {
   const skills = ctx.services?.skills;
-  if (!skills) throw new SkillError('スキルが使えません');
+  if (!skills) throw new SkillError('skill.unavailable');
   return skills;
 }
-const fail = (error: unknown): ToolOutput => ({ content: error instanceof SkillError ? error.message : `失敗しました: ${(error as Error).message}`, isError: true });
+const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
+  const language = languageOf(ctx.config);
+  return { content: error instanceof SkillError ? error.text(language) : toolText(language, 'failed', { detail: (error as Error).message }), isError: true };
+};
 
 export const skillView: ToolDef<{ name: string }> = {
   name: 'skill_view',
@@ -21,12 +26,13 @@ export const skillView: ToolDef<{ name: string }> = {
       const skill = s.get(input.name);
       if (!skill) {
         const names = s.list().map(k => k.name);
-        return { content: `スキル「${input.name}」はありません。${names.length ? `あるもの: ${names.join(', ')}` : 'スキルはまだありません'}`, isError: true };
+        const language = languageOf(ctx.config);
+        return { content: toolText(language, 'skill.unknown', { name: input.name, detail: names.length ? toolText(language, 'skill.available', { names: names.join(', ') }) : toolText(language, 'skill.none') }), isError: true };
       }
       // 振り返りで読んだだけでは「使った」に数えない
       if (ctx.kind !== 'review') s.recordUse(skill.name);
       return { content: `# ${skill.name}\n${skill.description}\n\n${skill.body}` };
-    } catch (error) { return fail(error); }
+    } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -50,7 +56,8 @@ export const skillDraft: ToolDef<{ name: string; description: string; body: stri
       const s = store(ctx);
       const existing = s.get(input.name);
       const draft = s.draft({ ...input, conversationId: ctx.conversationId, runId: ctx.runId });
-      return { content: `スキル「${draft.name}」の${existing ? '修正' : '新規作成'}の下書きを作りました（#${draft.id}）。ユーザーが画面で承認すると有効になります` };
-    } catch (error) { return fail(error); }
+      const language = languageOf(ctx.config);
+      return { content: toolText(language, 'skill.drafted', { name: draft.name, kind: toolText(language, existing ? 'skill.kind_edit' : 'skill.kind_new'), id: draft.id }) };
+    } catch (error) { return fail(error, ctx); }
   },
 };

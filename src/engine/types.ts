@@ -1,4 +1,5 @@
 import type { Notification } from '../notify/notifications.ts';
+import type { MessageParams } from '../shared/messages/define.ts';
 import type { TaskView } from '../tasks/store.ts';
 
 export type EngineErrorKind =
@@ -66,6 +67,8 @@ export type EngineResult =
     text: '';
     errorKind: EngineErrorKind;
     errorMessage: string;
+    errorCode?: string;
+    errorParams?: MessageParams;
     retryable: boolean;
     detail?: ContextDetail;
   };
@@ -74,7 +77,7 @@ export type RunEvent =
   | { type: 'run.start'; runId: string; conversationId: string; modelId: string }
   | { type: 'model.switch'; runId: string; conversationId: string; from: string; to: string; reason: string }
   | { type: 'text.delta'; runId: string; conversationId: string; text: string }
-  | { type: 'warning'; runId: string; conversationId: string; code: string; message: string }
+  | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: Record<string, string | number | MessageParams> }
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: ChatMessage['role'] }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
   | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string }
@@ -86,7 +89,7 @@ export type RunEvent =
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
   | {
     type: 'run.end'; runId: string; conversationId: string; ok: boolean;
-    errorKind?: EngineErrorKind; errorMessage?: string; detail?: ContextDetail;
+    errorKind?: EngineErrorKind; errorMessage?: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail;
   }
   | { type: 'task.changed'; task: TaskView }
   | { type: 'notification'; notification: Notification };

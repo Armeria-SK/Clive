@@ -1,5 +1,5 @@
 import { redactSecrets } from '../shared/redaction.ts';
-import { ProviderError, type Env } from './types.ts';
+import { ProviderError, providerError, type Env } from './types.ts';
 import type { ProviderConfig } from '../config/schema.ts';
 
 export { checkBaseUrl, isLoopbackHost } from '../shared/url.ts';
@@ -17,7 +17,7 @@ export function apiKey(provider: ProviderConfig, env: Env): string | undefined {
 export function requireApiKey(provider: ProviderConfig, env: Env): string | undefined {
   const key = apiKey(provider, env);
   if (provider.apiKeyEnv && !key) {
-    throw new ProviderError('auth', `環境変数 ${provider.apiKeyEnv} に API キーが設定されていません（.env か OS の環境変数に書いてください）`, { retryable: false });
+    throw providerError('auth', 'key.missing', { env: provider.apiKeyEnv }, { retryable: false });
   }
   return key;
 }
@@ -51,25 +51,25 @@ export function classifyHttpFailure(status: number, snippet: string, headers?: H
   const suffix = shown ? `: ${shown}` : '';
   const retryAfterMs = parseRetryAfter(headers?.get('retry-after'));
   if (CONTEXT_PATTERNS.test(snippet)) {
-    return new ProviderError('context_overflow', `入力がモデルのコンテキスト長を超えました（HTTP ${status}${suffix}）`, {
+    return providerError('context_overflow', 'http.context_overflow', { status, suffix }, {
       retryable: false, status, detail: { reason: 'prompt_exceeds' },
     });
   }
-  if (status === 401 || status === 403) return new ProviderError('auth', `認証に失敗しました（HTTP ${status}${suffix}）`, { retryable: false, status });
-  if (status === 429) return new ProviderError('rate_limit', `利用制限に達しました（HTTP 429${suffix}）`, { status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
-  if (status === 404) return new ProviderError('provider_error', `モデルまたは API が見つかりません（HTTP 404${suffix}）`, { retryable: false, status });
+  if (status === 401 || status === 403) return providerError('auth', 'http.auth', { status, suffix }, { retryable: false, status });
+  if (status === 429) return providerError('rate_limit', 'http.rate_limit', { suffix }, { status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+  if (status === 404) return providerError('provider_error', 'http.not_found', { suffix }, { retryable: false, status });
   if (status === 408 || status === 409 || status >= 500) {
-    return new ProviderError('provider_error', `プロバイダ側のエラーです（HTTP ${status}${suffix}）`, { retryable: true, status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+    return providerError('provider_error', 'http.server', { status, suffix }, { retryable: true, status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
   }
-  return new ProviderError('provider_error', `リクエストが拒否されました（HTTP ${status}${suffix}）`, { retryable: false, status });
+  return providerError('provider_error', 'http.rejected', { status, suffix }, { retryable: false, status });
 }
 
 export function classifyFetchError(error: unknown, signal: AbortSignal, timeoutSignal?: AbortSignal): ProviderError {
   if (error instanceof ProviderError) return error;
-  if (signal.aborted && !timeoutSignal?.aborted) return new ProviderError('cancelled', '中止しました', { retryable: false });
-  if (timeoutSignal?.aborted) return new ProviderError('timeout', 'プロバイダの応答がタイムアウトしました');
+  if (signal.aborted && !timeoutSignal?.aborted) return providerError('cancelled', 'cancelled', {}, { retryable: false });
+  if (timeoutSignal?.aborted) return providerError('timeout', 'timeout');
   const code = (error as { cause?: { code?: string } })?.cause?.code;
-  return new ProviderError('provider_error', `プロバイダに接続できません${code ? `（${code}）` : ''}`, { retryable: true });
+  return code ? providerError('provider_error', 'connect.code', { code }, { retryable: true }) : providerError('provider_error', 'connect', {}, { retryable: true });
 }
 
 export function withTimeout(signal: AbortSignal, timeoutMs: number): { signal: AbortSignal; timeout: AbortSignal } {

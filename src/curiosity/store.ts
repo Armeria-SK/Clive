@@ -1,4 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
+import { storeText, type StoreMessageKey } from '../shared/messages/stores.ts';
 
 export type CuriosityStatus = 'open' | 'researching' | 'done' | 'dropped';
 
@@ -14,7 +16,9 @@ export interface CuriosityItem {
   updated_at: number;
 }
 
-export class CuriosityError extends Error {}
+export class CuriosityError extends LocalizedError<StoreMessageKey> {
+  constructor(code: StoreMessageKey, params?: MessageParams) { super(storeText, code, params); }
+}
 
 const MAX_OPEN = 100;
 
@@ -37,12 +41,12 @@ export class CuriosityStore {
 
   add(input: { topic: string; why?: string | undefined; source: CuriosityItem['source'] }): CuriosityItem {
     const topic = input.topic.trim().replace(/\s+/gu, ' ');
-    if (!topic) throw new CuriosityError('気になることが空です');
-    if (topic.length > 200) throw new CuriosityError('200 文字以内で書いてください');
+    if (!topic) throw new CuriosityError('curiosity.empty_topic');
+    if (topic.length > 200) throw new CuriosityError('curiosity.too_long');
     const same = this.#db.prepare("SELECT id FROM curiosity_items WHERE topic = ? AND status IN ('open', 'researching')").get(topic) as { id: number } | undefined;
-    if (same) throw new CuriosityError(`同じものが既にあります（#${same.id}）`);
+    if (same) throw new CuriosityError('curiosity.duplicate', { id: same.id });
     const open = (this.#db.prepare("SELECT COUNT(*) AS n FROM curiosity_items WHERE status = 'open'").get() as { n: number }).n;
-    if (open >= MAX_OPEN) throw new CuriosityError(`「気になる」が ${MAX_OPEN} 件あります。調べたものや興味の薄れたものを片付けてから足してください`);
+    if (open >= MAX_OPEN) throw new CuriosityError('curiosity.too_many', { max: MAX_OPEN });
     const now = this.#now();
     const result = this.#db.prepare('INSERT INTO curiosity_items (topic, why, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
       .run(topic, input.why?.trim() || null, input.source, now, now);
@@ -51,7 +55,7 @@ export class CuriosityStore {
 
   update(id: number, patch: { topic?: string; why?: string | null; status?: CuriosityStatus; result?: string | null; taskId?: string | null }): CuriosityItem {
     const item = this.get(id);
-    if (!item) throw new CuriosityError(`#${id} がありません`);
+    if (!item) throw new CuriosityError('curiosity.not_found', { id });
     this.#db.prepare('UPDATE curiosity_items SET topic = ?, why = ?, status = ?, result = ?, task_id = ?, updated_at = ? WHERE id = ?').run(
       patch.topic?.trim() || item.topic,
       patch.why === undefined ? item.why : patch.why,

@@ -19,7 +19,7 @@ export interface ReviewJob {
   finished_at: number | null;
 }
 
-const TRIGGER_TEXT: Record<Language, Record<ReviewTrigger, string>> = {
+export const TRIGGER_TEXT: Record<Language, Record<ReviewTrigger, string>> = {
   ja: { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が上限に近い', manual: '手動' },
   en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory is nearly full', manual: 'Manual' },
 };

@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { ModelConfig, ProviderConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { ChatMessage, StopReason, ToolCall } from '../engine/types.ts';
 import { OLLAMA_DEFAULT_URL } from '../config/store.ts';
-import { CONTEXT_HINTS, evaluateContext } from './context.ts';
+import { contextHint, errorProbeText, evaluateContext, probeText } from './context.ts';
 import {
   checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, readLines, readSnippet, requireApiKey, withTimeout,
 } from './http.ts';
-import { ProviderError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
+import { ProviderError, providerError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
 type OllamaMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -68,7 +68,7 @@ export class OllamaAdapter implements ProviderAdapter {
 
   async *stream(req: ModelRequest): AsyncGenerator<StreamEvent> {
     if (req.model.contextLength === undefined) {
-      throw new ProviderError('context_overflow', 'Ollama のモデルには contextLength の設定が必要です', { retryable: false, detail: { reason: 'context_unknown' } });
+      throw providerError('context_overflow', 'ollama.context_unset', {}, { retryable: false, detail: { reason: 'context_unknown' } });
     }
     const base = this.#base();
     const headers = this.#headers();
@@ -126,35 +126,35 @@ export class OllamaAdapter implements ProviderAdapter {
     yield { type: 'done', stop };
   }
 
-  async probe(model: ModelConfig, required: number): Promise<ProbeResult> {
-    const facts = { modelId: model.id, server: 'ollama', required, declared: model.contextLength };
+  async probe(model: ModelConfig, required: number, language: Language = DEFAULT_LANGUAGE): Promise<ProbeResult> {
+    const facts = { modelId: model.id, server: 'ollama', required, declared: model.contextLength, language };
     let base: string; let headers: Record<string, string>;
     try { base = this.#base(); headers = this.#headers(); }
     catch (error) {
       const e = error as ProviderError;
-      return { ...facts, status: e.kind === 'auth' ? 'no_api_key' : 'error', message: e.message, checkedAt: Date.now() };
+      return { ...facts, status: e.kind === 'auth' ? 'no_api_key' : 'error', ...errorProbeText(e, language), checkedAt: Date.now() };
     }
     try {
       const response = await this.#fetch(joinUrl(base, 'api/show'), {
         method: 'POST', headers, body: JSON.stringify({ model: model.model }), signal: AbortSignal.timeout(10_000), redirect: 'error',
       });
       if (response.status === 404) {
-        return { ...facts, status: 'not_found', message: `Ollama にモデル「${model.model}」がありません（ollama pull ${model.model} で取得してください）`, checkedAt: Date.now() };
+        return { ...facts, status: 'not_found', ...probeText(language, 'probe.ollama_not_found', { model: model.model }), checkedAt: Date.now() };
       }
       if (!response.ok) throw classifyHttpFailure(response.status, await readSnippet(response));
       const show = await response.json() as any;
       const capabilities = Array.isArray(show?.capabilities) ? show.capabilities.filter((c: unknown) => typeof c === 'string') as string[] : undefined;
       if (model.contextLength === undefined) {
-        return { ...facts, status: 'unknown', message: 'contextLength が設定されていません', hint: CONTEXT_HINTS.ollama(required), checkedAt: Date.now(), ...(capabilities ? { capabilities } : {}) };
+        return { ...facts, status: 'unknown', ...probeText(language, 'probe.ollama_unset'), hint: contextHint(language, 'ollama', required), checkedAt: Date.now(), ...(capabilities ? { capabilities } : {}) };
       }
       // num_ctx を毎回送るので、実際に使う長さ＝設定値（モデル上限を超えていなければ）
       return evaluateContext({
         ...facts, measured: model.contextLength, modelMax: contextLengthFromShow(show), capabilities,
-        hint: CONTEXT_HINTS.ollama(required),
+        hint: contextHint(language, 'ollama', required),
       });
     } catch (error) {
       const e = error instanceof ProviderError ? error : classifyFetchError(error, new AbortController().signal);
-      return { ...facts, status: e.status === undefined ? 'unreachable' : 'error', message: e.status === undefined ? `Ollama（${base}）に接続できません。起動しているか確認してください` : e.message, checkedAt: Date.now() };
+      return { ...facts, status: e.status === undefined ? 'unreachable' : 'error', ...(e.status === undefined ? probeText(language, 'probe.ollama_unreachable', { base }) : errorProbeText(e, language)), checkedAt: Date.now() };
     }
   }
 }

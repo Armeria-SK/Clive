@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { api, type Approval, type Conversation, type NotificationItem, type Profile, type WorkerStatus } from './api.ts';
 import { ActivityPanel } from './ActivityPanel.tsx';
 import { presenceOf } from './avatar.ts';
-import { Chat, type RunNotice } from './Chat.tsx';
+import { Chat, type ConversationChange, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
 import { useEscapeLayer } from './hooks.ts';
 import { useT, type DictKey } from './i18n/index.ts';
@@ -11,6 +11,7 @@ import { closeTopLayer, shortcutOf } from './keys.ts';
 import { LanguagePrompt } from './LanguagePrompt.tsx';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
+import { undoMemoryEvent } from './memory-undo.ts';
 import { NarrowHeader } from './NarrowHeader.tsx';
 import { NotificationBubble } from './NotificationBubble.tsx';
 import { notificationLink } from './notification-meta.ts';
@@ -25,8 +26,10 @@ import { StatusBar } from './StatusBar.tsx';
 import { TabBar } from './TabBar.tsx';
 import { toast, ToastHost } from './toast.tsx';
 import { Tooltip } from './Tooltip.tsx';
-import { CuriosityPage, ReviewPage, SkillsPage } from './Review.tsx';
-import { TasksPage } from './Tasks.tsx';
+import { NewTaskDialog } from './NewTaskDialog.tsx';
+import { skillDraftLink } from './skills-meta.ts';
+import { SkillsPage } from './SkillsPage.tsx';
+import { TasksPage } from './TasksPage.tsx';
 import { useTabs } from './useTabs.ts';
 
 const RUN_LOOKUP_RETRY_MS = 1500;
@@ -50,6 +53,7 @@ export function App() {
   const [notificationsFailed, setNotificationsFailed] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [waiting, setWaiting] = useState<Set<string>>(new Set());
   const [taskRevision, setTaskRevision] = useState(0);
   const [runRevision, setRunRevision] = useState(0);
@@ -139,6 +143,8 @@ export function App() {
     history.replaceState(null, '', lastChatHash.current);
     setRoute(parseRoute(lastChatHash.current));
   }, [route.page, mode]);
+  // 古い #/review（スキルの下書きの通知など）は、スキル・ツールへ移した。履歴は置き換えて、戻るで同じリンクに戻らないようにする
+  useEffect(() => { if (route.page === 'review') location.replace('#/skills'); }, [route.page]);
   useEffect(() => { setDrawerOpen(false); setNotifOpen(false); }, [route]);
   useEscapeLayer('drawer', drawerOpen, () => setDrawerOpen(false));
 
@@ -156,6 +162,8 @@ export function App() {
 
   const openPalette = useCallback(() => { setNotifOpen(false); setPaletteOpen(true); }, []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const openNewTask = useCallback(() => { setNotifOpen(false); setNewTaskOpen(true); }, []);
+  const closeNewTask = useCallback(() => setNewTaskOpen(false), []);
   const toggleNotifications = useCallback(() => setNotifOpen(open => !open), []);
   const closeNotifications = useCallback(() => setNotifOpen(false), []);
   useEscapeLayer('palette', paletteOpen, closePalette);
@@ -172,7 +180,7 @@ export function App() {
     setNotifOpen(false);
     if (!n.read_at) markRead([n.id]);
     const link = notificationLink(n.link);
-    if (link) location.hash = link;
+    if (link) location.hash = skillDraftLink(n) ?? link;
   }, [markRead]);
   const openActivity = useCallback(() => {
     if (modeRef.current === 'narrow') location.hash = '#/today';
@@ -200,6 +208,10 @@ export function App() {
     return () => removeEventListener('keydown', onKey);
   }, [togglePanel]);
 
+  const onConversationChanged = useCallback((change: ConversationChange) => {
+    refreshList();
+    if (change.kind === 'archived') tabState.close(`chat:${change.id}`);
+  }, [refreshList, tabState.close]);
   const addNotice = (conversationId: string, notice: RunNotice) =>
     setNotices(state => ({ ...state, [conversationId]: [...(state[conversationId] ?? []), notice].slice(-8) }));
   const bump = (conversationId: string) => setRevisions(state => ({ ...state, [conversationId]: (state[conversationId] ?? 0) + 1 }));
@@ -221,7 +233,10 @@ export function App() {
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, text: d.text + e.text } : d));
         break;
       case 'warning':
-        addNotice(e.conversationId, { runId: e.runId, kind: 'warning', message: e.message });
+        if (e.code !== 'compacted') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: e.message });
+        break;
+      case 'compaction':
+        addNotice(e.conversationId, { runId: e.runId, kind: 'compaction', message: t('notice.compacted', e.summarized) });
         break;
       case 'message.saved':
         bump(e.conversationId);
@@ -229,10 +244,10 @@ export function App() {
         if (e.role === 'assistant') setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, text: '' } : d));
         break;
       case 'tool.call':
-        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: e.name } : d));
+        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: e.name, activeInput: e.input } : d));
         break;
       case 'tool.result':
-        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined } : d));
+        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined, activeInput: undefined } : d));
         if (e.decision === 'deny') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', message: t('notice.toolDenied', e.name, e.preview.split('\n').slice(1, 3).join(' ')) });
         break;
       case 'approval.requested':
@@ -252,7 +267,10 @@ export function App() {
       case 'memory.changed':
         setMemoryRevision(n => n + 1);
         addNotice(e.conversationId, { runId: e.runId, kind: 'memory', message: t(MEMORY_NOTICE[e.action], e.content), eventId: e.eventId });
-        toast({ kind: 'memory', title: t(MEMORY_TOAST[e.action]), body: e.content });
+        toast({
+          kind: 'memory', title: t(MEMORY_TOAST[e.action]), body: e.content,
+          action: { label: t('toast.undo'), run: () => { void undoMemoryEvent(e.eventId).then(ok => toast({ kind: 'info', icon: ok ? 'undo' : 'alert', title: t(ok ? 'toast.memoryUndone' : 'toast.memoryUndoFailed') })); } },
+        });
         break;
       case 'run.end': {
         setDrafts(ds => ds.filter(d => d.runId !== e.runId));
@@ -262,8 +280,12 @@ export function App() {
         refreshList();
         refreshWorker();
         if (!e.ok && e.errorKind !== 'cancelled') {
-          addNotice(e.conversationId, { runId: e.runId, kind: 'error', message: t('notice.runFailed', e.errorMessage ?? e.errorKind ?? ''), hint: e.detail?.hint });
+          addNotice(e.conversationId, {
+            runId: e.runId, kind: 'error', message: e.errorMessage ?? e.errorKind ?? '', hint: e.detail?.hint,
+            errorKind: e.errorKind, measured: e.detail?.measured, required: e.detail?.required,
+          });
         }
+        if (!e.ok && e.errorKind === 'cancelled') addNotice(e.conversationId, { runId: e.runId, kind: 'stopped', message: t('notice.stopped') });
         if (e.ok && (document.hidden || currentRef.current !== e.conversationId)) {
           const replyReady = (title: string | null) => toast({
             kind: 'done', icon: 'msg', title: t('toast.replyReady'), body: title ?? t('conversation.untitled'),
@@ -365,7 +387,7 @@ export function App() {
   const openApproval = () => { if (firstApproval) location.hash = approvalTarget(firstApproval); };
   const openRunning = () => {
     const running = worker?.running;
-    if (running) location.hash = running.kind === 'task' && running.taskId ? `#/tasks/${encodeURIComponent(running.taskId)}` : '#/review';
+    if (running) location.hash = running.kind === 'task' && running.taskId ? `#/tasks/${encodeURIComponent(running.taskId)}` : '#/runs/reviews';
   };
   const title = route.page === 'chat'
     ? (current ? conversations.find(c => c.id === current)?.title ?? t('conversation.untitled') : t('tab.newChat'))
@@ -406,25 +428,33 @@ export function App() {
               <Chat
                 key={current ?? 'new'}
                 conversationId={current}
+                profile={profile}
+                modelName={modelName}
                 drafts={drafts}
+                runStarts={runStarts}
                 notices={current ? notices[current] ?? [] : []}
                 approvals={current ? approvals.filter(a => a.conversationId === current) : []}
                 revision={current ? revisions[current] ?? 0 : 0}
                 onCreated={id => { location.hash = chatHash(id); refreshList(); }}
                 onClearNotices={id => setNotices(n => ({ ...n, [id]: [] }))}
+                onNewChat={tabState.openNewChat}
+                onConversationChanged={onConversationChanged}
               />
             )}
             {route.page === 'today' && narrow && pane}
-            {route.page === 'tasks' && <TasksPage key={route.taskId ?? 'list'} taskId={route.taskId} revision={taskRevision + approvals.length} worker={worker} onWorker={setWorker} />}
+            {route.page === 'tasks' && (
+              <TasksPage
+                taskId={route.taskId} section={route.section} revision={taskRevision + approvals.length} worker={worker}
+                runStartedAt={runningId ? runStarts[runningId] : undefined} onNewTask={openNewTask}
+              />
+            )}
             {route.page === 'notifications' && (
               <NotificationsPage items={notifications} failed={notificationsFailed} unread={unread} onReadAll={readAllNotifications} onOpenItem={openNotification} />
             )}
             {route.page === 'settings' && <Settings onProfile={setProfile} />}
-            {route.page === 'runs' && <Runs />}
+            {route.page === 'runs' && <Runs tab={route.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
             {route.page === 'memory' && <Memory revision={memoryRevision} />}
-            {route.page === 'review' && <ReviewPage revision={taskRevision + notificationRevision} />}
-            {route.page === 'skills' && <SkillsPage />}
-            {route.page === 'curiosity' && <CuriosityPage revision={taskRevision} />}
+            {route.page === 'skills' && <SkillsPage target={route.target} revision={notificationRevision} />}
           </div>
         </main>
         {!narrow && pane}
@@ -442,8 +472,9 @@ export function App() {
       />
       <Palette
         open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
-        onClose={closePalette} onNewChat={tabState.openNewChat} onActivity={openActivity} onWorker={setWorker}
+        onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
+      <NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} />
       <ToastHost mode={mode} />
       <Tooltip disabled={narrow} />
     </div>

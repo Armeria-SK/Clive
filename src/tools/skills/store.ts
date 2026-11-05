@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { atomicWriteFile } from '../../config/store.ts';
+import { LocalizedError, type MessageParams } from '../../shared/messages/define.ts';
+import { storeText, type StoreMessageKey } from '../../shared/messages/stores.ts';
 
 const INDEX_TEXT: Record<Language, { heading: string; instruction: string }> = {
   ja: { heading: '# スキル（手順書）', instruction: '次の作業をするときは、先に skill_view で手順を読んでから従う。' },
@@ -15,7 +17,9 @@ export interface SkillDraft {
   status: 'pending' | 'approved' | 'rejected'; conversation_id: string | null; run_id: string | null; created_at: number; decided_at: number | null;
 }
 
-export class SkillError extends Error {}
+export class SkillError extends LocalizedError<StoreMessageKey> {
+  constructor(code: StoreMessageKey, params?: MessageParams) { super(storeText, code, params); }
+}
 
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const MAX_BODY = 20_000;
@@ -46,11 +50,11 @@ export function renderSkillFile(skill: { name: string; description: string; body
 }
 
 function validate(input: { name: string; description: string; body: string }): void {
-  if (!SKILL_NAME.test(input.name)) throw new SkillError('名前は英小文字・数字・ハイフンで、63 文字以内にしてください（例: weekly-report）');
-  if (!input.description.trim()) throw new SkillError('説明が空です（いつ使う手順かを 1 文で）');
-  if (input.description.length > MAX_DESCRIPTION) throw new SkillError(`説明は ${MAX_DESCRIPTION} 文字以内にしてください`);
-  if (!input.body.trim()) throw new SkillError('本文が空です');
-  if (input.body.length > MAX_BODY) throw new SkillError(`本文は ${MAX_BODY} 文字以内にしてください`);
+  if (!SKILL_NAME.test(input.name)) throw new SkillError('skill.bad_name');
+  if (!input.description.trim()) throw new SkillError('skill.empty_description');
+  if (input.description.length > MAX_DESCRIPTION) throw new SkillError('skill.long_description', { max: MAX_DESCRIPTION });
+  if (!input.body.trim()) throw new SkillError('skill.empty_body');
+  if (input.body.length > MAX_BODY) throw new SkillError('skill.long_body', { max: MAX_BODY });
 }
 
 export class SkillStore {
@@ -59,7 +63,9 @@ export class SkillStore {
   readonly #now: () => number;
   onDraft: ((draft: SkillDraft) => void) | undefined;
 
-  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now) { this.#db = db; this.#dir = dir; this.#now = now; }
+  readonly #language: () => Language;
+
+  constructor(db: DatabaseSync, dir: string, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE) { this.#db = db; this.#dir = dir; this.#now = now; this.#language = language; }
 
   get dir(): string { return this.#dir; }
 
@@ -81,7 +87,7 @@ export class SkillStore {
     const parsed = parseSkillFile(readFileSync(path, 'utf8'));
     const usage = this.#db.prepare('SELECT uses, last_used_at FROM skill_usage WHERE name = ?').get(name) as { uses: number; last_used_at: number | null } | undefined;
     return {
-      name, description: parsed.description ?? '（説明がありません）', body: parsed.body,
+      name, description: parsed.description ?? storeText(this.#language(), 'skill.no_description'), body: parsed.body,
       uses: usage?.uses ?? 0, lastUsedAt: usage?.last_used_at ?? null, updatedAt: statSync(path).mtimeMs,
     };
   }
@@ -111,14 +117,14 @@ export class SkillStore {
   }
 
   remove(name: string): void {
-    if (!this.get(name)) throw new SkillError(`スキル ${name} がありません`);
+    if (!this.get(name)) throw new SkillError('skill.not_found', { name });
     rmSync(join(this.#dir, name), { recursive: true, force: true });
   }
 
   draft(input: { name: string; description: string; body: string; reason?: string | undefined; conversationId?: string; runId?: string }): SkillDraft {
     validate(input);
     const pending = this.#db.prepare("SELECT COUNT(*) AS n FROM skill_drafts WHERE status = 'pending'").get() as { n: number };
-    if (pending.n >= 20) throw new SkillError('承認待ちの下書きが 20 件あります。ユーザーが確かめるまで、新しい下書きは作れません');
+    if (pending.n >= 20) throw new SkillError('skill.too_many_drafts');
     // 同じ名前の承認待ちは、新しいもので置き換える（古い方は却下扱い）
     const now = this.#now();
     this.#db.prepare("UPDATE skill_drafts SET status = 'rejected', decided_at = ? WHERE name = ? AND status = 'pending'").run(now, input.name);
@@ -141,7 +147,7 @@ export class SkillStore {
 
   approve(id: number): Skill {
     const draft = this.getDraft(id);
-    if (!draft || draft.status !== 'pending') throw new SkillError('承認待ちの下書きではありません');
+    if (!draft || draft.status !== 'pending') throw new SkillError('skill.not_pending');
     const skill = this.write(draft);
     this.#db.prepare("UPDATE skill_drafts SET status = 'approved', decided_at = ? WHERE id = ?").run(this.#now(), id);
     return skill;
@@ -149,7 +155,7 @@ export class SkillStore {
 
   reject(id: number): void {
     const draft = this.getDraft(id);
-    if (!draft || draft.status !== 'pending') throw new SkillError('承認待ちの下書きではありません');
+    if (!draft || draft.status !== 'pending') throw new SkillError('skill.not_pending');
     this.#db.prepare("UPDATE skill_drafts SET status = 'rejected', decided_at = ? WHERE id = ?").run(this.#now(), id);
   }
 }

@@ -1,5 +1,7 @@
+import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { Runs } from '../db/runs.ts';
 import type { Notifications } from '../notify/notifications.ts';
+import { taskText } from '../shared/messages/tasks.ts';
 import type { ModelStatus } from './status.ts';
 import type { RunEvent } from './types.ts';
 
@@ -12,14 +14,16 @@ export class HealthMonitor {
   readonly #notifications: Notifications;
   readonly #now: () => number;
   readonly #log: (line: string) => void;
+  readonly #language: () => Language;
   #failures = new Map<string, { count: number; reason: string }>();
 
-  constructor(deps: { status: ModelStatus; runs: Runs; notifications: Notifications; now?: () => number; log?: (line: string) => void }) {
+  constructor(deps: { status: ModelStatus; runs: Runs; notifications: Notifications; now?: () => number; log?: (line: string) => void; language?: () => Language }) {
     this.#status = deps.status;
     this.#runs = deps.runs;
     this.#notifications = deps.notifications;
     this.#now = deps.now ?? Date.now;
     this.#log = deps.log ?? (() => undefined);
+    this.#language = deps.language ?? (() => DEFAULT_LANGUAGE);
   }
 
   failures(modelId: string): number { return this.#failures.get(modelId)?.count ?? 0; }
@@ -32,7 +36,7 @@ export class HealthMonitor {
     if (event.ok) { this.#succeed(modelId); return; }
     // 中止・コンテキスト不足は、モデルやサーバーの不調ではない（コンテキストは送る前の確認で知らせている）
     if (event.errorKind === 'cancelled' || event.errorKind === 'context_overflow') return;
-    this.#fail(modelId, event.errorMessage ?? event.errorKind ?? '失敗', event.errorKind === 'auth');
+    this.#fail(modelId, event.errorMessage ?? event.errorKind ?? taskText(this.#language(), 'health.default_reason'), event.errorKind === 'auth');
   }
 
   #succeed(modelId: string): void {
@@ -49,10 +53,11 @@ export class HealthMonitor {
     if (!immediate && count < FAILURE_THRESHOLD) return;
     this.#status.cooldown(modelId, this.#now() + COOLDOWN_MS, reason);
     this.#log(`[WARN] model ${modelId}: ${count} 回続けて失敗したため、${COOLDOWN_MS / 60_000} 分間は予備のモデルを先に使います（${reason.split('\n')[0]}）`);
+    const language = this.#language();
     this.#notifications.notify({
       kind: 'health_alert',
-      title: immediate ? `モデル「${modelId}」の認証に失敗しています` : `モデル「${modelId}」が続けて失敗しています（${count} 回）`,
-      body: `${reason.split('\n')[0]}\n${immediate ? 'API キーの設定を確かめてください。' : `${COOLDOWN_MS / 60_000} 分間は予備のモデルを先に使います。`}`,
+      title: immediate ? taskText(language, 'health.auth_title', { model: modelId }) : taskText(language, 'health.failing_title', { model: modelId, count }),
+      body: `${reason.split('\n')[0]}\n${immediate ? taskText(language, 'health.auth_tail') : taskText(language, 'health.failing_tail', { minutes: COOLDOWN_MS / 60_000 })}`,
       link: '#/settings',
       dedupKey: `health:${modelId}:${immediate ? 'auth' : 'failing'}`,
     });

@@ -2,6 +2,9 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, statSync, existsSync }
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import { atomicWriteFile } from '../../config/store.ts';
+import { languageOf } from '../../shared/language.ts';
+import { guardText } from '../../shared/messages/guard.ts';
+import { toolText } from '../../shared/messages/tools.ts';
 import { expandPath, needsWriteApproval, placePath } from '../hooks/scope.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
@@ -11,18 +14,19 @@ const MAX_WRITE_CHARS = 1_000_000;
 type Need = 'read' | 'write';
 
 export function checkFilePath(input: string, need: Need, ctx: ToolContext): { abs: string; check: PreCheck } {
-  const expanded = expandPath(input, ctx.workspace);
-  if ('unresolved' in expanded) return { abs: '', check: { decision: 'deny', reasons: [`パスが判定できません（${input}）: ${expanded.unresolved}`] } };
+  const language = languageOf(ctx.config);
+  const expanded = expandPath(input, ctx.workspace, process.env, language);
+  if ('unresolved' in expanded) return { abs: '', check: { decision: 'deny', reasons: [guardText(language, 'guard.path_unresolved', { input, detail: expanded.unresolved })] } };
   const abs = expanded.path;
   const placement = placePath(abs, ctx.policy);
   if (placement.kind === 'deny') return { abs, check: { decision: 'deny', reasons: [placement.reason] } };
   if (placement.kind === 'outside') {
-    return { abs, check: { decision: 'deny', reasons: [`許可フォルダの外です（${abs}）。使えるフォルダ: ${ctx.policy.roots.map(r => `${r.path}（${r.mode === 'write' ? '読み書き' : '読むだけ'}）`).join('、')}`] } };
+    return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.outside', { path: abs, roots: ctx.policy.roots.map(r => guardText(language, r.mode === 'write' ? 'file.root_write' : 'file.root_read', { path: r.path })).join(guardText(language, 'file.root_sep')) })] } };
   }
-  if (need === 'write' && placement.mode === 'read') return { abs, check: { decision: 'deny', reasons: [`読み取り専用のフォルダです（${placement.root}）`] } };
-  if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return { abs, check: { decision: 'deny', reasons: ['シンボリックリンクには書き込みません'] } };
+  if (need === 'write' && placement.mode === 'read') return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.readonly', { root: placement.root })] } };
+  if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.symlink')] } };
   if (need === 'write' && needsWriteApproval(abs, ctx.policy)) {
-    return { abs, check: { decision: 'ask', reasons: ['人格・プロフィールのファイル（SOUL.md / USER.md）なので、書き換える前に確認します'] } };
+    return { abs, check: { decision: 'ask', reasons: [guardText(language, 'file.persona')] } };
   }
   return { abs, check: { decision: 'allow', reasons: [] } };
 }
@@ -43,17 +47,18 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
   preCheck: (input, ctx) => checkFilePath(input.path, 'read', ctx).check,
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'read', ctx);
+    const language = languageOf(ctx.config);
     const stat = statSync(abs, { throwIfNoEntry: false });
-    if (!stat) return { content: `ファイルがありません: ${shown(abs, ctx)}`, isError: true };
-    if (stat.isDirectory()) return { content: `フォルダです。file_list を使ってください: ${shown(abs, ctx)}`, isError: true };
-    if (stat.size > MAX_READ_BYTES && !input.limit) return { content: `大きいファイルです（${stat.size.toLocaleString('en-US')} バイト）。offset と limit で一部ずつ読んでください`, isError: true };
+    if (!stat) return { content: toolText(language, 'file.not_found', { path: shown(abs, ctx) }), isError: true };
+    if (stat.isDirectory()) return { content: toolText(language, 'file.is_dir_use_list', { path: shown(abs, ctx) }), isError: true };
+    if (stat.size > MAX_READ_BYTES && !input.limit) return { content: toolText(language, 'file.too_big', { size: stat.size.toLocaleString('en-US') }), isError: true };
     const text = readFileSync(abs, 'utf8');
-    if (text.includes('\u0000')) return { content: 'バイナリファイルのようなので読みません', isError: true };
+    if (text.includes('\u0000')) return { content: toolText(language, 'file.binary'), isError: true };
     const lines = text.split(/\r?\n/u);
     const start = (input.offset ?? 1) - 1;
     const end = input.limit ? start + input.limit : lines.length;
     const body = lines.slice(start, end).join('\n');
-    const more = end < lines.length ? `\n\n[${lines.length} 行中 ${start + 1}〜${end} 行目。続きは offset=${end + 1} で読めます]` : '';
+    const more = end < lines.length ? `\n\n${toolText(language, 'file.more', { total: lines.length, from: start + 1, to: end, next: end + 1 })}` : '';
     return { content: body + more };
   },
 };
@@ -68,20 +73,21 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
   effect: 'write',
   allowedIn: ['chat', 'task'],
   preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
-  summarize: input => ({ title: `ファイルに書き込む: ${input.path}`, body: input.content.slice(0, 4000) }),
+  summarize: (input, language) => ({ title: toolText(language, 'summary.file_write', { path: input.path }), body: input.content.slice(0, 4000) }),
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'write', ctx);
+    const language = languageOf(ctx.config);
     const exists = existsSync(abs);
-    if (input.mode === 'create' && exists) return { content: `既にあります: ${shown(abs, ctx)}`, isError: true };
-    if (exists && statSync(abs).isDirectory()) return { content: `フォルダです: ${shown(abs, ctx)}`, isError: true };
+    if (input.mode === 'create' && exists) return { content: toolText(language, 'file.exists', { path: shown(abs, ctx) }), isError: true };
+    if (exists && statSync(abs).isDirectory()) return { content: toolText(language, 'file.is_dir', { path: shown(abs, ctx) }), isError: true };
     mkdirSync(dirname(abs), { recursive: true });
     // フォルダを作った後は realpath が実体を指すので、シンボリックリンク経由で外に出ていないかをもう一度確かめる
     // （ask は実行前に承認済みなので、ここでは deny だけを止める）
     const recheck = checkFilePath(abs, 'write', ctx).check;
-    if (recheck.decision === 'deny') return { content: `書き込み先の確認に失敗しました: ${recheck.reasons.join(' / ')}`, isError: true };
+    if (recheck.decision === 'deny') return { content: toolText(language, 'file.recheck_failed', { detail: recheck.reasons.join(' / ') }), isError: true };
     const next = input.mode === 'append' && exists ? readFileSync(abs, 'utf8') + input.content : input.content;
     atomicWriteFile(abs, next);
-    return { content: `${exists ? (input.mode === 'append' ? '追記しました' : '上書きしました') : '作成しました'}: ${shown(abs, ctx)}（${next.length.toLocaleString('en-US')} 文字）` };
+    return { content: toolText(language, 'file.wrote', { verb: toolText(language, exists ? (input.mode === 'append' ? 'file.wrote.append' : 'file.wrote.overwrite') : 'file.wrote.create'), path: shown(abs, ctx), chars: next.length.toLocaleString('en-US') }) };
   },
 };
 
@@ -92,16 +98,17 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
   effect: 'write',
   allowedIn: ['chat', 'task'],
   preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
-  summarize: input => ({ title: `ファイルを編集する: ${input.path}`, body: `- ${input.old.slice(0, 2000)}\n+ ${input.new.slice(0, 2000)}` }),
+  summarize: (input, language) => ({ title: toolText(language, 'summary.file_edit', { path: input.path }), body: `- ${input.old.slice(0, 2000)}\n+ ${input.new.slice(0, 2000)}` }),
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'write', ctx);
-    if (!existsSync(abs)) return { content: `ファイルがありません: ${shown(abs, ctx)}`, isError: true };
+    const language = languageOf(ctx.config);
+    if (!existsSync(abs)) return { content: toolText(language, 'file.not_found', { path: shown(abs, ctx) }), isError: true };
     const text = readFileSync(abs, 'utf8');
     const count = text.split(input.old).length - 1;
-    if (count === 0) return { content: '置き換える文字列が見つかりません。file_read で今の中身を確かめてください', isError: true };
-    if (count > 1 && !input.all) return { content: `置き換える文字列が ${count} か所あります。前後を含めて1か所に絞るか、all=true にしてください`, isError: true };
+    if (count === 0) return { content: toolText(language, 'file.no_match'), isError: true };
+    if (count > 1 && !input.all) return { content: toolText(language, 'file.many_matches', { count }), isError: true };
     atomicWriteFile(abs, input.all ? text.split(input.old).join(input.new) : text.replace(input.old, () => input.new));
-    return { content: `${count} か所を置き換えました: ${shown(abs, ctx)}` };
+    return { content: toolText(language, 'file.replaced', { count, path: shown(abs, ctx) }) };
   },
 };
 
@@ -114,7 +121,8 @@ export const fileList: ToolDef<{ path?: string; depth?: number }> = {
   preCheck: (input, ctx) => checkFilePath(input.path ?? '.', 'read', ctx).check,
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path ?? '.', 'read', ctx);
-    if (!statSync(abs, { throwIfNoEntry: false })?.isDirectory()) return { content: `フォルダがありません: ${shown(abs, ctx)}`, isError: true };
+    const language = languageOf(ctx.config);
+    if (!statSync(abs, { throwIfNoEntry: false })?.isDirectory()) return { content: toolText(language, 'file.no_dir', { path: shown(abs, ctx) }), isError: true };
     const lines: string[] = [];
     const walk = (dir: string, depth: number, indent: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
@@ -126,6 +134,6 @@ export const fileList: ToolDef<{ path?: string; depth?: number }> = {
       }
     };
     walk(abs, input.depth ?? 1, '');
-    return { content: lines.length ? `${shown(abs, ctx)}/\n${lines.join('\n')}${lines.length >= 500 ? '\n[500 件で打ち切りました]' : ''}` : `${shown(abs, ctx)}/ は空です` };
+    return { content: lines.length ? `${shown(abs, ctx)}/\n${lines.join('\n')}${lines.length >= 500 ? `\n${toolText(language, 'file.list_cut')}` : ''}` : toolText(language, 'file.list_empty', { path: shown(abs, ctx) }) };
   },
 };
