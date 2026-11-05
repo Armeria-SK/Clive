@@ -187,7 +187,7 @@ Clive は毎回、system（ルール・人格・記憶の枠・道具の説明�
 | 画面 | React 19 ＋ Vite |
 | テスト | `node:test` |
 | 依存 | `@anthropic-ai/sdk`、TypeBox、`croner`（タイムゾーン対応の cron）、`parse5`（HTML の解析）、React 一式、`react-markdown`、画面のフォント（`@fontsource`） |
-| 画面の文字と絵 | Cormorant Garamond・Lora・Noto Serif JP（SIL Open Font License 1.1）は `@fontsource` から同梱し、外部へは取りに行かない。ライセンス文は [`web/fonts-LICENSE.md`](web/fonts-LICENSE.md)。アイコンは Lucide（ISC）で、出どころは `web/src/icon-paths.ts` の先頭に書いてある |
+| 画面の文字と絵 | Inter（英字）と IBM Plex Sans JP（日本語）の 2 つ（どちらも SIL Open Font License 1.1）を `@fontsource` から同梱し、外部へは取りに行かない。見出しも同じ字体で、太さで分けている。ライセンス文は [`web/fonts-LICENSE.md`](web/fonts-LICENSE.md)。アイコンは Lucide（ISC）で、出どころは `web/src/icon-paths.ts` の先頭に書いてある |
 
 部品ごとの役割・入口のファイル・使っているものは [map.md](map.md) にあります。
 

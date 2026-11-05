@@ -151,7 +151,7 @@
   - `language.ts`: 言語の設定の読み書き。「Clive も英語にしますか」を聞くかの判定（`shouldAskLanguage`）と答えの保存、`language` を足す・消す（`configWithLanguage`。`auto` は消す）、設定を読み直して言語だけ変えて保存し画面に反映する `saveLanguage`、設定を開いたまま言語が変わったときの合わせ直し（`withAdoptedLanguage` `adoptLanguageInDraft`）。`clipboard.ts`: コピー（`navigator.clipboard` が使えない http の画面では選択してコピーに切り替え、できたかどうかを返す）。
   - `Avatar.tsx` `avatar.ts` `avatars/*.svg`: 姿（20 種）と動き、様子の一言（`presenceOf`。文は辞書）。
   - `Markdown.tsx`: 返事の Markdown 表示。
-  - `styles/tokens.css`: デザインの色・字体・余白・角丸・影のトークン。`:root` がライト、`:root[data-theme="dark"]` がダークの上書き。文字用のアクセント色（`--color-accent-text`）と薄い文字の 3 段階（`--color-text-muted*`）は、ライトで WCAG AA（4.5:1）に届くようデザインより少し濃くしてある。
+  - `styles/tokens.css`: デザインの色・字体・余白・角丸・影のトークン。字体は本文も見出しも `--font-body`（Inter → IBM Plex Sans JP → システムのゴシック）の 1 つで、見出しは太さで分ける（`--font-heading-weight` 600、大きな題は `--font-display-weight` 500）。`:root` がライト、`:root[data-theme="dark"]` がダークの上書き。文字用のアクセント色（`--color-accent-text`）と薄い文字の 3 段階（`--color-text-muted*`）は、ライトで WCAG AA（4.5:1）に届くようデザインより少し濃くしてある。
   - `styles/components.css`: デザインの部品クラス（`.btn*` `.input` `.field` `.radio` `.seg` `.card*` `.tag*` `.table` `.dialog*` `.hr`）、スクロールバー、keyframes、`prefers-reduced-motion`。
   - `styles/logs.css`: 実行ログの表（グリッド。狭い幅では横に送れる）と振り返りの記録の寸法。
   - `styles/skills.css`: スキル・ツールの一覧・道具・フォルダと、スキルの窓（画面全体に重なる窓の枠: 背景・Esc・Tab の巡回）の寸法と動き。
@@ -174,7 +174,7 @@
 - ビルド:
   - `web/index.html`: `<head>` で `web/public/theme-init.js` を同期で読む。最初の描画の前に `data-theme` を決め、再読み込みで違うテーマが一瞬出るのを防ぐ（CSP が `script-src 'self'` なので外部ファイル）。`<html lang>` は初期値が ja で、起動時に `i18n/state.ts` が決めた言語へ書き換える。
   - `web/vite.config.mjs`: 出力は `web/dist`、小さなファイルも埋め込まない `assetsInlineLimit: 0`、開発時は `/api` を `npm start` のサーバーへ転送。プラグイン `clive-woff2-only` は @fontsource の CSS から woff の指定を外し、woff2 だけを `web/dist/assets/` に出す（外さないと出力が倍になる）。
-  - フォント: `@fontsource/cormorant-garamond` `@fontsource/lora` `@fontsource/noto-serif-jp`（版を固定、`main.tsx` で必要な太さだけ読む）。外部へは取りに行かない。SIL OFL 1.1 のライセンス文は `web/fonts-LICENSE.md`（配信物には入れない）。
+  - フォント: `@fontsource/inter`（英字。latin の範囲だけ）と `@fontsource/ibm-plex-sans-jp`（日本語。細かく分けた unicode-range の woff2 を、ブラウザが使う字の分だけ読む）。版を固定し、`main.tsx` で 400・500・600 を読む。外部へは取りに行かない。SIL OFL 1.1 のライセンス文は `web/fonts-LICENSE.md`（配信物には入れない）。
   - `web/public/icon.svg`。
 - 入口: `web/src/main.tsx`
 - 使うもの: `/api/*` と `/api/events`、`react` `react-dom` `react-markdown` `remark-gfm`、`@fontsource/*`

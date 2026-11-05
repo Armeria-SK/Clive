@@ -142,7 +142,7 @@ button.sb-item:hover { background: color-mix(in srgb, var(--color-text) 7%, tran
 .shell[data-mode="narrow"] .view-inner { padding: 22px 16px 40px; }
 .view-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
 .view-titles { display: flex; flex-direction: column; gap: 4px; }
-.view-title { margin: 0; font-family: var(--font-heading); font-size: 28px; font-weight: 400; line-height: 1.1; }
+.view-title { margin: 0; font-family: var(--font-heading); font-size: 28px; font-weight: var(--font-display-weight); line-height: 1.1; }
 .view-sub { font-size: 13px; color: var(--color-text-muted); }
 .view-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .view-count { font-size: 12px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
@@ -222,11 +222,11 @@ button.nav-item { width: 100%; border: 0; background: transparent; font: inherit
 .act-none { font-size: 13px; color: var(--color-text-muted); }
 .act-me { display: flex; align-items: center; gap: 14px; }
 .act-me-text { display: flex; flex-direction: column; min-width: 0; }
-.act-name { font-family: var(--font-heading); font-size: 26px; font-weight: 400; line-height: 1.1; }
+.act-name { font-family: var(--font-heading); font-size: 26px; font-weight: var(--font-display-weight); line-height: 1.1; }
 .act-phrase { font-size: 12.5px; color: var(--color-text-muted); overflow-wrap: anywhere; }
 .act-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .act-count { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
-.act-count strong { font-family: var(--font-heading); font-size: 24px; font-weight: 400; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.act-count strong { font-family: var(--font-heading); font-size: 24px; font-weight: var(--font-display-weight); line-height: 1.1; font-variant-numeric: tabular-nums; }
 .act-count span { font-size: 11px; color: var(--color-text-muted); overflow-wrap: anywhere; }
 a.act-count:hover, button.act-count:hover:not(:disabled) { background: color-mix(in srgb, var(--color-text) 5%, transparent); }
 button.act-count:disabled { opacity: 1; cursor: default; }
