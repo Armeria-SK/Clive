@@ -406,7 +406,7 @@ export class ChatEngine {
     d.bus.publish({ type: 'warning', runId, conversationId, code: 'max_iterations', message: engineText(languageOf(config), 'warn.max_iterations', { max: maxIterations }), params: { max: maxIterations } });
     if (kind !== 'chat') return finishOk('', 'other');
     // 会話は黙って止まらない: 道具なしで 1 回だけ、ここまで・次の一手を書かせて返事として残す。書けなければ決まった文
-    const wrapped = await this.#wrapUp({ route: lastRoute, conversationId, signal });
+    const wrapped = await this.#wrapUp({ route: lastRoute, conversationId, signal, onUsage: addUsage });
     if (wrapped === 'cancelled') return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
     const text = wrapped ?? engineText(languageOf(config), 'wrapup.fallback', { max: maxIterations });
     const saved = d.conversations.append(conversationId, { role: 'assistant', content: text }, runId);
@@ -416,7 +416,7 @@ export class ChatEngine {
 
   // 上限で止まった会話のまとめ。道具を渡さず、直近のやり取りを文字の記録にして 1 通で渡す（道具の呼び出しの履歴を送ると、道具の定義が要るプロバイダがあるため）。
   // 書けた文を返す。空・失敗は null、止められたときは 'cancelled'
-  async #wrapUp(c: { route: Route; conversationId: string; signal: AbortSignal }): Promise<string | 'cancelled' | null> {
+  async #wrapUp(c: { route: Route; conversationId: string; signal: AbortSignal; onUsage: (usage: Usage) => void }): Promise<string | 'cancelled' | null> {
     const d = this.#d;
     const language = languageOf(d.config());
     const { model, provider } = c.route;
@@ -429,17 +429,21 @@ export class ChatEngine {
     const maxChars = Math.min(COMPACT_TRANSCRIPT_CHARS, Math.max(1000, Math.floor(available * 0.5)));
     const transcript = stored.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, 1500)}`).join('\n').slice(-maxChars);
     let release: (() => void) | undefined;
+    let usage: Usage = {};
     try {
       release = await d.limiter.acquire(provider.id, () => provider.maxParallel, c.signal);
       let text = '';
       for await (const event of adapter.stream({
         model, system: { frozen: wrapUpSystem(language), dynamic: '' },
         messages: [{ role: 'user', content: wrapUpPrompt(transcript, language) }], tools: [], maxOutputTokens: Math.min(1000, model.maxOutputTokens), signal: c.signal,
-      })) if (event.type === 'text') text += event.delta;
+      })) {
+        if (event.type === 'text') text += event.delta;
+        else if (event.type === 'usage') usage = { ...usage, ...event.usage };
+      }
       return text.trim() || null;
     } catch {
       return c.signal.aborted ? 'cancelled' : null;
-    } finally { release?.(); }
+    } finally { c.onUsage(usage); release?.(); }
   }
 
   // 会話の実行が終わるとき、会話で進んだ分をタスクの経過（メモ）に書く。書く先は次のとおりで、普通の終わりで何にも触っていなければ何も書かない:

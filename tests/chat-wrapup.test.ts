@@ -89,7 +89,7 @@ test('上限に達したら、道具なしで 1 回だけモデルを呼び、�
   assert.ok(s.events.some(e => e.type === 'message.saved' && e.runId === runId && e.role === 'assistant'));
 });
 
-test('まとめを書かせても空・失敗・取り消しなら、決まった文を返事として保存する（日本語・英語）', async t => {
+test('まとめを書かせても空・失敗なら、決まった文を返事として保存する（日本語・英語）', async t => {
   for (const [label, last] of [['空', reply('   ')], ['失敗', fail(new ProviderError('provider_error', 'boom', { retryable: false }))]] as const) {
     const s = await setup(t, { maxIterations: 1 });
     s.adapter().scripts.push(toolCall('file_write', { path: 'a.md', content: '1' }), last);
@@ -103,6 +103,42 @@ test('まとめを書かせても空・失敗・取り消しなら、決まっ�
   const { result } = await en.chat('do it');
   assert.equal(result.text, 'Stopped because the tool-call limit (1) was reached. Send "continue" if you want it to keep going');
   assert.doesNotMatch(result.text, /[぀-ヿ一-鿿]/u);
+});
+
+test('まとめを書かせている最中に止められたら、決まった文を保存せず、取り消しで終わる', async t => {
+  const s = await setup(t, { maxIterations: 1 });
+  s.adapter().scripts.push(toolCall('file_write', { path: 'a.md', content: '1' }), hang());
+  const outcome = s.app.engine.send('c1', 'やって');
+  assert.ok(outcome.ok, JSON.stringify(outcome));
+  await waitFor(() => s.adapter().calls.length === 2, 'まとめの呼び出しが始まる');
+  assert.equal(s.adapter().calls[1]!.tools.length, 0, '2 回目はまとめの呼び出し');
+  assert.ok(s.app.engine.stop(outcome.runId));
+  const result = await s.app.engine.wait(outcome.runId)!;
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.errorKind, 'cancelled');
+  assert.equal(s.app.conversations.messages('c1').some(m => m.role === 'assistant' && m.text === fallbackJa(1)), false, '決まった文を返事として残さない');
+  const run = s.app.runs.get(outcome.runId)!;
+  assert.deepEqual([run.ok, run.error_kind], [0, 'cancelled']);
+  assert.ok(s.events.some(e => e.type === 'run.end' && e.runId === outcome.runId && e.ok === false));
+});
+
+test('まとめの呼び出しで使ったトークンも、その実行の使用量に足す', async t => {
+  const withUsage = (script: Script, usage: { inputTokens: number; outputTokens: number }): Script => async function* (req) {
+    yield { type: 'usage', usage };
+    yield* script(req);
+  };
+  const s = await setup(t, { maxIterations: 2 });
+  s.adapter().scripts.push(
+    withUsage(toolCall('file_write', { path: 'a.md', content: '1' }), { inputTokens: 100, outputTokens: 10 }),
+    withUsage(toolCall('file_write', { path: 'a.md', content: '2' }), { inputTokens: 200, outputTokens: 20 }),
+    withUsage(reply(WRAP), { inputTokens: 30, outputTokens: 5 }),
+  );
+  const { runId, result } = await s.chat('続きをやって');
+  assert.ok(result.ok);
+  assert.deepEqual([result.usage.inputTokens, result.usage.outputTokens], [330, 35], '返り値の使用量にまとめの分が入る');
+  const run = s.app.runs.get(runId)!;
+  assert.deepEqual([run.input_tokens, run.output_tokens], [330, 35], '実行の記録にもまとめの分が入る');
 });
 
 test('上限でない普通の終わりでは、まとめの呼び出しをしない。タスクの実行は上限でも今までどおり（まとめは会話だけ）', async t => {
