@@ -18,6 +18,7 @@ interface Props {
   conversations: Conversation[];
   onClose: () => void;
   onNewChat: () => void;
+  onNewTask: () => void;
   onActivity: () => void;
   onWorker: (worker: WorkerStatus) => void;
 }
@@ -39,7 +40,7 @@ export function Palette(props: Props) {
   return <PaletteDialog {...props} leaving={leaving} />;
 }
 
-function PaletteDialog({ narrow, panelOpen, worker, conversations, leaving, onClose, onNewChat, onActivity, onWorker }: Props & { leaving: boolean }) {
+function PaletteDialog({ narrow, panelOpen, worker, conversations, leaving, onClose, onNewChat, onNewTask, onActivity, onWorker }: Props & { leaving: boolean }) {
   const t = useT();
   const { effective } = useTheme();
   const [query, setQuery] = useState('');
@@ -68,7 +69,7 @@ function PaletteDialog({ narrow, panelOpen, worker, conversations, leaving, onCl
     };
     const actions: PaletteItem[] = [
       entry('new-chat', 'plus', t('nav.newChat'), onNewChat),
-      entry('new-task', 'tasks', t('palette.newTask'), go('#/tasks')),
+      entry('new-task', 'tasks', t('palette.newTask'), () => setTimeout(onNewTask, EXIT_MS + 40)),
       entry('activity', 'panel', narrow ? t('panel.open') : panelOpen ? t('panel.hide') : t('panel.show'), onActivity, { hint: narrow ? '' : `${modLabel()}/` }),
       entry('theme', effective === 'dark' ? 'sun' : 'moon', effective === 'dark' ? t('theme.toLight') : t('theme.toDark'), toggleTheme),
       ...(worker ? [entry('worker', worker.paused ? 'play' : 'pause', worker.paused ? t('palette.workerResume') : t('palette.workerPause'), () => toggleWorker(worker))] : []),
@@ -94,7 +95,7 @@ function PaletteDialog({ narrow, panelOpen, worker, conversations, leaving, onCl
         items: skills.map(skill => entry(`s:${skill.name}`, 'book', skill.name, go('#/skills'), { sub: skill.description })),
       },
     ];
-  }, [t, effective, narrow, panelOpen, worker, conversations, tasks, skills, onClose, onNewChat, onActivity, onWorker]);
+  }, [t, effective, narrow, panelOpen, worker, conversations, tasks, skills, onClose, onNewChat, onNewTask, onActivity, onWorker]);
 
   const shown = useMemo(() => filterPalette(groups, query), [groups, query]);
   const flat = useMemo(() => flattenPalette(shown), [shown]);

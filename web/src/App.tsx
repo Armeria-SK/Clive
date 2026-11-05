@@ -24,8 +24,9 @@ import { StatusBar } from './StatusBar.tsx';
 import { TabBar } from './TabBar.tsx';
 import { toast, ToastHost } from './toast.tsx';
 import { Tooltip } from './Tooltip.tsx';
-import { CuriosityPage, ReviewPage, SkillsPage } from './Review.tsx';
-import { TasksPage } from './Tasks.tsx';
+import { NewTaskDialog } from './NewTaskDialog.tsx';
+import { ReviewPage, SkillsPage } from './Review.tsx';
+import { TasksPage } from './TasksPage.tsx';
 import { useTabs } from './useTabs.ts';
 
 const RUN_LOOKUP_RETRY_MS = 1500;
@@ -49,6 +50,7 @@ export function App() {
   const [notificationsFailed, setNotificationsFailed] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [waiting, setWaiting] = useState<Set<string>>(new Set());
   const [taskRevision, setTaskRevision] = useState(0);
   const [notificationRevision, setNotificationRevision] = useState(0);
@@ -150,6 +152,8 @@ export function App() {
 
   const openPalette = useCallback(() => { setNotifOpen(false); setPaletteOpen(true); }, []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const openNewTask = useCallback(() => { setNotifOpen(false); setNewTaskOpen(true); }, []);
+  const closeNewTask = useCallback(() => setNewTaskOpen(false), []);
   const toggleNotifications = useCallback(() => setNotifOpen(open => !open), []);
   const closeNotifications = useCallback(() => setNotifOpen(false), []);
   useEscapeLayer('palette', paletteOpen, closePalette);
@@ -394,7 +398,12 @@ export function App() {
               />
             )}
             {route.page === 'today' && narrow && pane}
-            {route.page === 'tasks' && <TasksPage key={route.taskId ?? 'list'} taskId={route.taskId} revision={taskRevision + approvals.length} worker={worker} onWorker={setWorker} />}
+            {route.page === 'tasks' && (
+              <TasksPage
+                taskId={route.taskId} section={route.section} revision={taskRevision + approvals.length} worker={worker}
+                runStartedAt={runningId ? runStarts[runningId] : undefined} onNewTask={openNewTask}
+              />
+            )}
             {route.page === 'notifications' && (
               <NotificationsPage items={notifications} failed={notificationsFailed} unread={unread} onReadAll={readAllNotifications} onOpenItem={openNotification} />
             )}
@@ -403,7 +412,6 @@ export function App() {
             {route.page === 'memory' && <Memory />}
             {route.page === 'review' && <ReviewPage revision={taskRevision + notificationRevision} />}
             {route.page === 'skills' && <SkillsPage />}
-            {route.page === 'curiosity' && <CuriosityPage revision={taskRevision} />}
           </div>
         </main>
         {!narrow && pane}
@@ -421,8 +429,9 @@ export function App() {
       />
       <Palette
         open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
-        onClose={closePalette} onNewChat={tabState.openNewChat} onActivity={openActivity} onWorker={setWorker}
+        onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
+      <NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} />
       <ToastHost mode={mode} />
       <Tooltip disabled={narrow} />
     </div>

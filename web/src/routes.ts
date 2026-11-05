@@ -1,8 +1,8 @@
 export type Route =
   | { page: 'chat'; conversationId: string | null }
-  | { page: 'tasks'; taskId: string | null }
+  | { page: 'tasks'; taskId: string | null; section?: 'curiosity' }
   | { page: 'today' } | { page: 'notifications' } | { page: 'settings' } | { page: 'runs' } | { page: 'memory' }
-  | { page: 'review' } | { page: 'skills' } | { page: 'curiosity' };
+  | { page: 'review' } | { page: 'skills' };
 
 export type Page = Route['page'];
 
@@ -16,7 +16,7 @@ export function parseRoute(hash: string): Route {
   if (hash.startsWith('#/notifications')) return { page: 'notifications' };
   if (hash.startsWith('#/review')) return { page: 'review' };
   if (hash.startsWith('#/skills')) return { page: 'skills' };
-  if (hash.startsWith('#/curiosity')) return { page: 'curiosity' };
+  if (hash.startsWith('#/curiosity')) return { page: 'tasks', taskId: null, section: 'curiosity' };
   const task = /^#\/tasks(?:\/([^/]+))?$/u.exec(hash);
   if (task) return { page: 'tasks', taskId: task[1] ? safeDecode(task[1]) : null };
   const m = /^#\/c\/([^/]+)$/u.exec(hash);

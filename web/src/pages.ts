@@ -13,7 +13,6 @@ export const PAGE_META: Record<Page, { label: PlainKey; icon: IconName }> = {
   memory: { label: 'nav.memory', icon: 'bookmark' },
   review: { label: 'nav.review', icon: 'circleCheck' },
   skills: { label: 'nav.skills', icon: 'wrench' },
-  curiosity: { label: 'nav.curiosity', icon: 'sparkles' },
 };
 
 export type WorkerState = 'disabled' | 'paused' | 'running' | 'quiet' | 'idle';
