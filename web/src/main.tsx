@@ -13,6 +13,7 @@ import { initLanguage, loadTimezone } from './i18n/index.ts';
 import './styles/tokens.css';
 import './styles.css';
 import './styles/components.css';
+import './styles/shell.css';
 import { initTheme } from './theme.ts';
 
 async function start(): Promise<void> {

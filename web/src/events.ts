@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Approval, NotificationItem, Task } from './api.ts';
 
 export type RunEvent =
@@ -19,8 +19,9 @@ export type RunEvent =
 
 export interface Draft { runId: string; conversationId: string; modelId: string; text: string; activeTool?: string | undefined }
 
-export function useRunEvents(onEvent: (e: RunEvent) => void, onResync: (drafts: Draft[]) => void): boolean {
+export function useRunEvents(onEvent: (e: RunEvent) => void, onResync: (drafts: Draft[]) => void): { connected: boolean; reconnect: () => void } {
   const [connected, setConnected] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const handlers = useRef({ onEvent, onResync });
   handlers.current = { onEvent, onResync };
   useEffect(() => {
@@ -37,6 +38,7 @@ export function useRunEvents(onEvent: (e: RunEvent) => void, onResync: (drafts: 
     });
     source.onerror = () => setConnected(false);
     return () => source.close();
-  }, []);
-  return connected;
+  }, [attempt]);
+  const reconnect = useCallback(() => { setConnected(false); setAttempt(n => n + 1); }, []);
+  return { connected, reconnect };
 }

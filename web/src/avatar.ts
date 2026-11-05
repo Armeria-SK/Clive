@@ -1,3 +1,4 @@
+import { t } from './i18n/index.ts';
 
 export interface AvatarParts { body: string; eyes: string[] }
 
@@ -35,13 +36,19 @@ export interface Presence {
   celebrating: boolean;
 }
 
+const TITLE_CHARS = 14;
+const cut = (text: string, n: number): string => {
+  const chars = [...text];
+  return chars.length > n ? `${chars.slice(0, n).join('')}…` : text;
+};
+
 export function presenceOf(p: Presence): { runtime: Runtime; sleeping: boolean; line: string } {
-  if (p.celebrating) return { runtime: 'celebrate', sleeping: false, line: 'タスクを終えました' };
-  if (p.generating) return { runtime: 'work', sleeping: false, line: '返事を考えています' };
-  if (p.runningTask) return { runtime: 'work', sleeping: false, line: `タスク「${p.runningTask}」を進めています` };
-  if (p.approvals) return { runtime: 'wait', sleeping: false, line: `承認を待っています（${p.approvals} 件）` };
-  if (p.waitingTasks) return { runtime: 'wait', sleeping: false, line: `返事を待っています（${p.waitingTasks} 件）` };
-  if (p.paused) return { runtime: 'idle', sleeping: true, line: 'お休み中（ワーカーを一時停止しています）' };
-  if (p.quiet) return { runtime: 'idle', sleeping: true, line: 'お休み中（静かにする時間帯です）' };
-  return { runtime: 'idle', sleeping: false, line: 'ひと休みしています' };
+  if (p.celebrating) return { runtime: 'celebrate', sleeping: false, line: t('presence.celebrate') };
+  if (p.generating) return { runtime: 'work', sleeping: false, line: t('presence.generating') };
+  if (p.runningTask) return { runtime: 'work', sleeping: false, line: t('presence.task', cut(p.runningTask, TITLE_CHARS)) };
+  if (p.approvals) return { runtime: 'wait', sleeping: false, line: t('presence.approvals', p.approvals) };
+  if (p.waitingTasks) return { runtime: 'wait', sleeping: false, line: t('presence.waiting', p.waitingTasks) };
+  if (p.paused) return { runtime: 'idle', sleeping: true, line: t('presence.paused') };
+  if (p.quiet) return { runtime: 'idle', sleeping: true, line: t('presence.quiet') };
+  return { runtime: 'idle', sleeping: false, line: t('presence.idle') };
 }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
-import { getThemeMode, initTheme, setThemeMode } from '../web/src/theme.ts';
+import { getEffectiveTheme, getThemeMode, initTheme, setThemeMode, subscribeTheme, toggleTheme } from '../web/src/theme.ts';
 
 const initScript = readFileSync(new URL('../web/public/theme-init.js', import.meta.url), 'utf8');
 
@@ -134,5 +134,32 @@ test('theme.ts: addEventListener が無い古い MediaQueryList（addListener �
     env.setOsDark(false);
     env.setOsDark(true);
     assert.equal(env.dataset.theme, 'light');
+  });
+});
+
+test('theme.ts: 今のテーマ（auto なら OS の結果）を返し、変わるたびに購読者へ知らせ、toggleTheme は明るい/暗いを入れ替えて保存する', () => {
+  const env = makeEnv({ prefersDark: true });
+  withGlobals(env, () => {
+    initTheme();
+    assert.equal(getThemeMode(), 'auto');
+    assert.equal(getEffectiveTheme(), 'dark', 'auto は OS の結果');
+    let calls = 0;
+    const off = subscribeTheme(() => { calls += 1; });
+    toggleTheme();
+    assert.equal(getEffectiveTheme(), 'light');
+    assert.equal(getThemeMode(), 'light', '押した結果は明示した値として残る');
+    assert.equal(env.store.get('clive.theme'), 'light');
+    assert.equal(env.dataset.theme, 'light');
+    toggleTheme();
+    assert.equal(getEffectiveTheme(), 'dark');
+    assert.equal(calls, 2);
+    setThemeMode('auto');
+    env.setOsDark(false);
+    assert.equal(getEffectiveTheme(), 'light', 'auto のあいだは OS の変化も購読者に届く');
+    assert.ok(calls >= 4);
+    off();
+    const before = calls;
+    toggleTheme();
+    assert.equal(calls, before, '購読をやめたら知らせない');
   });
 });

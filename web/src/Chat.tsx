@@ -213,6 +213,7 @@ export function Chat({ conversationId, drafts, notices, approvals, revision, onC
           rows={3}
           disabled={sending}
           aria-label="メッセージ"
+          data-composer
         />
         {draft
           ? <button className="stop" onClick={() => void api.stop(draft.runId)}>止める</button>

@@ -1,46 +1,38 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, type Approval, type Conversation, type Profile, type WorkerStatus } from './api.ts';
-import { Avatar } from './Avatar.tsx';
+import { ActivityPanel } from './ActivityPanel.tsx';
 import { presenceOf } from './avatar.ts';
 import { Chat, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
+import { useEscapeLayer } from './hooks.ts';
 import { useT, type DictKey } from './i18n/index.ts';
+import { closeTopLayer, shortcutOf } from './keys.ts';
+import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
+import { NarrowHeader } from './NarrowHeader.tsx';
 import { NotificationsPage } from './Notifications.tsx';
+import { PAGE_META, pickChatModel } from './pages.ts';
+import { chatHash, parseRoute } from './routes.ts';
 import { Runs } from './Runs.tsx';
 import { Settings } from './Settings.tsx';
+import { Sidebar } from './Sidebar.tsx';
+import { StatusBar } from './StatusBar.tsx';
+import { TabBar } from './TabBar.tsx';
+import { toast, ToastHost } from './toast.tsx';
+import { Tooltip } from './Tooltip.tsx';
 import { CuriosityPage, ReviewPage, SkillsPage } from './Review.tsx';
 import { TasksPage } from './Tasks.tsx';
-import { Today } from './Today.tsx';
-
-type Route =
-  | { page: 'chat'; conversationId: string | null }
-  | { page: 'tasks'; taskId: string | null }
-  | { page: 'today' } | { page: 'notifications' } | { page: 'settings' } | { page: 'runs' } | { page: 'memory' }
-  | { page: 'review' } | { page: 'skills' } | { page: 'curiosity' };
-
-function parseRoute(hash: string): Route {
-  if (hash.startsWith('#/settings')) return { page: 'settings' };
-  if (hash.startsWith('#/runs')) return { page: 'runs' };
-  if (hash.startsWith('#/memory')) return { page: 'memory' };
-  if (hash.startsWith('#/today')) return { page: 'today' };
-  if (hash.startsWith('#/notifications')) return { page: 'notifications' };
-  if (hash.startsWith('#/review')) return { page: 'review' };
-  if (hash.startsWith('#/skills')) return { page: 'skills' };
-  if (hash.startsWith('#/curiosity')) return { page: 'curiosity' };
-  const task = /^#\/tasks(?:\/([^/]+))?$/u.exec(hash);
-  if (task) return { page: 'tasks', taskId: task[1] ? decodeURIComponent(task[1]) : null };
-  const m = /^#\/c\/([^/]+)$/u.exec(hash);
-  return { page: 'chat', conversationId: m ? decodeURIComponent(m[1]!) : null };
-}
+import { useTabs } from './useTabs.ts';
 
 const BROWSER_NOTIFY = new Set(['approval_needed', 'task_waiting']);
 const MEMORY_NOTICE = { create: 'notice.memoryCreate', update: 'notice.memoryUpdate', forget: 'notice.memoryForget' } as const satisfies Record<'create' | 'update' | 'forget', DictKey>;
+const MEMORY_TOAST = { create: 'toast.memoryCreate', update: 'toast.memoryUpdate', forget: 'toast.memoryForget' } as const satisfies Record<'create' | 'update' | 'forget', DictKey>;
 
 export function App() {
   const t = useT();
-  const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
+  const [route, setRoute] = useState(() => parseRoute(location.hash));
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationsLoaded, setConversationsLoaded] = useState(false);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [notices, setNotices] = useState<Record<string, RunNotice[]>>({});
   const [revisions, setRevisions] = useState<Record<string, number>>({});
@@ -52,35 +44,123 @@ export function App() {
   const [taskRevision, setTaskRevision] = useState(0);
   const [notificationRevision, setNotificationRevision] = useState(0);
   const [celebrating, setCelebrating] = useState(false);
+  const [modelName, setModelName] = useState<string | null>(null);
+  const [restartRequired, setRestartRequired] = useState(false);
+  const [runStarts, setRunStarts] = useState<Record<string, number>>({});
+  const [mode, setMode] = useState<LayoutMode>(() => layoutModeFor(window.innerWidth));
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(() => loadPanelPreference());
   const celebrateTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const taskStatus = useRef(new Map<string, string>());
+  const lastChatHash = useRef('#/');
 
-  const refreshList = useCallback(() => { void api.conversations().then(r => setConversations(r.conversations)).catch(() => undefined); }, []);
+  const refreshList = useCallback(() => {
+    void api.conversations().then(r => { setConversations(r.conversations); setConversationsLoaded(true); }).catch(() => undefined);
+  }, []);
   const refreshApprovals = useCallback(() => { void api.approvals().then(r => setApprovals(r.approvals)).catch(() => undefined); }, []);
   const refreshWorker = useCallback(() => { void api.worker().then(setWorker).catch(() => undefined); }, []);
   const refreshTasks = useCallback(() => {
-    void api.tasks().then(r => setWaiting(new Set(r.active.filter(t => t.status === 'waiting').map(t => t.id)))).catch(() => undefined);
+    void api.tasks().then(r => {
+      setWaiting(new Set(r.active.filter(x => x.status === 'waiting').map(x => x.id)));
+      for (const task of r.active) taskStatus.current.set(task.id, task.status);
+    }).catch(() => undefined);
     void api.notifications().then(r => setUnread(r.unread)).catch(() => undefined);
   }, []);
+  const refreshMeta = useCallback(() => {
+    void api.models().then(r => setModelName(pickChatModel(r.models, r.routing))).catch(() => undefined);
+    void api.settings().then(s => setRestartRequired(s.restartRequired)).catch(() => undefined);
+  }, []);
   useEffect(() => {
-    refreshList(); refreshApprovals(); refreshWorker(); refreshTasks();
+    refreshList(); refreshApprovals(); refreshWorker(); refreshTasks(); refreshMeta();
     void api.profile().then(setProfile).catch(() => undefined);
-  }, [refreshList, refreshApprovals, refreshWorker, refreshTasks]);
+  }, [refreshList, refreshApprovals, refreshWorker, refreshTasks, refreshMeta]);
   // 静かな時間帯や次に起きる時刻は時間とともに変わるので、ときどき取り直す
-  useEffect(() => { const t = setInterval(refreshWorker, 30_000); return () => clearInterval(t); }, [refreshWorker]);
+  useEffect(() => { const timer = setInterval(refreshWorker, 30_000); return () => clearInterval(timer); }, [refreshWorker]);
   useEffect(() => {
     const onHash = () => setRoute(parseRoute(location.hash));
     addEventListener('hashchange', onHash);
     return () => removeEventListener('hashchange', onHash);
   }, []);
 
+  // 設定を保存したあと（設定の画面を離れたとき）に、再起動の要否とモデルを読み直す
+  const wasSettings = useRef(false);
+  useEffect(() => {
+    if (wasSettings.current && route.page !== 'settings') refreshMeta();
+    wasSettings.current = route.page === 'settings';
+  }, [route.page, refreshMeta]);
+
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) return undefined;
+    const update = () => setMode(layoutModeFor(el.offsetWidth || window.innerWidth));
+    update();
+    if (typeof ResizeObserver !== 'function') { addEventListener('resize', update); return () => removeEventListener('resize', update); }
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    setDrawerOpen(false);
+    if (mode === 'mid') setPanelOpen(false);
+    else if (mode === 'wide') setPanelOpen(loadPanelPreference());
+  }, [mode]);
+
+  const current = route.page === 'chat' ? route.conversationId : null;
+  const tabState = useTabs(route, conversations, conversationsLoaded);
+  useEffect(() => { if (route.page === 'chat') lastChatHash.current = chatHash(route.conversationId); }, [route]);
+
+  // 「いまの動き」は、広い画面では右のパネル。#/today（古い通知のリンクなど）は、パネルを開いて直前の会話に戻す
+  useEffect(() => {
+    if (route.page !== 'today' || mode === 'narrow') return;
+    setPanelOpen(true);
+    history.replaceState(null, '', lastChatHash.current);
+    setRoute(parseRoute(lastChatHash.current));
+  }, [route.page, mode]);
+  useEffect(() => { setDrawerOpen(false); }, [route]);
+  useEscapeLayer('drawer', drawerOpen, () => setDrawerOpen(false));
+
+  const panelRef = useRef(panelOpen); panelRef.current = panelOpen;
+  const modeRef = useRef(mode); modeRef.current = mode;
+  const showPanel = useCallback((open: boolean) => {
+    setPanelOpen(open);
+    if (modeRef.current === 'wide') savePanelPreference(open);
+  }, []);
+  const togglePanel = useCallback(() => { if (modeRef.current !== 'narrow') showPanel(!panelRef.current); }, [showPanel]);
+  const openPanel = useCallback(() => {
+    if (modeRef.current === 'narrow') location.hash = '#/today';
+    else showPanel(true);
+  }, [showPanel]);
+
+  const draftsRef = useRef(drafts); draftsRef.current = drafts;
+  const currentRef = useRef(current); currentRef.current = current;
+  const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = shortcutOf(e);
+      if (action === 'togglePanel') { e.preventDefault(); togglePanel(); return; }
+      if (action !== 'escape') return;
+      if (closeTopLayer()) { e.preventDefault(); return; }
+      // 返事を止めるのは、入力欄にフォーカスがあるときだけ
+      if (!(document.activeElement instanceof HTMLElement) || !document.activeElement.hasAttribute('data-composer')) return;
+      const draft = draftsRef.current.find(d => d.conversationId === currentRef.current);
+      if (draft) void api.stop(draft.runId);
+    };
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  }, [togglePanel]);
+
   const addNotice = (conversationId: string, notice: RunNotice) =>
-    setNotices(current => ({ ...current, [conversationId]: [...(current[conversationId] ?? []), notice].slice(-8) }));
-  const bump = (conversationId: string) => setRevisions(current => ({ ...current, [conversationId]: (current[conversationId] ?? 0) + 1 }));
+    setNotices(state => ({ ...state, [conversationId]: [...(state[conversationId] ?? []), notice].slice(-8) }));
+  const bump = (conversationId: string) => setRevisions(state => ({ ...state, [conversationId]: (state[conversationId] ?? 0) + 1 }));
+  const approvalTarget = useCallback((a: Pick<Approval, 'conversationId'>) =>
+    (conversationsRef.current.some(c => c.id === a.conversationId) ? chatHash(a.conversationId) : '#/tasks'), []);
 
   const onEvent = useCallback((e: RunEvent) => {
     switch (e.type) {
       case 'run.start':
         setDrafts(ds => [...ds.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '' }]);
+        setRunStarts(starts => ({ ...starts, [e.runId]: Date.now() }));
         break;
       case 'model.switch':
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, modelId: e.to, text: '' } : d));
@@ -106,6 +186,10 @@ export function App() {
         break;
       case 'approval.requested':
         setApprovals(list => [...list.filter(a => a.id !== e.approval.id), { ...e.approval, runId: e.runId, conversationId: e.conversationId }]);
+        toast({
+          kind: 'approval', title: t('toast.approvalNeeded'), body: e.approval.title,
+          action: { label: t('toast.open'), run: () => { location.hash = approvalTarget({ conversationId: e.conversationId }); } },
+        });
         if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification(t('browser.approvalNeeded'), { body: e.approval.title });
         break;
       case 'approval.resolved':
@@ -113,8 +197,9 @@ export function App() {
         break;
       case 'memory.changed':
         addNotice(e.conversationId, { runId: e.runId, kind: 'memory', message: t(MEMORY_NOTICE[e.action], e.content), eventId: e.eventId });
+        toast({ kind: 'memory', title: t(MEMORY_TOAST[e.action]), body: e.content });
         break;
-      case 'run.end':
+      case 'run.end': {
         setDrafts(ds => ds.filter(d => d.runId !== e.runId));
         bump(e.conversationId);
         refreshList();
@@ -122,21 +207,38 @@ export function App() {
         if (!e.ok && e.errorKind !== 'cancelled') {
           addNotice(e.conversationId, { runId: e.runId, kind: 'error', message: t('notice.runFailed', e.errorMessage ?? e.errorKind ?? ''), hint: e.detail?.hint });
         }
+        const chat = conversationsRef.current.find(c => c.id === e.conversationId);
+        if (e.ok && chat && (document.hidden || currentRef.current !== e.conversationId)) {
+          toast({
+            kind: 'done', icon: 'msg', title: t('toast.replyReady'), body: chat.title ?? t('conversation.untitled'),
+            action: { label: t('toast.open'), run: () => { location.hash = chatHash(chat.id); } },
+          });
+        }
         break;
-      case 'task.changed':
+      }
+      case 'task.changed': {
         setTaskRevision(n => n + 1);
-        setWaiting(current => {
-          const next = new Set(current);
+        setWaiting(state => {
+          const next = new Set(state);
           if (e.task.status === 'waiting') next.add(e.task.id); else next.delete(e.task.id);
           return next;
         });
+        const before = taskStatus.current.get(e.task.id);
+        taskStatus.current.set(e.task.id, e.task.status);
         if (e.task.status === 'done') {
           setCelebrating(true);
           clearTimeout(celebrateTimer.current);
           celebrateTimer.current = setTimeout(() => setCelebrating(false), 1200);
+          if (before !== undefined && before !== 'done') {
+            toast({
+              kind: 'done', title: t('toast.taskDone'), body: e.task.title,
+              action: { label: t('toast.open'), run: () => { location.hash = `#/tasks/${encodeURIComponent(e.task.id)}`; } },
+            });
+          }
         }
         refreshWorker();
         break;
+      }
       case 'notification':
         setUnread(n => n + 1);
         setNotificationRevision(n => n + 1);
@@ -145,22 +247,31 @@ export function App() {
         }
         break;
     }
-  }, [t, refreshList, refreshWorker]);
+  }, [t, refreshList, refreshWorker, approvalTarget]);
 
   const onResync = useCallback((serverDrafts: Draft[]) => {
     setDrafts(serverDrafts);
-    setRevisions(current => Object.fromEntries(Object.entries(current).map(([k, v]) => [k, v + 1])));
+    setRevisions(state => Object.fromEntries(Object.entries(state).map(([k, v]) => [k, v + 1])));
     setTaskRevision(n => n + 1);
-    refreshList(); refreshApprovals(); refreshWorker(); refreshTasks();
-  }, [refreshList, refreshApprovals, refreshWorker, refreshTasks]);
+    refreshList(); refreshApprovals(); refreshWorker(); refreshTasks(); refreshMeta();
+  }, [refreshList, refreshApprovals, refreshWorker, refreshTasks, refreshMeta]);
 
   // 承認待ちや返事待ちに気づけるよう、初回だけブラウザ通知の許可を求める（拒否されたらそれまで）
   useEffect(() => {
     if ((approvals.length || waiting.size) && 'Notification' in window && Notification.permission === 'default') void Notification.requestPermission();
   }, [approvals.length, waiting.size]);
 
-  const connected = useRunEvents(onEvent, onResync);
-  const current = route.page === 'chat' ? route.conversationId : null;
+  // 実行中の経過時間: 見ている間に始まったものは run.start を受けた時刻、読み直したときは実行の記録の started_at
+  const runningId = worker?.running?.runId;
+  useEffect(() => {
+    if (!runningId) return;
+    void api.runs().then(r => {
+      const run = r.runs.find(x => x.id === runningId);
+      if (run) setRunStarts(starts => (starts[runningId] === undefined ? { ...starts, [runningId]: run.started_at } : starts));
+    }).catch(() => undefined);
+  }, [runningId]);
+
+  const { connected, reconnect } = useRunEvents(onEvent, onResync);
   const presence = presenceOf({
     generating: drafts.some(d => d.runId !== worker?.running?.runId),
     runningTask: worker?.running?.title ?? null,
@@ -170,64 +281,79 @@ export function App() {
     quiet: Boolean(worker?.quiet && worker.autonomy),
     celebrating,
   });
-  const navLink = (href: string, page: Route['page'], label: string, extra?: ReactNode) =>
-    <a href={href} className={route.page === page ? 'active' : ''}>{label}{extra}</a>;
+
+  const narrow = mode === 'narrow';
+  const firstApproval = approvals[0];
+  const openApproval = () => { if (firstApproval) location.hash = approvalTarget(firstApproval); };
+  const openRunning = () => {
+    const running = worker?.running;
+    if (running) location.hash = running.kind === 'task' && running.taskId ? `#/tasks/${encodeURIComponent(running.taskId)}` : '#/review';
+  };
+  const title = route.page === 'chat'
+    ? (current ? conversations.find(c => c.id === current)?.title ?? t('conversation.untitled') : t('tab.newChat'))
+    : t(PAGE_META[route.page].label);
+  const pane = (
+    <ActivityPanel
+      variant={narrow ? 'page' : 'side'} open={panelOpen} overlay={mode === 'mid'} profile={profile} presence={presence}
+      approvals={approvals.length} unread={unread} worker={worker} onWorker={setWorker} revision={taskRevision} onClose={() => showPanel(false)}
+    />
+  );
+  const viewKey = route.page === 'chat' ? `chat:${current ?? 'new'}` : route.page;
 
   return (
-    <div className="layout">
-      <nav className="sidebar">
-        <a className="brand" href="#/today" title={presence.line}>
-          {profile
-            ? <Avatar shape={profile.shape} color={profile.color} motion={profile.motion} runtime={presence.runtime} sleeping={presence.sleeping} size={28} seed={profile.name} />
-            : <img src="/icon.svg" alt="" width={24} height={24} />}
-          <span>{profile?.name ?? 'Clive'}</span>
-          <span className={`dot ${connected ? 'on' : 'off'}`} title={connected ? t('connection.on') : t('connection.off')} />
-        </a>
-        <a className="new" href="#/">{t('nav.newChat')}</a>
-        <ul className="conversations">
-          {conversations.map(c => (
-            <li key={c.id} className={c.id === current ? 'active' : ''}>
-              <a href={`#/c/${encodeURIComponent(c.id)}`}>{c.title ?? t('conversation.untitled')}</a>
-              {approvals.some(a => a.conversationId === c.id) && <span className="tag attention" title={t('conversation.needsApprovalTip')}>{t('conversation.needsApproval')}</span>}
-              {drafts.some(d => d.conversationId === c.id) && <span className="dot on" title={t('conversation.generating')} />}
-            </li>
-          ))}
-        </ul>
-        <div className="nav-bottom">
-          {navLink('#/today', 'today', t('nav.today'))}
-          {navLink('#/tasks', 'tasks', t('nav.tasks'), waiting.size > 0 ? <span className="tag attention">{t('nav.tasksWaiting', waiting.size)}</span> : null)}
-          {navLink('#/notifications', 'notifications', t('nav.notifications'), unread > 0 ? <span className="count-badge">{unread}</span> : null)}
-          {navLink('#/review', 'review', t('nav.review'))}
-          {navLink('#/memory', 'memory', t('nav.memory'))}
-          {navLink('#/skills', 'skills', t('nav.skills'))}
-          {navLink('#/curiosity', 'curiosity', t('nav.curiosity'))}
-          {navLink('#/settings', 'settings', t('nav.settings'))}
-          {navLink('#/runs', 'runs', t('nav.runs'))}
-        </div>
-      </nav>
-      <main>
-        {route.page === 'chat' && (
-          <Chat
-            key={current ?? 'new'}
-            conversationId={current}
-            drafts={drafts}
-            notices={current ? notices[current] ?? [] : []}
-            approvals={current ? approvals.filter(a => a.conversationId === current) : []}
-            revision={current ? revisions[current] ?? 0 : 0}
-            onCreated={id => { location.hash = `#/c/${encodeURIComponent(id)}`; refreshList(); }}
-            onClearNotices={id => setNotices(n => ({ ...n, [id]: [] }))}
-          />
-        )}
-        {route.page === 'today' && <Today profile={profile} presence={presence} approvals={approvals.length} unread={unread} worker={worker} onWorker={setWorker} revision={taskRevision} />}
-        {route.page === 'tasks' && <TasksPage key={route.taskId ?? 'list'} taskId={route.taskId} revision={taskRevision + approvals.length} worker={worker} onWorker={setWorker} />}
-        {route.page === 'notifications' && <NotificationsPage revision={notificationRevision} onRead={setUnread} />}
-        {route.page === 'settings' && <Settings onProfile={setProfile} />}
-        {route.page === 'runs' && <Runs />}
-        {route.page === 'memory' && <Memory />}
-        {route.page === 'review' && <ReviewPage revision={taskRevision + notificationRevision} />}
-        {route.page === 'skills' && <SkillsPage />}
-        {route.page === 'curiosity' && <CuriosityPage revision={taskRevision} />}
-      </main>
+    <div className="shell" ref={rootRef} data-mode={mode}>
+      <div className="shell-body">
+        <Sidebar
+          mode={mode} drawerOpen={drawerOpen} route={route} profile={profile} presence={presence}
+          conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
+          waitingCount={waiting.size} unread={unread} restartRequired={restartRequired}
+          onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
+        />
+        {narrow && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
+        <main className="main">
+          {narrow
+            ? <NarrowHeader title={title} phrase={presence.line} connected={connected} hasApproval={approvals.length > 0} unread={unread} onMenu={() => setDrawerOpen(true)} onApproval={openApproval} />
+            : (
+              <TabBar
+                tabs={tabState.tabs} activeKey={tabState.activeKey} conversations={conversations} drafts={drafts} approvals={approvals}
+                panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onTogglePanel={togglePanel}
+              />
+            )}
+          <div className="content" key={viewKey}>
+            {route.page === 'chat' && (
+              <Chat
+                key={current ?? 'new'}
+                conversationId={current}
+                drafts={drafts}
+                notices={current ? notices[current] ?? [] : []}
+                approvals={current ? approvals.filter(a => a.conversationId === current) : []}
+                revision={current ? revisions[current] ?? 0 : 0}
+                onCreated={id => { location.hash = chatHash(id); refreshList(); }}
+                onClearNotices={id => setNotices(n => ({ ...n, [id]: [] }))}
+              />
+            )}
+            {route.page === 'today' && narrow && pane}
+            {route.page === 'tasks' && <TasksPage key={route.taskId ?? 'list'} taskId={route.taskId} revision={taskRevision + approvals.length} worker={worker} onWorker={setWorker} />}
+            {route.page === 'notifications' && <NotificationsPage revision={notificationRevision} onRead={setUnread} />}
+            {route.page === 'settings' && <Settings onProfile={setProfile} />}
+            {route.page === 'runs' && <Runs />}
+            {route.page === 'memory' && <Memory />}
+            {route.page === 'review' && <ReviewPage revision={taskRevision + notificationRevision} />}
+            {route.page === 'skills' && <SkillsPage />}
+            {route.page === 'curiosity' && <CuriosityPage revision={taskRevision} />}
+          </div>
+        </main>
+        {!narrow && pane}
+      </div>
+      {!narrow && (
+        <StatusBar
+          connected={connected} worker={worker} runStartedAt={runningId ? runStarts[runningId] : undefined} approvals={approvals.length}
+          modelName={modelName} unread={unread} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
+          onOpenApproval={openApproval} onOpenNotifications={() => { location.hash = '#/notifications'; }}
+        />
+      )}
+      <ToastHost mode={mode} />
+      <Tooltip disabled={narrow} />
     </div>
   );
 }

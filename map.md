@@ -116,32 +116,40 @@
 - 使うもの: 読まれる側（`src/engine/workspace.ts` と `src/app.ts` が使う）
 
 ### 画面 — `web/src`（React 19 + Vite）
-- 経路は URL のハッシュ（`#/c/<id>` `#/tasks[/<id>]` `#/today` `#/notifications` `#/review` `#/memory` `#/skills` `#/curiosity` `#/settings` `#/runs`）。サーバーとは `api.ts`（HTTP）と `events.ts`（SSE。出来事の型はサーバーの `RunEvent` の手書きの写し）だけで話す。
+- 経路は URL のハッシュ（`#/c/<id>` `#/tasks[/<id>]` `#/today` `#/notifications` `#/review` `#/memory` `#/skills` `#/curiosity` `#/settings` `#/runs`）。古い経路は通知のリンクに保存されているので、移した後もずっと受け付ける。`#/today` は、広い画面では右のパネルを開いて直前の会話に戻し、760px 未満では「いまの動き」のページになる。サーバーとは `api.ts`（HTTP）と `events.ts`（SSE。出来事の型はサーバーの `RunEvent` の手書きの写し）だけで話す。
 - ファイル:
-  - `main.tsx` `App.tsx`: 入口。`main.tsx` はテーマと言語を決め、サーバーの設定（`/api/settings`）からタイムゾーンを読んでから最初の描画をする（最初の描画は 3 秒までしか待たない。遅れて届いた設定も捨てず、届いた時点で反映する。読めなければ一度だけやり直し、それまでは既定の Asia/Tokyo。読み込みは `i18n/load-timezone.ts`）。`App.tsx` は経路、サイドバー、全体の状態（作成中の返事・承認待ち・ワーカー・未読）、ブラウザ通知。
+  - `main.tsx` `App.tsx`: 入口。`main.tsx` はテーマと言語を決め、サーバーの設定（`/api/settings`）からタイムゾーンを読んでから最初の描画をする（最初の描画は 3 秒までしか待たない。遅れて届いた設定も捨てず、届いた時点で反映する。読めなければ一度だけやり直し、それまでは既定の Asia/Tokyo。読み込みは `i18n/load-timezone.ts`）。`App.tsx` は全体の状態（作成中の返事・承認待ち・ワーカー・未読・実行の開始時刻・使うモデル・再起動の要否）、SSE の出来事の受け取り（トーストとブラウザ通知を含む）、幅の判定、全体のキー操作、下の枠の部品の組み立て。
+  - 全体の枠（デザインの寸法どおり。`styles/shell.css`）:
+    - `Sidebar.tsx`: 左。姿と名前と様子の一言（姿を押すと右のパネルが開く）、ページの一覧（新しい会話・タスク・スキル・ツール・実行ログ・記憶・設定。狭い画面ではさらに「いまの動き」）、まだ新しい場所へ移していない画面（通知・レビュー・好奇心）の小さな入口、会話の一覧（相対時間・作成中の回転印・承認待ちの点）。狭い画面では引き出しになる。
+    - `TabBar.tsx`: 上のタブ列。開いたページと会話、×、＋、右のパネルの開閉、選んだタブの下線。`NarrowHeader.tsx` は狭い画面の上の帯（メニュー・題・様子の一言・承認待ち・通知）。
+    - `StatusBar.tsx`: 下の状態バー。接続（押すと繋ぎ直す）、ワーカーの状態と 1 時間の実行数、実行中のタスクと経過時間、承認待ち、使うモデル（表示だけ）、未読の通知、ライト/ダークの切り替え。狭い画面では出さない。
+    - `ActivityPanel.tsx`: 右のパネル「いまの動き」の枠。中身は段階 6 で作り直すまで `Today.tsx`。
+    - `toast.tsx`: 右下のトースト（最大 3 件、ホバーで広がる、操作ボタン付き）。`Tooltip.tsx`: `data-tip` `data-kbd` を持つ要素の説明。
+    - `routes.ts`（経路の読み取り）、`tabs.ts`（タブの開閉・保存の決まり。画面を使わない部分）、`useTabs.ts`（それを経路につなぐ。タブは「開いた経路の一覧」だけを持ち、今どれを開いているかは URL のハッシュが唯一の正）、`layout.ts`（760px 未満が狭い・1180px 未満が中くらい、右のパネルの開き方の保存）、`keys.ts`（Esc で閉じる重なりの順番、日本語の変換中の判定、キーの割り当て）、`hooks.ts`（`useNow` `useTheme` `useEscapeLayer` `useSaveShortcut`）、`pages.ts`（ページごとの名前の辞書キーと絵、ワーカーの状態、状態バーに出すモデルの選び方）。
   - `Chat.tsx`: 会話、承認の札、道具の行（この 2 つは `Tasks.tsx` も使う）、添付、入力欄。
   - `Tasks.tsx`: タスクの一覧・新規・詳細とワーカーの操作。ほかの画面が使う `STATUS_LABEL` `WorkerBar` もここにある。新規の「日時を指定」は、サーバーのタイムゾーンの時刻として読んでから送る。
-  - `Today.tsx`（きょう）、`Notifications.tsx`（通知）。
+  - `Today.tsx`（きょう。今は右のパネルの中身）、`Notifications.tsx`（通知）。
   - `Review.tsx`: 3 つのページ。`ReviewPage`（スキルの下書き・自発タスクの提案・振り返りの記録）、`SkillsPage`、`CuriosityPage`。
   - `Memory.tsx`: 記憶 2 冊の一覧・追加・編集・削除・履歴・取り消しと、過去の会話の検索。
   - `Runs.tsx`: 実行の表。道具の記録（`/api/tool-calls`）は画面から使っていない。
-  - `Settings.tsx`（表示の言語・モデルの確認・API キーの有無・設定ファイルの JSON 編集）と `Profile.tsx`（名前・色・動き・形）。
-  - `Avatar.tsx` `avatar.ts` `avatars/*.svg`: 姿（20 種）と動き、様子の一言（`presenceOf`）。
+  - `Settings.tsx`（テーマと表示の言語・モデルの確認・API キーの有無・設定ファイルの JSON 編集）と `Profile.tsx`（名前・色・動き・形）。
+  - `Avatar.tsx` `avatar.ts` `avatars/*.svg`: 姿（20 種）と動き、様子の一言（`presenceOf`。文は辞書）。
   - `Markdown.tsx`: 返事の Markdown 表示。
   - `styles/tokens.css`: デザインの色・字体・余白・角丸・影のトークン。`:root` がライト、`:root[data-theme="dark"]` がダークの上書き。文字用のアクセント色（`--color-accent-text`）と薄い文字の 3 段階（`--color-text-muted*`）は、ライトで WCAG AA（4.5:1）に届くようデザインより少し濃くしてある。
   - `styles/components.css`: デザインの部品クラス（`.btn*` `.input` `.field` `.radio` `.seg` `.card*` `.tag*` `.table` `.dialog*` `.hr`）、スクロールバー、keyframes、`prefers-reduced-motion`。
+  - `styles/shell.css`: 全体の枠（サイドバー・タブ列・状態バー・右のパネル・トースト・ツールチップ）の寸法と動き、登場のアニメーション。
   - `styles.css`: 全体の CSS（1 ファイル）。古いトークン名（`--bg` など）を新しいトークンへの別名にしてあり、既存の画面はこのまま新しい色と字体になる。ダークは `data-theme` だけで決まり、OS の設定には直接従わない。
-  - `icons.tsx`: アイコン 49 個（Lucide、ISC。デザインの `ICON` と添付の `paperclip`）を `<Icon name>` で出す。出どころとライセンス文はファイルの先頭。
+  - `icon-paths.ts` `icons.tsx`: アイコン 49 個（Lucide、ISC。デザインの `ICON` と添付の `paperclip`）の形は `icon-paths.ts`（出どころとライセンス文はファイルの先頭）、`<Icon name>` で出す部品は `icons.tsx`。
   - `i18n/`: 画面の多言語化（日本語・英語。ライブラリは使わない）。
     - `ja.ts` が元の辞書（値は文字列か、差し込み用の関数）。`en.ts` は `types.ts` の型（ja から作る）で書くので、キーの漏れ・余り・引数の型の違いは `tsc` で落ちる。未訳を日本語で埋める仕組みは無い。
-    - `index.ts`: `t(key, ...args)` と、言語やタイムゾーンが変わると描き直す `useT()`。
+    - `index.ts`: `t(key, ...args)` と、言語やタイムゾーンが変わると描き直す `useT()`、サイドバー用の短い相対時刻 `formatRelativeCompact`（5分 / 2h）。`elapsed.ts` は実行中の経過時間（`04:07`）。
     - `state.ts`: 今の言語とタイムゾーンの保持。言語は 保存した設定（`localStorage` の `clive.language`）→ `navigator.languages` の主の部分（`en-GB` なら `en`）→ ja の順で決め、`<html lang>` を合わせる。
     - `load-timezone.ts`: 起動時にサーバーの `timezone` を読む `loadTimezone`。最初の描画は待ち時間（3 秒）までしか待たないが、遅れて届いた設定も捨てずに反映し、読めなければ一度だけやり直す（捨てると、日時の入力が違う時刻として読まれる）。
     - `format.ts`: 日時・相対時刻・数・並べる文を `Intl` で整える。日時はブラウザではなくサーバーの `timezone` で表示し、`datetime-local` の入力もその時刻として読む（`parseZonedInput`）。
-    - 訳すのは表示の文字だけ。API に送る値（曜日の `月`〜`日` など）は訳さない。この段階で辞書に入っているのは、サイドバーと経路名、画面が自分で組み立てる文、ブラウザ通知、曜日のラベル、言語の切り替えの文。各画面の文字は、その画面を作り直す段階で足す。サーバーから来る文字は訳していない。
+    - 訳すのは表示の文字だけ。API に送る値（曜日の `月`〜`日` など）は訳さない。この時点で辞書に入っているのは、全体の枠（サイドバー・タブ・状態バー・右のパネル・トースト・様子の一言）の文字、経路名、画面が自分で組み立てる文、ブラウザ通知、曜日のラベル、テーマと言語の切り替えの文。引数の要らない項目のキーを変数で持つときは `PlainKey` 型を使う（関数の項目まで含む `DictKey` の和集合は、型で断られる）。各画面の文字は、その画面を作り直す段階で足す。サーバーから来る文字は訳していない。
   - `weekdays.ts`: 曜日の値（`月`〜`日`。サーバーの `src/tasks/schedule.ts` の `DAY_MAP` と対）と、ラベルの辞書キー。
   - `ZoneNote.tsx`: 日時を出す画面に添える、タイムゾーン名（例: `Asia/Tokyo (UTC+09:00)`）の小さな注記。
-  - `theme.ts`: テーマ（`auto` `light` `dark`）の保存（`localStorage` の `clive.theme`）と `<html data-theme>` への反映、`auto` のときの OS の変化への追従。`main.tsx` が起動時に `initTheme()` を呼ぶ。
+  - `theme.ts`: テーマ（`auto` `light` `dark`）の保存（`localStorage` の `clive.theme`）と `<html data-theme>` への反映、`auto` のときの OS の変化への追従、今のテーマを知らせる購読（`getEffectiveTheme` `subscribeTheme`）、ライト/ダークの入れ替え（`toggleTheme`。押すと明示した値として保存され、`auto` へ戻すのは設定の「テーマ」）。`main.tsx` が起動時に `initTheme()` を呼ぶ。
 - ビルド:
   - `web/index.html`: `<head>` で `web/public/theme-init.js` を同期で読む。最初の描画の前に `data-theme` を決め、再読み込みで違うテーマが一瞬出るのを防ぐ（CSP が `script-src 'self'` なので外部ファイル）。`<html lang>` は初期値が ja で、起動時に `i18n/state.ts` が決めた言語へ書き換える。
   - `web/vite.config.mjs`: 出力は `web/dist`、小さなファイルも埋め込まない `assetsInlineLimit: 0`、開発時は `/api` を `npm start` のサーバーへ転送。プラグイン `clive-woff2-only` は @fontsource の CSS から woff の指定を外し、woff2 だけを `web/dist/assets/` に出す（外さないと出力が倍になる）。
@@ -156,7 +164,7 @@
 - 使うもの: `node src/main.ts`、環境変数 `CLIVE_DATA_DIR`、`/etc/clive/env`
 
 ### テスト — `tests/`
-- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `memory` `providers` `review` `schedule` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
+- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値・設定の遅れた読み込み）、`shell`（全体の枠の、画面を使わない部分: `routes` `tabs` `layout` `keys` `pages` `avatar` の様子の一言と、枠の辞書）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `memory` `providers` `review` `schedule` `shell` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
 - `helpers.ts`: 一時フォルダ（`tempDir`）、偽のサーバー（`fakeServer`）、偽のモデル窓口（`FakeAdapter`）と返事の台本（`reply` `fail`）。
 - 入口: `tests/helpers.ts`
 - 使うもの: `src/` の各部品（`App` で組み立てるものが多い）

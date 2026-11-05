@@ -1,10 +1,13 @@
 export type ThemeMode = 'auto' | 'light' | 'dark';
+export type ThemeName = 'light' | 'dark';
 
 const KEY = 'clive.theme';
 const darkQuery = (): MediaQueryList | null =>
   typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
 let current: ThemeMode = 'auto';
+let effective: ThemeName = 'light';
+const listeners = new Set<() => void>();
 
 function load(): ThemeMode {
   try {
@@ -16,17 +19,32 @@ function load(): ThemeMode {
 
 function apply(): void {
   const dark = current === 'dark' || (current === 'auto' && darkQuery()?.matches === true);
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  effective = dark ? 'dark' : 'light';
+  document.documentElement.dataset.theme = effective;
+  for (const listener of listeners) listener();
 }
 
 export function getThemeMode(): ThemeMode {
   return current;
 }
 
+export function getEffectiveTheme(): ThemeName {
+  return effective;
+}
+
+export function subscribeTheme(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 export function setThemeMode(mode: ThemeMode): void {
   current = mode;
   try { localStorage.setItem(KEY, mode); } catch { }
   apply();
+}
+
+export function toggleTheme(): void {
+  setThemeMode(effective === 'dark' ? 'light' : 'dark');
 }
 
 export function initTheme(): void {

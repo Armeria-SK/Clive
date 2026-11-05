@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type ModelView, type Profile, type SettingsView } from './api.ts';
+import { useSaveShortcut, useTheme } from './hooks.ts';
 import { formatNumber, getLanguagePreference, LANGUAGES, setLanguagePreference, setTimezone, useT, type LanguagePreference } from './i18n/index.ts';
 import { ProfileEditor } from './Profile.tsx';
+import { setThemeMode, type ThemeMode } from './theme.ts';
 
 const STATUS_LABEL: Record<string, string> = {
   ok: '使えます', too_small: 'コンテキスト不足', exceeds_model: 'モデル上限超え', unknown: '長さ不明',
@@ -24,6 +26,8 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
     setSettings(s); setModels(m.models); setDraft(JSON.stringify(s.config, null, 2)); syncTimezone(s.config);
   }
   useEffect(() => { void load(); }, []);
+  const { mode: themeMode } = useTheme();
+  useSaveShortcut(() => { if (settings && !busy) void save(); });
 
   async function probe() {
     setBusy(true);
@@ -58,6 +62,14 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
       {settings.restartRequired && <p className="notice warning">server の設定を変えました。反映するには Clive を再起動してください。</p>}
 
       <h2>{t('settings.appearance')}</h2>
+      <div className="field">
+        <label htmlFor="display-theme">{t('settings.theme')}</label>
+        <select id="display-theme" value={themeMode} onChange={e => setThemeMode(e.target.value as ThemeMode)}>
+          <option value="auto">{t('settings.theme.auto')}</option>
+          <option value="light">{t('settings.theme.light')}</option>
+          <option value="dark">{t('settings.theme.dark')}</option>
+        </select>
+      </div>
       <div className="field">
         <label htmlFor="display-language">{t('settings.language')}</label>
         <select id="display-language" value={getLanguagePreference()} onChange={e => setLanguagePreference(e.target.value as LanguagePreference)}>
