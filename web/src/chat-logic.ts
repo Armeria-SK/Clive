@@ -1,0 +1,185 @@
+import { ApiError, type ModelView } from './api.ts';
+import { formatElapsed, getLanguage, getTimezone, type PlainKey } from './i18n/index.ts';
+import type { IconName } from './icon-paths.ts';
+
+export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined }
+
+export interface ContextNumbers {
+  effective: number | null;
+  required: number | null;
+  declared: number | null;
+  measured: number | null;
+  modelMax: number | null;
+}
+
+export interface ContextCardData {
+  modelId: string;
+  status: string;
+  message: string;
+  hint: string | null;
+  numbers: ContextNumbers;
+}
+
+export interface SendFailure {
+  message: string;
+  hint: string | null;
+  context: boolean;
+  body: unknown;
+}
+
+const CONTEXT_STATUSES: ReadonlySet<string> = new Set(['too_small', 'exceeds_model', 'unknown']);
+
+const asRecord = (value: unknown): Record<string, unknown> | null => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null);
+const num = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+const text = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
+
+function isProblem(value: unknown): value is ModelProblem {
+  const record = asRecord(value);
+  return record !== null && typeof record.modelId === 'string' && typeof record.status === 'string' && typeof record.message === 'string';
+}
+
+export function sendFailureOf(error: unknown, fallback: string): SendFailure {
+  if (!(error instanceof ApiError)) return { message: fallback, hint: null, context: false, body: null };
+  const body = asRecord(error.body);
+  return {
+    message: error.message,
+    hint: text(asRecord(body?.detail)?.hint),
+    context: (body?.errorKind ?? body?.error) === 'context_overflow',
+    body: error.body,
+  };
+}
+
+export function contextCardOf(body: unknown, models: readonly ModelView[]): ContextCardData | null {
+  const record = asRecord(body);
+  if (!record || (record.errorKind ?? record.error) !== 'context_overflow') return null;
+  const problems = Array.isArray(record.problems) ? record.problems.filter(isProblem) : [];
+  const problem = problems.find(p => CONTEXT_STATUSES.has(p.status)) ?? null;
+  const probe = problem ? models.find(m => m.id === problem.modelId)?.probe ?? null : null;
+  return {
+    modelId: problem?.modelId ?? '',
+    status: problem?.status ?? '',
+    message: problem?.message ?? text(record.errorMessage) ?? '',
+    hint: text(problem?.hint) ?? text(asRecord(record.detail)?.hint),
+    numbers: {
+      effective: num(probe?.effective), required: num(probe?.required), declared: num(probe?.declared),
+      measured: num(probe?.measured), modelMax: num(probe?.modelMax),
+    },
+  };
+}
+
+export function runOverflowOf(notice: { errorKind?: string | undefined; measured?: number | undefined; required?: number | undefined }): { available: number; required: number } | null {
+  if (notice.errorKind !== 'context_overflow') return null;
+  const available = num(notice.measured);
+  const required = num(notice.required);
+  return available !== null && required !== null ? { available, required } : null;
+}
+
+export interface ChatRunRow { id: string; model_id: string | null; model?: string | null; started_at: number }
+
+export function modelNameOf(models: readonly ModelView[], modelId: string | null | undefined): string | null {
+  if (!modelId) return null;
+  return models.find(m => m.id === modelId)?.model ?? modelId;
+}
+
+export function resolveRunModels(rows: readonly ChatRunRow[], runIds: readonly string[], models: readonly ModelView[]): { found: Map<string, string>; missing: string[] } {
+  const byId = new Map(rows.map(row => [row.id, row] as const));
+  const found = new Map<string, string>();
+  const missing: string[] = [];
+  for (const id of runIds) {
+    const row = byId.get(id);
+    if (!row) { missing.push(id); continue; }
+    const name = text(row.model) ?? modelNameOf(models, row.model_id);
+    if (name) found.set(id, name);
+  }
+  return { found, missing };
+}
+
+export const SLASH_COMMANDS = [
+  { name: 'new', desc: 'slash.new' },
+  { name: 'task', desc: 'slash.task' },
+  { name: 'tasks', desc: 'slash.tasks' },
+  { name: 'skills', desc: 'slash.skills' },
+  { name: 'log', desc: 'slash.log' },
+  { name: 'memory', desc: 'slash.memory' },
+  { name: 'stop', desc: 'slash.stop' },
+  { name: 'rename', desc: 'slash.rename' },
+  { name: 'archive', desc: 'slash.archive' },
+] as const satisfies ReadonlyArray<{ name: string; desc: PlainKey }>;
+
+export type SlashCommand = (typeof SLASH_COMMANDS)[number];
+export type SlashName = SlashCommand['name'];
+
+export function slashMatches(input: string): SlashCommand[] {
+  if (!input.startsWith('/')) return [];
+  const query = input.slice(1).toLowerCase();
+  return SLASH_COMMANDS.filter(c => c.name.startsWith(query));
+}
+
+export function renameTitleOf(input: string): string | null {
+  const title = /^\/rename\s+([\s\S]+)$/u.exec(input.trim())?.[1]?.trim();
+  return title ? title.slice(0, 200) : null;
+}
+
+export const isRenameWithoutTitle = (input: string): boolean => /^\/rename\s*$/u.test(input.trim());
+
+export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
+  file_read: 'file', file_write: 'filePen', file_edit: 'pencil', file_list: 'folder',
+  shell_run: 'terminal',
+  web_fetch: 'globe', web_search: 'search',
+  memory_save: 'bookmark', memory_update: 'bookmark', memory_forget: 'bookmark', memory_search: 'bookmark',
+  history_search: 'clock', history_read: 'clock',
+  skill_view: 'wrench', skill_draft: 'wrench',
+  task_create: 'tasks', task_list: 'tasks', task_update: 'tasks', task_checkpoint: 'tasks', task_complete: 'tasks',
+  ask_user: 'help',
+  curiosity_add: 'sparkles', curiosity_list: 'sparkles', curiosity_update: 'sparkles',
+};
+
+export const toolIcon = (name: string | null | undefined): IconName => TOOL_ICONS[name ?? ''] ?? 'terminal';
+
+const INPUT_KEYS = ['command', 'path', 'url', 'query', 'topic', 'title', 'name', 'content', 'text'];
+const oneLine = (value: string): string => value.replace(/\s+/gu, ' ').trim();
+
+export function toolInputSummary(input: string, max = 240): string {
+  let shown = input;
+  try {
+    const parsed: unknown = JSON.parse(input);
+    const record = asRecord(parsed);
+    if (typeof parsed === 'string') shown = parsed;
+    else if (record) {
+      const key = INPUT_KEYS.find(k => typeof record[k] === 'string' && record[k] !== '')
+        ?? Object.keys(record).find(k => typeof record[k] === 'string' && record[k] !== '');
+      shown = key ? record[key] as string : JSON.stringify(record);
+    }
+  } catch { shown = input; }
+  const line = oneLine(shown);
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
+export function firstLine(value: string, max = 160): string {
+  const line = value.split('\n').find(l => l.trim()) ?? '';
+  const trimmed = line.trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
+}
+
+export const formatCountdown = (ms: number): string => formatElapsed(Math.max(0, ms));
+
+export function approvalFraction(expiresAt: number, now: number, totalMs: number): number {
+  if (!(totalMs > 0)) return 0;
+  return Math.min(1, Math.max(0, (expiresAt - now) / totalMs));
+}
+
+const clockFormatters = new Map<string, Intl.DateTimeFormat>();
+
+export function chatTime(ms: number, language = getLanguage(), zone = getTimezone()): string {
+  const key = `${language}|${zone}`;
+  let formatter = clockFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(language, { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    clockFormatters.set(key, formatter);
+  }
+  return formatter.format(ms);
+}
+
+export function isNearBottom(el: { scrollHeight: number; scrollTop: number; clientHeight: number }, slack = 80): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= slack;
+}

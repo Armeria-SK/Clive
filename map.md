@@ -131,7 +131,9 @@
     - `ActivityPanel.tsx`: 右のパネル「いまの動き」の枠。中身は段階 6 で作り直すまで `Today.tsx`。
     - `toast.tsx`: 右下のトースト（最大 3 件、ホバーで広がる、操作ボタン付き）。`Tooltip.tsx`: `data-tip` `data-kbd` を持つ要素の説明。
     - `routes.ts`（経路の読み取り）、`tabs.ts`（タブの開閉・保存の決まり。画面を使わない部分）、`useTabs.ts`（それを経路につなぐ。タブは「開いた経路の一覧」だけを持ち、今どれを開いているかは URL のハッシュが唯一の正。起動後、会話の一覧（サーバーは 100 件まで）に無い会話のタブは、サーバーに尋ねて 404 だったものだけ閉じる）、`conversation-state.ts`（会話の横の印は承認の待ちを優先する・件数は 100 件で「100+」・承認の行き先と、会話の返事かどうかは「一覧に載っているか」でなく実行の種類で決める。画面を使わない部分）、`layout.ts`（760px 未満が狭い・1180px 未満が中くらい、右のパネルの開き方の保存）、`keys.ts`（Esc で閉じる重なりの順番 — パレット・ダイアログ・通知・モデル・シート・引き出し、日本語の変換中の判定、キーの割り当て: ⌘/Ctrl+K・+/・+S）、`hooks.ts`（`useNow` `useTheme` `useEscapeLayer` `useSaveShortcut` `useExit`: 閉じる動きが終わるまで部品を残す）、`pages.ts`（ページごとの名前の辞書キーと絵、ワーカーの状態、状態バーに出すモデルの選び方）。
-  - `Chat.tsx`: 会話、承認の札、道具の行（この 2 つは `Tasks.tsx` も使う）、添付、入力欄。
+  - `Chat.tsx`: チャットの画面。会話の読み込み、送信・やり直し・止める、添付、スラッシュコマンド（`/new` `/task` `/tasks` `/skills` `/log` `/memory` `/stop` `/rename` `/archive`）、題の変更とアーカイブ（アーカイブは確認つき。API は `api.renameConversation` `api.archiveConversation`）。返事ごとのモデル名は、保存済みの返事は `/api/runs?limit=500`（サーバーの上限）の `model` を `runId` で引き、作成中の返事は下書きの `modelId` から設定の名前を引く（500 件より古い実行は出さない）。最初の発言で会話を作るときは、送れたあとに移る（失敗しても入力と札が残り、やり直しで会話を作り直さない）。`Tasks.tsx` が使う `ApprovalCard` と `ToolMessage` も、ここから出している。
+  - `ChatMessages.tsx`: 会話の並びの部品（自分の発言・返事・考え中・実行中の道具・道具の行・注記・記憶の行・失敗の札・送る前に止めた札・空の会話）。`ApprovalCard.tsx`: 会話の入力欄の上に固定する承認の札（残り時間の線は `approvalTimeoutSec` を設定から読んで出す・詳細のダイアログ）と、`Tasks.tsx` が使う単体の札。`ChatDialog.tsx`: 承認の詳細とアーカイブの確認に使うダイアログ（Esc で閉じる・Tab は中に留める）。`Composer.tsx`: 入力欄（自動で伸びる・スラッシュの候補・使うモデルの札は表示だけ・添付）。
+  - `chat-logic.ts`: チャットの画面を使わない部分（送る前の 409 の `problems` と `api.models()` の確認結果をつないで数字を出す・途中の失敗の 2 つの数字・スラッシュコマンドの表・道具 24 個の絵の表・道具の入力の 1 行化・残り時間・時刻の整形）。`memory-undo.ts`: 「記憶を取り消す」の結果を、会話の中の行と右下のトーストで共有する。
   - `Tasks.tsx`: タスクの一覧・新規・詳細とワーカーの操作。ほかの画面が使う `STATUS_LABEL` `WorkerBar` もここにある。新規の「日時を指定」は、サーバーのタイムゾーンの時刻として読んでから送る。
   - `Today.tsx`（きょう。今は右のパネルの中身）。
   - `Review.tsx`: 3 つのページ。`ReviewPage`（スキルの下書き・自発タスクの提案・振り返りの記録）、`SkillsPage`、`CuriosityPage`。
@@ -142,6 +144,7 @@
   - `Markdown.tsx`: 返事の Markdown 表示。
   - `styles/tokens.css`: デザインの色・字体・余白・角丸・影のトークン。`:root` がライト、`:root[data-theme="dark"]` がダークの上書き。文字用のアクセント色（`--color-accent-text`）と薄い文字の 3 段階（`--color-text-muted*`）は、ライトで WCAG AA（4.5:1）に届くようデザインより少し濃くしてある。
   - `styles/components.css`: デザインの部品クラス（`.btn*` `.input` `.field` `.radio` `.seg` `.card*` `.tag*` `.table` `.dialog*` `.hr`）、スクロールバー、keyframes、`prefers-reduced-motion`。
+  - `styles/chat.css`: チャットの画面（会話の並び・承認の札と詳細・入力欄・スラッシュの候補）の寸法と動き。
   - `styles/shell.css`: 全体の枠（サイドバー・タブ列・状態バー・右のパネル・トースト・ツールチップ）と、通知の吹き出し・コマンドパレット、ページの並び（`.view*`: 大きな題 + 説明 + 中身。通知のタブが最初の使い手）の寸法と動き、登場のアニメーション。
   - `styles.css`: 全体の CSS（1 ファイル）。古いトークン名（`--bg` など）を新しいトークンへの別名にしてあり、既存の画面はこのまま新しい色と字体になる。ダークは `data-theme` だけで決まり、OS の設定には直接従わない。
   - `icon-paths.ts` `icons.tsx`: アイコン 49 個（Lucide、ISC。デザインの `ICON` と添付の `paperclip`）の形は `icon-paths.ts`（出どころとライセンス文はファイルの先頭）、`<Icon name>` で出す部品は `icons.tsx`。
@@ -169,7 +172,7 @@
 - 使うもの: `node src/main.ts`、環境変数 `CLIVE_DATA_DIR`、`/etc/clive/env`
 
 ### テスト — `tests/`
-- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値・設定の遅れた読み込み）、`shell`（全体の枠の、画面を使わない部分: `routes` `tabs` `layout` `keys` `pages` `conversation-state` `palette` `notification-meta` `avatar` の様子の一言と、枠の辞書）。`language` はサーバーの言語（設定の既定値、テンプレートの読み分けと写し、返事の言語の指示、決まり文の英語に日本語が混ざらないこと）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `language` `memory` `providers` `review` `schedule` `shell` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
+- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値・設定の遅れた読み込み）、`chat`（チャットの画面を使わない部分: `chat-logic` `memory-undo`、チャットの辞書）、`shell`（全体の枠の、画面を使わない部分: `routes` `tabs` `layout` `keys` `pages` `conversation-state` `palette` `notification-meta` `avatar` の様子の一言と、枠の辞書）。`language` はサーバーの言語（設定の既定値、テンプレートの読み分けと写し、返事の言語の指示、決まり文の英語に日本語が混ざらないこと）。分野ごとに 1 ファイル: `chat` `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `language` `memory` `providers` `review` `schedule` `shell` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
 - `helpers.ts`: 一時フォルダ（`tempDir`）、偽のサーバー（`fakeServer`）、偽のモデル窓口（`FakeAdapter`）と返事の台本（`reply` `fail`）。
 - 入口: `tests/helpers.ts`
 - 使うもの: `src/` の各部品（`App` で組み立てるものが多い）
