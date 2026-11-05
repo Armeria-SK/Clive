@@ -365,3 +365,27 @@ for (const shell of ['powershell', 'bash'] as const) {
     assert.equal(existsSync(marker), false, '許したあとも、偽の git フォルダの設定のコードが動いた');
   });
 }
+
+// 審査の指摘（深い審査）: 本物の PowerShell 5.1 は、引用符つきの -Path・位置のパスのワイルドカードも解決する。承認なしで人格・スキル・.git が書き換わり、秘密（.env）が読めた。
+// 本物のシェルで、今回だけの確かめを断れば何も変わらないこと、秘密・config.json は止まり中身が出ないことを確かめる
+test('実機（Windows PowerShell 5.1・制限モード）: 引用符つきのワイルドカードで、人格・スキル・.git は書けず、秘密・config.json・clive.db は読めない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const root = s.paths.workspace;
+  mkdirSync(join(root, 'skills', 'a'), { recursive: true });
+  mkdirSync(join(root, '.git'), { recursive: true });
+  const files: Array<[string, string]> = [['SOUL.md', 'persona'], ['USER.md', 'user'], ['.env', 'SECRET=1'], ['.git/description', 'desc'], ['skills/a/SKILL.md', 'skill'], [join('..', 'config.json'), '{"k":"CONFIGSECRET"}'], [join('..', 'clive.db'), 'DBSECRET']];
+  for (const [f, text] of files) writeFileSync(join(root, f), text);
+  const before = files.map(([f]) => readFileSync(join(root, f), 'utf8'));
+  // 今回だけの確かめになる（断る）
+  for (const command of [
+    "Set-Content -Path 'SOUL.*' -Value pwned1", "Set-Content 'US?R.md' pwned2", "Set-Content -Path 'skill[s]/a/SKILL.md' -Value x", "Out-File -FilePath 'SOUL.m?' -InputObject pwned3",
+    "Add-Content -Path '.gi[t]/description' -Value x -Force", "Set-Location 'skill[s]'; Set-Content a/SKILL.md x", "'x' > 'SOUL.*'", "Remove-Item 'SOUL.*'",
+  ]) await expectAsk(s, command);
+  // 止める
+  for (const command of ["Get-Content '.en[v]'", "Get-Content '..\\config.jso[n]'", "Get-Content '..\\clive.d[b]'", "Select-String -Path '.en?' -Pattern S"]) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.doesNotMatch(outcome.output.content, /SECRET=1|CONFIGSECRET|DBSECRET/u, `${command}: 秘密の中身が出た`);
+  }
+  assert.deepEqual(files.map(([f]) => readFileSync(join(root, f), 'utf8')), before, 'ファイルが変わった');
+});

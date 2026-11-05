@@ -31,7 +31,8 @@ function braces(text: string, budget = 64): string[] | null {
   return out;
 }
 
-function segmentRegex(seg: string, caseFold: boolean): RegExp {
+// powershell: PowerShell のワイルドカード。[..] の中の ^ と ! は否定ではなく、ただの文字（本物の PowerShell 5.1 で、[^x] は ^ と x のどちらかに当たると確かめた）
+function segmentRegex(seg: string, caseFold: boolean, powershell: boolean): RegExp {
   let re = '';
   for (let i = 0; i < seg.length; i++) {
     const ch = seg[i]!;
@@ -40,9 +41,10 @@ function segmentRegex(seg: string, caseFold: boolean): RegExp {
     else if (ch === '[') {
       const end = seg.indexOf(']', i + 2);
       if (end < 0) { re += '\\['; continue; }
-      let body = seg.slice(i + 1, end);
-      if (body.startsWith('!')) body = `^${body.slice(1)}`;
-      re += `[${body.replace(/\\/gu, '\\\\')}]`;
+      let body = seg.slice(i + 1, end).replace(/\\/gu, '\\\\');
+      if (powershell) body = body.replace(/\^/gu, '\\^');
+      else if (body.startsWith('!')) body = `^${body.slice(1)}`;
+      re += `[${body}]`;
       i = end;
     } else re += ch.replace(/[.+^${}()|\\/]/gu, '\\$&');
   }
@@ -51,7 +53,7 @@ function segmentRegex(seg: string, caseFold: boolean): RegExp {
 
 export interface Globbed { prefix: string; matches: string[]; complete: boolean }
 
-// 絶対パスのパターン（* ? [..] {a,b}）に、今あるもののうち当たるものを列挙する。dotfiles: 先頭が . の名前に * が当たるか（PowerShell は当たる、bash は当たらない）
+// 絶対パスのパターン（* ? [..] {a,b}）に、今あるもののうち当たるものを列挙する。dotfiles: PowerShell のワイルドカードか（先頭が . の名前に * が当たる。[..] の中の ^ ! は文字。bash は当たらず、! は否定）
 export function expandGlob(pattern: string, dotfiles: boolean): Globbed {
   const alternatives = braces(pattern);
   const first = pattern.split(/[\\/]/u);
@@ -69,7 +71,7 @@ export function expandGlob(pattern: string, dotfiles: boolean): Globbed {
       if (seg === '**') return { prefix, matches, complete: false };
       const next: string[] = [];
       if (/[*?[]/u.test(seg)) {
-        const re = segmentRegex(seg, WINDOWS);
+        const re = segmentRegex(seg, WINDOWS, dotfiles);
         for (const dir of level) {
           let names: string[];
           try { names = readdirSync(dir); } catch { continue; }

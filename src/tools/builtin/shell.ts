@@ -105,6 +105,7 @@ export const shellRun: ToolDef<ShellInput> = {
     '破壊的な操作や秘密情報の読み取りは実行できない。',
     'node_modules や .git のような大きなフォルダを -Recurse などでたどると、遅く（1.5 万ファイルで 20 秒以上）、結果も長すぎて文脈に入りきらない。除外するか、-Name・-Filter・-Depth で範囲を絞ること。',
     'Windows の PowerShell は制限モードで動くので、.NET の型の書き方（[Math]::・[IO.File]::・[pscustomobject]）や New-Object・Add-Type は使わず、コマンドレットと文字列のメソッドで書く。',
+    'PowerShell のコマンドレットは、引用符で囲んだパスの * ? [ ] もワイルドカードとして解決する。[ ] を含む名前のファイルを指すときは -LiteralPath を使う。',
   ].join(''),
   input: Type.Object({
     command: Type.String({ minLength: 1, maxLength: 8000 }),

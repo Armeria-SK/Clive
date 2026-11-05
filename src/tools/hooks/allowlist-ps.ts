@@ -24,6 +24,19 @@ export const psCmdletNames = (): string[] => [...CMDS.keys()];
 // プロバイダ付きのパス（env: function: HKLM: など。ドライブ文字 1 つの C: は除く）
 const PROVIDER = /^[A-Za-z][A-Za-z0-9_]+:(?![\\/]{2})/u;
 
+// PowerShell は、引用符で囲んだ -Path・-FilePath・位置のパスのワイルドカード（* ? [ ]）も解決する（-LiteralPath だけが文字どおり。本物の PowerShell 5.1 で確かめた）。
+// ワイルドカードを含むパスは、引用符つきでも「当たるものすべて」を調べる対象（glob）にする。バッククォート（ワイルドカードのエスケープ）を含むパスは、判定できないものとして扱う
+const WILDCARD = /[*?[]/u;
+export function withWildcard(w: Word): Word {
+  if (w.kind !== 'plain' || w.dynamic) return w;
+  if (w.text.includes('`')) return { ...w, dynamic: true };
+  return WILDCARD.test(w.text) ? { ...w, glob: true } : w;
+}
+// New-Item・mkdir の -Path は、作るパスとして文字どおりに扱われる（* ? はパスに使えない文字のエラー。[ ] は名前になる。本物の PowerShell 5.1 で確かめた）
+const LITERAL_CREATE = new Set(['new-item', 'mkdir']);
+const wildcardParam = (spec: PsCmd, def: FlagDef, key: string): boolean =>
+  (def.type === 'path-r' || def.type === 'path-w') && key !== 'literalpath' && !spec.names.some(n => LITERAL_CREATE.has(n));
+
 function bind(def: FlagDef, w: Word, acc: Acc, name: string, ctx: MatchCtx): void {
   const t = def.type as string;
   if (t === 'bool') return;
@@ -51,7 +64,7 @@ function bind(def: FlagDef, w: Word, acc: Acc, name: string, ctx: MatchCtx): voi
 const HASH_KEYS = new Set(['name', 'expression', 'n', 'e', 'label', 'l', 'width', 'alignment', 'formatstring', 'descending', 'ascending']);
 function splitList(w: Word): Word[] {
   if (w.dynamic || !w.text.includes(',')) return [w];
-  return [w, ...w.text.split(',').map(t => ({ ...w, text: t.trim() }))];
+  return [w, ...w.text.split(',').map(t => ({ ...w, text: t.trim(), glob: w.glob && /[*?[{]/u.test(t) }))];
 }
 
 const isParam = (w: Word): boolean => w.kind === 'plain' && !w.dynamic && !w.quoted && /^-[A-Za-z]/u.test(w.text) && !w.attached;
@@ -74,8 +87,9 @@ export function parsePs(spec: PsCmd, words: readonly Word[], acc: Acc, ctx: Matc
       all.set(key, [...(all.get(key) ?? []), w]);
       continue;
     }
-    const value = args[++i];
-    if (!value || (isParam(value) && !value.attached)) { acc.add('once', 'list.form', { cmd: name, detail: `${w.text} の値` }, true); if (value) i--; continue; }
+    const raw = args[++i];
+    if (!raw || (isParam(raw) && !raw.attached)) { acc.add('once', 'list.form', { cmd: name, detail: `${w.text} の値` }, true); if (raw) i--; continue; }
+    const value = wildcardParam(spec, def, key) ? withWildcard(raw) : raw;
     take(key, value);
     all.set(key, [...(all.get(key) ?? []), value]);
     bind(def, value, acc, name, ctx);
@@ -88,9 +102,10 @@ export function parsePs(spec: PsCmd, words: readonly Word[], acc: Acc, ctx: Matc
     const key = slot.replace('…', '');
     const def = spec.params.get(key);
     if (!def) return;
-    take(key, w);
-    all.set(key, [...(all.get(key) ?? []), w]);
-    bind(def, w, acc, name, ctx);
+    const value = wildcardParam(spec, def, key) ? withWildcard(w) : w;
+    take(key, value);
+    all.set(key, [...(all.get(key) ?? []), value]);
+    bind(def, value, acc, name, ctx);
   });
   return { named, positional, all };
 }

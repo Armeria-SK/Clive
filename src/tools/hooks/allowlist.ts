@@ -3,7 +3,7 @@
 
 import { Acc, bashVarOk, envAssignOk, psVarOk, worstLevel, type Level, type MatchCtx, type RepoInfo, type StatementResult } from './allowlist-core.ts';
 import { runGit } from './allowlist-git.ts';
-import { parsePs, psCmdlet, runFindstr, runPsSimple, winArgs } from './allowlist-ps.ts';
+import { parsePs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
 import { toolFor } from './allowlist-tools.ts';
 import { isPowerShell, lexShell, type LexFail, type ShellKind, type Statement, type Word } from './shell-lex.ts';
 
@@ -37,11 +37,13 @@ function shapes(st: Statement, acc: Acc): void {
   if (st.background) acc.add('once', 'shape.background', {}, false);
 }
 
-function redirects(st: Statement, acc: Acc): void {
+function redirects(st: Statement, acc: Acc, ps: boolean): void {
   for (const r of st.redirects) {
     if (r.op === '<<' || r.op === '<<<' || r.op.endsWith('&') || !r.target) continue;
     if (NULL_SINK.test(r.target.text) && !r.target.dynamic) continue;
-    if (r.op === '<') acc.read(r.target); else acc.write(r.target);
+    // PowerShell の > は Out-File -FilePath と同じで、引用符つきでもワイルドカードを解決する
+    const target = ps ? withWildcard(r.target) : r.target;
+    if (r.op === '<') acc.read(target); else acc.write(target);
   }
 }
 
@@ -92,7 +94,7 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   const acc = new Acc();
   const ps = isPowerShell(ctx.shell);
   shapes(st, acc);
-  redirects(st, acc);
+  redirects(st, acc, ps);
   if (st.kind === 'control') {
     if (st.header === 'for') for (const w of st.words.slice(2)) if (w.glob) acc.read(w);
     return acc.result();
