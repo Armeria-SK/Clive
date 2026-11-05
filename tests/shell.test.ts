@@ -7,6 +7,7 @@ import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, cl
 import { en } from '../web/src/i18n/en.ts';
 import { formatElapsed, formatRelativeCompact, setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
+import { registerEscapeUnlessInert, saveKeyHandler } from '../web/src/inert.ts';
 import { closeTopLayer, ESC_ORDER, isComposing, modLabel, registerEscape, shortcutOf } from '../web/src/keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference } from '../web/src/layout.ts';
 import { notificationIcon, notificationKindLabel, notificationLink } from '../web/src/notification-meta.ts';
@@ -461,4 +462,26 @@ test('pageBehind: 設定はモーダルなので、後ろには直前に見て�
   assert.deepEqual(HOME_ROUTE, { page: 'chat', conversationId: null });
   assert.deepEqual(pageBehind(parseRoute('#/skills'), tasks), parseRoute('#/skills'), '設定でなければ、そのページ自身');
   assert.deepEqual(parseRoute('#/settings/models'), { page: 'settings' }, '#/settings は今までどおり読める（通知のリンクも同じ）');
+});
+
+test('inert: 設定のモーダルが開いている間、後ろのページの Esc の重なりと ⌘/Ctrl+S は受け付けない', () => {
+  const closed: string[] = [];
+  assert.equal(registerEscapeUnlessInert('dialog', () => closed.push('background-dialog'), true), undefined, '後ろのページの確かめは登録されない');
+  const off = registerEscapeUnlessInert('settings', () => closed.push('settings'), false)!;
+  assert.equal(closeTopLayer(), true);
+  assert.deepEqual(closed, ['settings'], 'Esc は設定だけに届く（後ろの確かめがダイアログの順番で先に閉じない）');
+  off();
+  assert.equal(closeTopLayer(), false);
+
+  let saved = 0;
+  let prevented = 0;
+  const press = (key: string, ctrl = true) => ({ key, metaKey: false, ctrlKey: ctrl, preventDefault: () => { prevented += 1; } });
+  saveKeyHandler(() => true, () => { saved += 1; })(press('s'));
+  assert.deepEqual({ saved, prevented }, { saved: 0, prevented: 0 }, '後ろのページの ⌘/Ctrl+S は何もしない');
+  const live = saveKeyHandler(() => false, () => { saved += 1; });
+  live(press('s'));
+  assert.deepEqual({ saved, prevented }, { saved: 1, prevented: 1 }, '開いている側の ⌘/Ctrl+S は保存し、ブラウザの「ページを保存」を止める');
+  live(press('s', false));
+  live(press('k'));
+  assert.deepEqual({ saved, prevented }, { saved: 1, prevented: 1 }, '別のキーは何もしない');
 });

@@ -319,6 +319,7 @@ export const ja = {
   'settings.discard.body': (n: number) => `${n} 件の変更を保存していません。このまま閉じると、変更は捨てられます。`,
   'settings.discard.keep': '編集に戻る',
   'settings.discard.do': '変更を捨てて閉じる',
+  'settings.kept': '保存していない設定の変更を残しています',
   'settings.field.changed': '変更あり',
   'settings.field.reset': '既定に戻す',
   'settings.tag.add': (label: string) => `${label}に追加`,

@@ -322,6 +322,7 @@ export const en: Dict = {
   'settings.discard.body': n => `${n} unsaved ${n === 1 ? 'change' : 'changes'} will be lost if you close now.`,
   'settings.discard.keep': 'Keep editing',
   'settings.discard.do': 'Discard and close',
+  'settings.kept': 'Kept your unsaved settings changes',
   'settings.field.changed': 'Changed',
   'settings.field.reset': 'Reset to default',
   'settings.tag.add': label => `Add to ${label}`,

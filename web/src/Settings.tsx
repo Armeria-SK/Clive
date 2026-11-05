@@ -12,6 +12,7 @@ import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merg
 import {
   blockUnload, closeAction, countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
+import { editsToKeep, restoreKept, type KeptEdits } from './settings/keep.ts';
 import { SectionView } from './settings/SectionView.tsx';
 import { SettingsFrame } from './settings/SettingsFrame.tsx';
 import { toast } from './toast.tsx';
@@ -25,10 +26,10 @@ function loadSection(): SettingsSection {
 }
 
 
-interface Props { onProfile: (p: Profile) => void; open: boolean; leaving: boolean; onClose: () => void }
+interface Props { onProfile: (p: Profile) => void; open: boolean; leaving: boolean; onClose: () => void; kept: { current: KeptEdits | null } }
 
 // 設定は、今の画面の上に重ねるモーダル。open が false になったあとも、閉じる動きが終わる（leaving）まで描かれる。
-export function Settings({ onProfile, open, leaving, onClose }: Props) {
+export function Settings({ onProfile, open, leaving, onClose, kept }: Props) {
   const t = useT();
   const [view, setView] = useState<SettingsView | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -57,15 +58,20 @@ export function Settings({ onProfile, open, leaving, onClose }: Props) {
     scroller.current?.scrollTo({ top: 0 });
   }, []);
 
-  const load = useCallback(async () => {
+  const keptToast = useRef(false);
+  const tRef = useRef(t);
+  tRef.current = t;
+  const load = useCallback(async (restore = false) => {
     setLoadFailed(false);
     try {
       const [s, m] = await Promise.all([api.settings(), api.models()]);
-      setView(s); setModels(m.models); setSaved(s.config); setDraft(s.config); setRestartRequired(s.restartRequired); setProblems([]);
+      const next = restore ? restoreKept(kept.current, s.config) : { saved: s.config, draft: s.config, restored: false };
+      setView(s); setModels(m.models); setSaved(next.saved); setDraft(next.draft); setRestartRequired(s.restartRequired); setProblems([]);
       applyServerSettings(s);
+      if (next.restored && !keptToast.current) { keptToast.current = true; toast({ kind: 'info', icon: 'info', title: tRef.current('settings.kept') }); }
     } catch { setLoadFailed(true); }
-  }, []);
-  useEffect(() => { void load(); }, [load]);
+  }, [kept]);
+  useEffect(() => { void load(true); }, [load]);
 
   // 設定を開いたまま、ほかの場所で言語が保存されたら、保存済みと編集中の language を合わせる
   const preference = getLanguagePreference();
@@ -77,6 +83,8 @@ export function Settings({ onProfile, open, leaving, onClose }: Props) {
   }, [preference]);
 
   const dirty = saved && draft ? countChanges(saved, draft) : 0;
+  // 保存していない編集は、設定が閉じられても（戻る・トーストの操作など）次に開いたとき戻せるよう、いつも App の持ち物に写しておく
+  useEffect(() => { if (saved && draft) kept.current = editsToKeep(saved, draft); }, [saved, draft, kept]);
   // 保存していない編集があるまま、ページを閉じる・読み直すときは、ブラウザに確かめさせる
   useEffect(() => {
     if (dirty === 0) return undefined;
@@ -177,7 +185,7 @@ export function Settings({ onProfile, open, leaving, onClose }: Props) {
           actions={(
             <>
               <button type="button" className="btn btn-ghost chat-plain" onClick={() => setAskDiscard(false)}>{t('settings.discard.keep')}</button>
-              <button type="button" className="btn btn-primary" onClick={onClose}>{t('settings.discard.do')}</button>
+              <button type="button" className="btn btn-primary" onClick={() => { revert(); setAskDiscard(false); onClose(); }}>{t('settings.discard.do')}</button>
             </>
           )}
         >

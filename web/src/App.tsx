@@ -21,7 +21,9 @@ import { PAGE_META, pickChatModel } from './pages.ts';
 import { chatHash, pageBehind, parseRoute, type Route } from './routes.ts';
 import { Runs } from './Runs.tsx';
 import { serverText, warningText } from './server-text.ts';
+import { InertContext } from './inert.ts';
 import { Settings } from './Settings.tsx';
+import type { KeptEdits } from './settings/keep.ts';
 import { Sidebar } from './Sidebar.tsx';
 import { StatusBar } from './StatusBar.tsx';
 import { TabBar } from './TabBar.tsx';
@@ -72,6 +74,7 @@ export function App() {
   const taskStatus = useRef(new Map<string, string>());
   const lastChatHash = useRef('#/');
   const behindSettings = useRef<Route | null>(null);
+  const keptSettings = useRef<KeptEdits | null>(null);
   const taskConversations = useRef(new Map<string, string>());
 
   const refreshList = useCallback(() => {
@@ -414,7 +417,8 @@ export function App() {
 
   return (
     <div className="shell" ref={rootRef} data-mode={mode}>
-      <div className="shell-body">
+      <div className="shell-body" inert={settingsOpen}>
+        <InertContext.Provider value={settingsOpen}>
         <Sidebar
           mode={mode} drawerOpen={drawerOpen} route={shown} profile={profile} presence={presence}
           conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
@@ -467,12 +471,13 @@ export function App() {
           </div>
         </main>
         {!narrow && pane}
+        </InertContext.Provider>
       </div>
       {!narrow && (
         <StatusBar
           connected={connected} worker={worker} runStartedAt={runningId ? runStarts[runningId] : undefined} approvals={approvals.length}
           modelName={modelName} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
-          onOpenApproval={openApproval} onOpenNotifications={toggleNotifications}
+          onOpenApproval={openApproval} onOpenNotifications={toggleNotifications} inert={settingsOpen}
         />
       )}
       <NotificationBubble
@@ -483,7 +488,7 @@ export function App() {
         open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
         onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
-      {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} />}
+      {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} kept={keptSettings} />}
       <NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} />
       <ToastHost mode={mode} />
       <Tooltip disabled={narrow} />
