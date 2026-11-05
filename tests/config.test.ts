@@ -203,3 +203,13 @@ test('ConfigError に issues が渡されなければ、文（場所: 内容）�
   ]);
   assert.deepEqual(new ConfigError('y').issues, []);
 });
+
+test('tools.maxIterations: 0 は「制限なし」。1〜100 は今までどおり、負・101 以上・小数は断る。省略した新しい設定は 16', () => {
+  const withSteps = (value: unknown) => ({ ...JSON.parse(JSON.stringify(testConfig())), tools: { maxIterations: value } });
+  for (const ok of [0, 1, 16, 100]) assert.equal(parseConfig(withSteps(ok)).tools.maxIterations, ok, String(ok));
+  for (const ng of [-1, -100, 101, 1000, 1.5, '16', null]) {
+    assert.throws(() => parseConfig(withSteps(ng)), (e: unknown) => e instanceof ConfigError && e.issues.some(i => i.path === 'tools.maxIterations'), String(ng));
+  }
+  assert.equal(parseConfig({ version: 1, server: {}, routing: {} }).tools.maxIterations, 16, '新しい設定の既定値は変えない');
+  assert.equal(defaultConfig().tools.maxIterations, 16);
+});

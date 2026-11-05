@@ -477,3 +477,10 @@ test('保存の問題: issues があれば文を読み取らずに、そのま�
   assert.deepEqual(problemsOf({ message: 'x' }, 'ただの失敗', config), [parseProblem('ただの失敗', config)], 'どちらも無ければ、渡された文');
   assert.deepEqual(problemsOf(undefined, 'ただの失敗', config), [parseProblem('ただの失敗', config)]);
 });
+
+test('設定の道具の節: 道具を使う回数の上限の説明に「0 は制限なし」が入る（ja・en）', () => {
+  assert.match(ja['settings.tools.maxSteps'], /道具/u);
+  assert.match(ja['settings.tools.maxStepsDesc'], /0.*制限なし/u);
+  assert.match(en['settings.tools.maxStepsDesc'], /0.*no limit/iu);
+  assert.doesNotMatch(en['settings.tools.maxSteps'] + en['settings.tools.maxStepsDesc'], /[\u3040-\u30ff\u4e00-\u9fff]/u);
+});

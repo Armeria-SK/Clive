@@ -243,3 +243,53 @@ test('使用量: 道具の仕様と道具の往復も数に入り、次の送信
   assert.ok(withoutTools.ok && withTools.ok);
   assert.ok(withTools.tokens - withoutTools.tokens > 500, `道具の仕様の分が増える（${withTools.tokens} と ${withoutTools.tokens}）`);
 });
+
+// ── 6d: 道具を使う回数の上限なし（tools.maxIterations = 0） ──
+
+function endlessTools(onCall: (calls: number) => void): Script {
+  let calls = 0;
+  return async function* (req) {
+    calls++;
+    onCall(calls);
+    // 道具を渡さない呼び出し（上限のまとめ）が来たら、まとめを返す
+    if (req.tools.length === 0) { yield { type: 'text', delta: 'まとめです' }; yield { type: 'done', stop: 'end_turn' as StopReason }; return; }
+    const call: ToolCall = { id: `call_${calls}`, name: 'file_list', arguments: {} };
+    yield { type: 'tool_call', call };
+    yield { type: 'done', stop: 'tool_use' as StopReason };
+  };
+}
+
+async function runEndless(t: { after: (fn: () => void) => void }, maxIterations: number, stopAt: number) {
+  const s = await setup(t, {}, maxIterations);
+  let runId = '';
+  const script = endlessTools(calls => { if (calls === stopAt) s.app.engine.stop(runId); });
+  const adapter = s.adapter();
+  adapter.scripts = new Proxy([] as Script[], { get: (target, key) => (key === 'shift' ? () => script : Reflect.get(target, key)) });
+  const sent = await s.send('どんどん調べて');
+  runId = sent.runId;
+  const result = await sent.done;
+  return { s, result, calls: adapter.calls };
+}
+
+test('0 は制限なし: 100 回を超えて道具を使い続け、止めるボタン（取り消し）で止まる。まとめも上限のお知らせも出さない', async t => {
+  const { s, result, calls } = await runEndless(t, 0, 130);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.errorKind, 'cancelled');
+  assert.ok(calls.length >= 130, `100 回で止まらない（${calls.length} 回）`);
+  assert.ok(calls.every(c => c.tools.length > 0), '道具なしのまとめの呼び出しは一度も無い');
+  assert.equal(s.events.some(e => e.type === 'warning' && e.code === 'max_iterations'), false);
+  const run = s.app.runs.get(result.runId)!;
+  assert.deepEqual(JSON.parse(run.flags), []);
+  assert.ok(run.iterations! >= 130);
+  assert.equal(s.app.conversations.messages('c1').some(m => m.role === 'assistant' && m.text === 'まとめです'), false);
+});
+
+test('上限 100 は今までどおり: 100 回目の呼び出しのあとで止まり、まとめを 1 回呼ぶ', async t => {
+  const { s, result, calls } = await runEndless(t, 100, 100_000);
+  assert.ok(result.ok);
+  assert.equal(calls.length, 101, '道具の呼び出し 100 回 + まとめ 1 回');
+  assert.equal(calls.at(-1)!.tools.length, 0);
+  assert.equal(result.text, 'まとめです');
+  assert.ok(s.events.some(e => e.type === 'warning' && e.code === 'max_iterations'));
+});

@@ -351,7 +351,7 @@ export class ChatEngine {
 
     const maxIterations = config.tools.maxIterations;
     const compaction = { done: false };
-    for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
+    for (counters.iterations = 1; maxIterations === 0 || counters.iterations <= maxIterations; counters.iterations++) {
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);

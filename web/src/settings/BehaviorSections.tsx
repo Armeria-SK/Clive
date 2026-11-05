@@ -43,6 +43,12 @@ export function ToolsSection({ draft, saved, update, problems }: SectionProps) {
       </div>
 
       <div className="set-rows">
+        <FieldRow label={t('settings.tools.maxSteps')} desc={t('settings.tools.maxStepsDesc')} changed={changed(c => c.tools.maxIterations)} path="tools.maxIterations" error={errorFor(problems, 'tools.maxIterations')}>
+          <NumberField value={tools.maxIterations as number} label={t('settings.tools.maxSteps')} unit={t('settings.unit.times')} min={0} max={100} onChange={v => v !== undefined && setTools({ maxIterations: v })} />
+        </FieldRow>
+      </div>
+
+      <div className="set-rows">
         <SubTitle>{t('settings.tools.shellTitle')}</SubTitle>
         <FieldRow label={t('settings.tools.shellEnabled')} changed={changed(c => c.tools.shell.enabled)} path="tools.shell.enabled">
           <SegField value={Boolean(shell.enabled)} label={t('settings.tools.shellEnabled')} options={[{ value: true, label: t('settings.tools.use') }, { value: false, label: t('settings.tools.noUse') }]} onChange={v => setShell({ enabled: v })} />
