@@ -10,6 +10,7 @@ import { decodeText, fetchPublic, pageUrl, RetrievalFailure } from '../web/publi
 import { searchDuckDuckGo, SearchFailure, searchSearxng, SearchThrottle, type SearchHit } from '../web/search.ts';
 
 const PAGE_CHARS = 20_000;
+const SEARCH_BLOCK_LIMIT = 2;
 
 const sharedThrottle = new SearchThrottle();
 
@@ -94,6 +95,8 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
     const w = ctx.config.tools.web;
     const language = languageOf(ctx.config);
     const limit = input.max_results ?? 5;
+    // 自動アクセスの判定で続けて止められたら、この実行のあいだは通信しない（同じ失敗でステップを使い切らせない）
+    if ((ctx.searchBlocks ?? 0) >= SEARCH_BLOCK_LIMIT) return { content: toolText(language, 'web.search_unavailable'), isError: true };
     try {
       const wait = web(ctx).throttle.take(w.maxSearchesPerHour);
       if (wait) await new Promise<void>((resolve, reject) => {
@@ -103,6 +106,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
       const hits: SearchHit[] = w.search === 'searxng'
         ? await searchSearxng(w.searxngUrl, input.query, { limit, language: w.region.split('-')[0] ?? '', signal: ctx.signal, fetch: web(ctx).fetch })
         : await searchDuckDuckGo(input.query, { limit, region: w.region, signal: ctx.signal, network: web(ctx).network });
+      ctx.searchBlocks = 0;
       if (!hits.length) return { content: toolText(language, 'web.no_hits', { query: input.query }) };
       return {
         content: [
@@ -113,6 +117,14 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
           '>>>',
         ].join('\n'),
       };
-    } catch (error) { return failure(error, language); }
+    } catch (error) {
+      if (error instanceof SearchFailure && error.key === 'search.blocked') {
+        ctx.searchBlocks = (ctx.searchBlocks ?? 0) + 1;
+        if (ctx.searchBlocks === SEARCH_BLOCK_LIMIT) {
+          ctx.services?.notify?.({ kind: 'info', title: toolText(language, 'web.search_blocked_title'), body: toolText(language, 'web.search_blocked_body'), link: '#/settings', dedupKey: 'search-blocked' });
+        }
+      } else ctx.searchBlocks = 0;
+      return failure(error, language);
+    }
   },
 };

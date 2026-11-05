@@ -140,7 +140,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   let output: ToolOutput;
   try { output = await tool.execute(args, ctx, { approvedOnce, ...(approvedOnce && first ? { check: first } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
-  if (tool.effect === 'network') { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
+  // 外から読んだ印は、中身を読めたときだけ付ける（通信に失敗した呼び出しは、何も読んでいない）
+  if (tool.effect === 'network' && !output.isError) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 
   // ── 実行後フック（記録用。結果は変えない） ──
   for (const hook of ctx.config.tools.hooks.postToolUse) {

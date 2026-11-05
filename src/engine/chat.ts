@@ -58,6 +58,7 @@ export interface ChatEngineDeps {
   curiosity?: CuriosityStore;
   skills?: SkillStore;
   web?: NonNullable<ToolContext['services']>['web'];
+  notify?: NonNullable<ToolContext['services']>['notify'];
   log?: (line: string) => void;
   now?: () => Date;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -323,7 +324,7 @@ export class ChatEngine {
       runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: defaultWorkspace(policy, d.paths),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, emit: e => d.bus.publish(e) } : undefined,
+      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, notify: d.notify, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
       ...(forbid ? { forbiddenTools: forbid } : {}),
     };

@@ -143,6 +143,7 @@ export class App {
       tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, log: this.log,
       web: { network: options.webNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
+      notify: input => this.notifications.notify(input),
       ...(options.now ? { now: () => new Date(now()) } : {}),
     });
     this.worker = new Worker({

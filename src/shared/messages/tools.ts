@@ -63,6 +63,9 @@ const ja = {
   'web.no_link_text': '（文字なし）',
   'web.no_hits': '「{query}」の検索結果はありませんでした。言葉を変えて試してください',
   'web.search_header': '検索: {query}（{engine}）',
+  'web.search_unavailable': 'この実行では検索を使えません（SearXNG を設定すると直ります）',
+  'web.search_blocked_title': '検索が自動アクセスの判定で止められています',
+  'web.search_blocked_body': 'DuckDuckGo の検索が続けて断られました。SearXNG を用意して設定の「道具」に入れると、検索が安定して使えます',
 
   'fetch.too_long': 'URL が長すぎます',
   'fetch.bad_url': 'URL として読めません: {url}',
@@ -203,6 +206,9 @@ const en: Record<keyof typeof ja, string> = {
   'web.no_link_text': '(no text)',
   'web.no_hits': 'There were no search results for "{query}". Try different words',
   'web.search_header': 'Search: {query} ({engine})',
+  'web.search_unavailable': 'Search is unavailable in this run (setting up SearXNG fixes it)',
+  'web.search_blocked_title': 'Search is being stopped by the automated-access check',
+  'web.search_blocked_body': 'DuckDuckGo refused searches several times in a row. Set up SearXNG and enter it under Tools in the settings to make search work reliably',
 
   'fetch.too_long': 'The URL is too long',
   'fetch.bad_url': 'Cannot read this as a URL: {url}',

@@ -133,7 +133,7 @@ function toolCall(name: string, args: unknown): Script {
   };
 }
 
-async function setupApp(t: { after: (fn: () => void) => void }, network: PageNetwork) {
+async function setupApp(t: { after: (fn: () => void) => void }, network: PageNetwork, now?: () => number) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -144,7 +144,7 @@ async function setupApp(t: { after: (fn: () => void) => void }, network: PageNet
   config.tools.shell.approvalTimeoutSec = 10;
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, ...(now ? { now } : {}), adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   const events: RunEvent[] = [];
   app.bus.subscribe(e => events.push(e.event));
@@ -193,4 +193,110 @@ test('web_fetch: ローカルの宛先は実行前に断り、秘密らしい UR
   assert.match(requested.approval.reasons.join(' '), /API キー/u);
   s.app.approvals.decide(requested.approval.id, 'deny');
   await s.app.engine.wait(second.runId);
+});
+
+// ── 6c: 検索の失敗を繰り返さない ──
+
+function scriptedNetwork(...answers: Array<'blocked' | 'ok' | 'error'>): PageNetwork & { gets: string[] } {
+  const gets: string[] = [];
+  return {
+    gets,
+    resolve: async () => ['52.142.124.215'],
+    get: async url => {
+      gets.push(url.href);
+      const answer = answers[gets.length - 1] ?? 'blocked';
+      if (answer === 'ok') return { status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from(DDG) };
+      return { status: answer === 'blocked' ? 202 : 500, contentType: 'text/html', body: Buffer.alloc(0) };
+    },
+  };
+}
+
+// 検索の間隔（1.5 秒）の待ちを実時間で待たないよう、呼ぶたびに 5 秒進む時計を渡す
+const steppingClock = (): (() => number) => { let at = Date.parse('2026-11-05T00:00:00Z'); return () => (at += 5000); };
+const UNAVAILABLE = 'この実行では検索を使えません（SearXNG を設定すると直ります）';
+const toolTexts = (s: Awaited<ReturnType<typeof setupApp>>, conversationId = 'c1') => s.app.conversations.messages(conversationId).filter(m => m.role === 'tool').map(m => m.message.content);
+
+async function chat(s: Awaited<ReturnType<typeof setupApp>>, text: string, conversationId = 'c1') {
+  const outcome = s.app.engine.send(conversationId, text);
+  assert.ok(outcome.ok, JSON.stringify(outcome));
+  return s.app.engine.wait(outcome.runId)!;
+}
+
+test('検索がボット判定で 2 回続けて止められたら、その実行のあいだの web_search は通信せずに決まった返事。次の実行ではまた試す', async t => {
+  const net = scriptedNetwork('blocked', 'blocked', 'blocked');
+  const s = await setupApp(t, net, steppingClock());
+  s.adapter().scripts.push(
+    toolCall('web_search', { query: '一つ目' }), toolCall('web_search', { query: '二つ目' }), toolCall('web_search', { query: '三つ目' }), toolCall('web_search', { query: '四つ目' }), reply('止めました'),
+  );
+  await chat(s, '調べて');
+  assert.equal(net.gets.length, 2, '2 回失敗したら、3 回目以降は通信しない');
+  const texts = toolTexts(s);
+  assert.match(texts[0]!, /自動アクセスと判断/u);
+  assert.match(texts[1]!, /自動アクセスと判断/u);
+  assert.deepEqual(texts.slice(2), [UNAVAILABLE, UNAVAILABLE]);
+  const rows = s.app.db.prepare("SELECT ok FROM tool_calls WHERE tool = 'web_search' ORDER BY created_at, rowid").all() as Array<{ ok: number }>;
+  assert.deepEqual(rows.map(r => r.ok), [0, 0, 0, 0], '失敗として記録する');
+
+  s.adapter().scripts.push(toolCall('web_search', { query: '次の実行' }), reply('もう一度試しました'));
+  await chat(s, 'もう一度');
+  assert.equal(net.gets.length, 3, '実行が変われば、また通信を試す');
+});
+
+test('途中で検索が成功する・別の失敗が挟まると、続けてとは数えない', async t => {
+  const net = scriptedNetwork('blocked', 'ok', 'blocked', 'error', 'blocked', 'blocked');
+  const s = await setupApp(t, net, steppingClock());
+  const queries = ['あ', 'い', 'う', 'え', 'お', 'か', 'き'];
+  s.adapter().scripts.push(...queries.map(query => toolCall('web_search', { query })), reply('終わり'));
+  await chat(s, '調べて');
+  assert.equal(net.gets.length, 6, '成功・別の失敗で数え直し、6 回目で 2 回続けて止められるまでは通信する');
+  const texts = toolTexts(s);
+  assert.equal(texts.length, 7);
+  assert.equal(texts[6], UNAVAILABLE, '2 回続けて止められたあとの 7 回目は通信しない');
+  assert.notEqual(texts[5], UNAVAILABLE);
+});
+
+test('止められたことは、持ち主に 1 日 1 回だけお知らせする（SearXNG を勧める）', async t => {
+  const net = scriptedNetwork('blocked', 'blocked', 'blocked', 'blocked');
+  const s = await setupApp(t, net, steppingClock());
+  s.adapter().scripts.push(toolCall('web_search', { query: 'あ' }), reply('一回目'));
+  await chat(s, '調べて');
+  assert.equal(s.app.notifications.list().length, 0, '1 回の失敗ではお知らせしない');
+  s.adapter().scripts.push(toolCall('web_search', { query: 'い' }), reply('二回目'));
+  await chat(s, '調べて');
+  assert.equal(s.app.notifications.list().length, 0, '別の実行の失敗は、続けてとは数えない');
+  s.adapter().scripts.push(toolCall('web_search', { query: 'う' }), toolCall('web_search', { query: 'え' }), reply('三回目'));
+  await chat(s, '調べて');
+  const [note, ...rest] = s.app.notifications.list();
+  assert.equal(rest.length, 0);
+  assert.match(note!.title, /検索/u);
+  assert.match(note!.body ?? '', /SearXNG/u);
+  assert.equal(note!.link, '#/settings');
+  s.adapter().scripts.push(toolCall('web_search', { query: 'お' }), toolCall('web_search', { query: 'か' }), reply('四回目'));
+  await chat(s, '調べて');
+  assert.equal(s.app.notifications.list().length, 1, '同じお知らせは 1 日に重ねない');
+});
+
+test('失敗した通信の呼び出しは「外を読んだ」印を付けない。成功した検索・fetch のあとは今までどおり確かめる', async t => {
+  const net = scriptedNetwork('blocked', 'ok');
+  const s = await setupApp(t, net, steppingClock());
+  s.adapter().scripts.push(toolCall('web_search', { query: '失敗する検索' }), toolCall('file_write', { path: 'note.md', content: '失敗のあと' }), reply('書きました'));
+  await chat(s, '調べて書いて');
+  assert.equal(s.events.filter(e => e.type === 'approval.requested').length, 0, '失敗した検索のあとの書き込みに、確かめは出ない');
+  assert.equal((s.app.conversations.messages('c1').filter(m => m.role === 'tool').at(0)!.message as { isError?: boolean }).isError, true, '失敗は失敗として返す（印だけ付けない）');
+
+  const failedFetch = await setupApp(t, fakeNetwork({ 'gone.example.com': ['93.184.216.34'] }, {}));
+  failedFetch.adapter().scripts.push(toolCall('web_fetch', { url: 'https://gone.example.com/' }), toolCall('file_write', { path: 'note.md', content: '404 のあと' }), reply('書きました'));
+  await chat(failedFetch, '読んで書いて');
+  assert.equal(failedFetch.events.filter(e => e.type === 'approval.requested').length, 0, '読めなかった fetch のあとも、確かめは出ない');
+
+  const okSearch = await setupApp(t, scriptedNetwork('ok'), steppingClock());
+  okSearch.adapter().scripts.push(toolCall('web_search', { query: '成功する検索' }), toolCall('file_write', { path: 'note.md', content: '成功のあと' }), reply('書けませんでした'));
+  const outcome = okSearch.app.engine.send('c1', '調べて書いて');
+  assert.ok(outcome.ok);
+  for (let i = 0; i < 300 && !okSearch.events.some(e => e.type === 'approval.requested'); i++) await new Promise(r => setTimeout(r, 10));
+  const requested = okSearch.events.find(e => e.type === 'approval.requested') as Extract<RunEvent, { type: 'approval.requested' }> | undefined;
+  assert.ok(requested, '成功した検索のあとの書き込みは、今までどおり確かめる');
+  assert.match(requested.approval.reasons.join(' '), /Web/u);
+  okSearch.app.approvals.decide(requested.approval.id, 'deny');
+  await okSearch.app.engine.wait(outcome.runId);
 });
