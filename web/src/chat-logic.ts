@@ -279,6 +279,21 @@ export function approvalPathKey(path: Pick<ApprovalPathView, 'verdict' | 'mode'>
 // 許可フォルダの中は目立たせず、それ以外（外・拒否・判定できない）は縁取りで目立たせる（デザインどおり）
 export const approvalPathTone = (verdict: ApprovalPathView['verdict']): 'neutral' | 'outline' => (verdict === 'in' ? 'neutral' : 'outline');
 
+// コンテキストの使用量の表示。割合は四捨五入し、1 を超えたら「100%+」（輪は 100% で止める）
+export function contextPercent(ratio: number): { text: string; over: boolean; fraction: number } {
+  const value = Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
+  if (value > 1) return { text: '100%+', over: true, fraction: 1 };
+  return { text: `${Math.round(value * 100)}%`, over: false, fraction: value };
+}
+
+// トークン数を 12.4k / 180k / 1.25M のようにまとめる
+export function compactTokens(n: number): string {
+  const value = Number.isFinite(n) && n > 0 ? n : 0;
+  if (value < 1000) return String(Math.round(value));
+  if (value >= 999_950) return `${Number((Math.round(value / 10_000) / 100).toFixed(2))}M`;
+  return `${Number((Math.round(value / 100) / 10).toFixed(1))}k`;
+}
+
 export function approvalFraction(expiresAt: number, now: number, totalMs: number): number {
   if (!(totalMs > 0)) return 0;
   return Math.min(1, Math.max(0, (expiresAt - now) / totalMs));

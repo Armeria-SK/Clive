@@ -158,6 +158,12 @@
 .chat-model-chip svg { flex: none; }
 .chat-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 12px; }
 .chat-tools-fill { flex: 1; }
+.chat-ctx { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--color-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; cursor: default; }
+.chat-ctx svg { flex: none; }
+.chat-ctx-track { fill: none; stroke: color-mix(in srgb, var(--color-text) 14%, transparent); stroke-width: 2.4; }
+.chat-ctx-fill { fill: none; stroke: color-mix(in srgb, var(--color-text) 55%, transparent); stroke-width: 2.4; stroke-linecap: round; transition: stroke-dasharray .4s cubic-bezier(.16, 1, .3, 1); }
+.chat-ctx.over { color: var(--color-accent-text); }
+.chat-ctx.over .chat-ctx-fill { stroke: var(--color-accent); }
 .chat-hint { overflow: hidden; text-overflow: ellipsis; color: var(--color-text-muted-faint); font-size: 11.5px; white-space: nowrap; }
 .shell:not([data-mode="wide"]) .chat-hint { display: none; }
 

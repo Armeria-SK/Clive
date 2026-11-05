@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type Approval, type Message, type ModelView, type Profile, type UploadView } from './api.ts';
+import { api, ApiError, type Approval, type ContextUsage, type Message, type ModelView, type Profile, type UploadView } from './api.ts';
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
@@ -38,6 +38,7 @@ interface Props {
   conversationId: string | null;
   profile: Profile | null;
   modelName: string | null;
+  usage: ContextUsage | null;
   drafts: Draft[];
   runStarts: Record<string, number>;
   notices: RunNotice[];
@@ -81,7 +82,7 @@ function noteIcon(notice: RunNotice): IconName {
   return notice.code === 'retrying' ? 'clock' : 'alert';
 }
 
-export function Chat({ conversationId, profile, modelName, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
+export function Chat({ conversationId, profile, modelName, usage, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
   const t = useT();
   const [messages, setMessages] = useState<Message[]>([]);
   const [title, setTitle] = useState<string | null>(null);
@@ -331,7 +332,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
           <ApprovalDock approvals={approvals} />
           <Composer
             textareaRef={textarea} fileInputRef={fileInput} input={input} attached={attached} uploading={uploading} sending={sending} generating={Boolean(draft)}
-            approvalId={frontApprovalId} assistantName={assistantName} modelName={modelName}
+            approvalId={frontApprovalId} assistantName={assistantName} modelName={modelName} usage={usage}
             onInput={setInput} onAttach={files => void attach(files)} onDetach={id => setAttached(list => list.filter(a => a.id !== id))}
             onSend={() => void send()} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
           />

@@ -223,3 +223,23 @@ test('承認を待っている間に止めたら、実行せずに中止する',
   assert.equal(s.app.approvals.pending().length, 0);
   assert.equal(existsSync(join(s.paths.workspace, '.git')), false);
 });
+
+test('使用量: 道具の仕様と道具の往復も数に入り、次の送信の見積もり（est_prompt_tokens）と合う。道具を渡さないモデルでは小さくなる', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(toolCall('file_write', { path: 'hello.md', content: 'やあ' }), reply('書きました'), reply('二つ目の返事'));
+  assert.ok((await (await s.send('hello.md を作って')).done).ok);
+  const next = s.app.engine.send('c1', '次の質問');
+  assert.ok(next.ok);
+  const usage = s.app.engine.contextUsage('c1');
+  assert.ok(usage.ok);
+  await s.app.engine.wait(next.runId);
+  assert.equal(usage.tokens, s.app.runs.get(next.runId)!.est_prompt_tokens, '道具の往復（assistant の呼び出しと tool の結果）と道具の仕様まで同じ組み立て');
+  const calls = s.adapter().calls;
+  assert.ok(calls.at(-1)!.tools.length > 0 && calls.at(-1)!.messages.some(m => m.role === 'tool'));
+
+  const bare = await setup(t, { maxTools: 0 });
+  const withoutTools = bare.app.engine.contextUsage('fresh');
+  const withTools = s.app.engine.contextUsage('fresh');
+  assert.ok(withoutTools.ok && withTools.ok);
+  assert.ok(withTools.tokens - withoutTools.tokens > 500, `道具の仕様の分が増える（${withTools.tokens} と ${withoutTools.tokens}）`);
+});

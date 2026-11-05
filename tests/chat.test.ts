@@ -3,7 +3,7 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathTone, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathTone, compactTokens, contextPercent, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
   restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
@@ -446,4 +446,22 @@ test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読
   }
   assert.deepEqual(approvalPathTone('in'), 'neutral');
   assert.deepEqual([approvalPathTone('out'), approvalPathTone('deny'), approvalPathTone('unknown')], ['outline', 'outline', 'outline']);
+});
+
+test('使用量の表示: 割合は四捨五入、1 を超えたら「100%+」。数は k / M にまとめる', () => {
+  assert.deepEqual(contextPercent(0), { text: '0%', over: false, fraction: 0 });
+  assert.deepEqual(contextPercent(0.124), { text: '12%', over: false, fraction: 0.124 });
+  assert.deepEqual(contextPercent(0.125), { text: '13%', over: false, fraction: 0.125 });
+  assert.deepEqual(contextPercent(1), { text: '100%', over: false, fraction: 1 });
+  assert.deepEqual(contextPercent(1.004), { text: '100%+', over: true, fraction: 1 }, '1 を超えたら、四捨五入で 100 になっても「100%+」');
+  assert.deepEqual(contextPercent(3.2), { text: '100%+', over: true, fraction: 1 }, '輪は 100% で止め、文字だけ超えたと伝える');
+  assert.deepEqual(contextPercent(Number.NaN), { text: '0%', over: false, fraction: 0 });
+  assert.deepEqual(contextPercent(-1), { text: '0%', over: false, fraction: 0 });
+  assert.deepEqual([0, 999, 1000, 12_400, 180_000, 200_000, 999_949, 999_950, 1_250_000, 2_000_000].map(compactTokens),
+    ['0', '999', '1k', '12.4k', '180k', '200k', '999.9k', '1M', '1.25M', '2M']);
+  assert.deepEqual([compactTokens(-5), compactTokens(Number.NaN), compactTokens(12_449)], ['0', '0', '12.4k']);
+  setLanguagePreference('ja');
+  assert.equal(ja['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k（全体 200k）');
+  assert.equal(en['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k (total 200k)');
+  for (const key of ['context.label', 'context.over'] as const) { assert.ok(ja[key] && en[key], key); assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, key); }
 });

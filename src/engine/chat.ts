@@ -23,7 +23,7 @@ import { ContextOverflow, fitMessages } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
-import { estimateTextTokens } from './tokens.ts';
+import { estimateRequest, estimateTextTokens } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
@@ -75,6 +75,10 @@ export type SendOutcome =
   | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; detail?: ContextDetail; problems?: ModelProblem[] };
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
+
+export type ContextUsageOutcome =
+  | { ok: true; modelId: string; tokens: number; available: number; capacity: number; ratio: number }
+  | (Extract<SendOutcome, { ok: false }> & { errorParams?: MessageParams });
 
 // 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
 // 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
@@ -249,7 +253,7 @@ export class ChatEngine {
     return { usable: [...usable, ...cooling], problems };
   }
 
-  #noUsableModel(problems: ModelProblem[]): SendOutcome {
+  #noUsableModel(problems: ModelProblem[]): Extract<SendOutcome, { ok: false }> {
     const contextProblem = problems.find(p => p.status === 'too_small' || p.status === 'exceeds_model' || p.status === 'unknown');
     const language = languageOf(this.#d.config());
     const lines = problems.map(p => engineText(language, 'problem.line', { id: p.modelId, message: p.message, hintPart: p.hint ? engineText(language, 'problem.hint_suffix', { hint: p.hint }) : '' }));
@@ -398,28 +402,12 @@ export class ChatEngine {
       }
       const adapter = d.registry.get(provider.id);
       if (!adapter) { last = { kind: 'internal', message: engineText(language, 'run.no_provider', { id: provider.id }), code: 'engine.run.no_provider', params: { id: provider.id }, retryable: false, route }; continue; }
-      const toolDefs = this.#toolsFor(model, p.kind, p.forbid);
-      const specs = ToolRegistry.specs(toolDefs);
-      const fallbackMode = model.toolMode === 'json_fallback';
-      const toolNames = new Set(toolDefs.map(t => t.name));
 
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
-        const available = contextAvailable(capacity, model);
-        const conversation = d.conversations.get(p.conversationId);
-        const upto = conversation?.summary_upto ?? 0;
-        const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
-        const config = d.config();
-        const summary = summarySection(conversation?.summary ?? '', language);
-        const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date()), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
-        const system = { frozen: p.snapshot, dynamic };
-        let history = stored.map(m => m.message);
-        if (fallbackMode) history = toJsonFallbackHistory(history, language);
-        if (this.#frozenLanguage(p.conversationId) !== language || this.#lastReplyLanguage(p.conversationId) !== language) history = withReplyReminder(history, language);
-        const apiTools = fallbackMode ? [] : specs;
-        const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
+        const { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid });
+        const toolNames = new Set(toolDefs.map(t => t.name));
         let fitted;
         try {
           fitted = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor });
@@ -488,6 +476,57 @@ export class ChatEngine {
     return { ok: false, cancelled: false, partial: '', failure: last };
   }
 
+  // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
+  // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
+  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined }) {
+    const d = this.#d;
+    const { model } = p;
+    const config = d.config();
+    const language = languageOf(config);
+    const toolDefs = this.#toolsFor(model, p.kind, p.forbid);
+    const specs = ToolRegistry.specs(toolDefs);
+    const fallbackMode = model.toolMode === 'json_fallback';
+    const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
+    const available = contextAvailable(capacity, model);
+    const conversation = d.conversations.get(p.conversationId);
+    const upto = conversation?.summary_upto ?? 0;
+    const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
+    const summary = summarySection(conversation?.summary ?? '', language);
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date()), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
+    const system = { frozen: p.snapshot, dynamic };
+    let history = stored.map(m => m.message);
+    if (fallbackMode) history = toJsonFallbackHistory(history, language);
+    if (this.#frozenLanguage(p.conversationId) !== language || this.#lastReplyLanguage(p.conversationId) !== language) history = withReplyReminder(history, language);
+    const apiTools = fallbackMode ? [] : specs;
+    const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
+    return { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor };
+  }
+
+  // いまの会話を次に送るとき、モデルへ送る量（トークンの見積もり）。古い発言を削る前の全体で、available（削り始める境目）に対する割合 ratio は 1 を超えうる。
+  // 副作用を持たない: 無い会話を作らず、固定の system が無い会話は固定せず（そのとき作るはずの文で数える）、ファイルの版も言語の記録も書かない。
+  contextUsage(conversationId: string, modelId?: string): ContextUsageOutcome {
+    const d = this.#d;
+    const config = d.config();
+    const language = languageOf(config);
+    let model: ModelConfig | undefined;
+    if (modelId !== undefined) {
+      model = config.models.find(m => m.id === modelId);
+      if (!model) return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: engineText(language, 'usage.model_missing', { id: modelId }), errorCode: 'engine.usage.model_missing', errorParams: { id: modelId } };
+      if (!((d.status.get(model.id)?.effective ?? model.contextLength ?? 0) > 0)) {
+        return this.#noUsableModel([{ modelId: model.id, status: 'unknown', message: engineText(language, 'problem.unchecked'), messageCode: 'engine.problem.unchecked' }]);
+      }
+    } else {
+      const chain = this.#chain('chat');
+      model = chain.usable.map(r => r.model).find(m => (d.status.get(m.id)?.effective ?? m.contextLength ?? 0) > 0);
+      if (!model) return this.#noUsableModel(chain.problems);
+    }
+    const existing = d.conversations.get(conversationId);
+    const snapshot = existing?.snapshot ?? this.#previewSnapshot(language);
+    const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat' });
+    const { tokens } = estimateRequest(`${built.system.frozen}\n${built.system.dynamic}`, built.history, built.apiTools, built.factor);
+    return { ok: true, modelId: model.id, tokens, available: built.available, capacity: built.capacity, ratio: tokens / built.available };
+  }
+
   #finishCancelled(runId: string, conversationId: string, counters: { attempts: number; iterations: number; toolCalls: number }, route: Route, partial: string): EngineResult {
     const d = this.#d;
     const language = languageOf(d.config());
@@ -541,13 +580,21 @@ export class ChatEngine {
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
-    const snapshot = buildSnapshot(d.paths, {
-      ...(d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
-      ...(d.skills ? { skills: d.skills.index(language) } : {}),
-    }, language);
+    const snapshot = this.#buildSnapshotText(language);
     if (d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash)) d.kv.set(snapshotLanguageKey(conversationId), language);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
+
+  // 会話の始めに固定する system の文。作るだけで、何も書かない
+  #buildSnapshotText(language: Language) {
+    const d = this.#d;
+    return buildSnapshot(d.paths, {
+      ...(d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
+      ...(d.skills ? { skills: d.skills.index(language) } : {}),
+    }, language);
+  }
+
+  #previewSnapshot(language: Language): string { return this.#buildSnapshotText(language).text; }
 
   #checkTruncation(runId: string, conversationId: string, model: ModelConfig, estimate: { raw: number; tokens: number }, usage: Usage, capacity: number, flags: string[]): void {
     const d = this.#d;

@@ -332,3 +332,44 @@ test('API: 承認の札の paths は、承認の一覧・会話・タスクの�
   assert.deepEqual(Object.keys(chat[0]).sort(), Object.keys(detail[0]).sort(), '会話の応答とタスクの詳細は同じ項目を持つ');
   s.app.approvals.cancelAll();
 });
+
+test('API: GET /api/conversations/:id/context は使用量を返す。無い会話でも会話を作らず、指定のモデルが設定に無ければ 404、使えるモデルが無ければ 409', async t => {
+  const s = await startApp(t, [
+    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false },
+    { id: 'big', provider: 'fake', model: 'y', contextLength: 131072, minContext: 4096, maxOutputTokens: 2048, toolMode: 'native', vision: false },
+  ]);
+  const get = async (path: string) => { const res = await s.api(path); return { status: res.status, body: (await res.json()) as any }; };
+  s.app.conversations.create({ id: 'chat1', title: '会話' });
+  s.app.conversations.append('chat1', { role: 'user', content: 'こんにちは' });
+  const known = await get('/api/conversations/chat1/context');
+  assert.equal(known.status, 200);
+  assert.deepEqual(Object.keys(known.body).sort(), ['available', 'capacity', 'modelId', 'ratio', 'tokens']);
+  assert.deepEqual([known.body.modelId, known.body.capacity, known.body.available], ['m', 65536, Math.floor(65536 * 0.95) - 1024]);
+  assert.equal(known.body.ratio, known.body.tokens / known.body.available);
+
+  const before = (s.app.db.prepare('SELECT COUNT(*) AS n FROM conversations').get() as { n: number }).n;
+  const ghost = await get('/api/conversations/not-created-yet/context');
+  assert.equal(ghost.status, 200, 'まだ無い会話も、そのとき作る system で数える');
+  assert.ok(ghost.body.tokens > 0 && ghost.body.tokens < known.body.tokens + 1000);
+  assert.equal(s.app.conversations.get('not-created-yet'), undefined);
+  assert.equal((s.app.db.prepare('SELECT COUNT(*) AS n FROM conversations').get() as { n: number }).n, before, '会話を作らない');
+
+  const picked = await get('/api/conversations/chat1/context?modelId=big');
+  assert.deepEqual([picked.status, picked.body.modelId, picked.body.capacity], [200, 'big', 131072]);
+  const missing = await get('/api/conversations/chat1/context?modelId=nope');
+  assert.equal(missing.status, 404);
+  assert.deepEqual([missing.body.errorCode, missing.body.errorParams], ['engine.usage.model_missing', { id: 'nope' }]);
+
+  s.app.conversations.create({ id: 'task-conv', kind: 'task', title: 'タスクの会話' });
+  const task = await get('/api/conversations/task-conv/context');
+  assert.deepEqual([task.status, task.body.code], [409, 'http.not_chat_conversation']);
+
+  const none = await startApp(t, [{ id: 'tiny', provider: 'fake', model: 'z', contextLength: 4096, minContext: 4096, maxOutputTokens: 512, toolMode: 'native', vision: false }]);
+  const refused = await (await none.api('/api/conversations/c1/context')).json() as any;
+  assert.equal(refused.errorCode, 'engine.no_usable');
+  assert.equal(refused.problems.length, 1);
+  const noModels = await startApp(t, []);
+  const empty = await noModels.api('/api/conversations/c1/context');
+  assert.equal(empty.status, 409);
+  assert.deepEqual(((await empty.json()) as any).problems, []);
+});

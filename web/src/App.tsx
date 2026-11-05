@@ -5,6 +5,7 @@ import { presenceOf } from './avatar.ts';
 import { Chat, type ConversationChange, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
 import { useEscapeLayer, useExit } from './hooks.ts';
+import { useContextUsage } from './use-context-usage.ts';
 import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
@@ -62,6 +63,7 @@ export function App() {
   const [waiting, setWaiting] = useState<Set<string>>(new Set());
   const [taskRevision, setTaskRevision] = useState(0);
   const [runRevision, setRunRevision] = useState(0);
+  const [endRevision, setEndRevision] = useState(0);
   const [notificationRevision, setNotificationRevision] = useState(0);
   const [memoryRevision, setMemoryRevision] = useState(0);
   const [celebrating, setCelebrating] = useState(false);
@@ -233,6 +235,7 @@ export function App() {
 
   const draftsRef = useRef(drafts); draftsRef.current = drafts;
   const currentRef = useRef(current); currentRef.current = current;
+  const contextUsage = useContextUsage(current, endRevision);
   const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
   const workerRef = useRef(worker); workerRef.current = worker;
   const runContext = (): RunContext => ({ taskConversations: taskConversations.current, running: workerRef.current?.running ?? null });
@@ -321,6 +324,7 @@ export function App() {
         setDrafts(ds => ds.filter(d => d.runId !== e.runId));
         setRunStarts(({ [e.runId]: _ended, ...rest }) => rest);
         setRunRevision(n => n + 1);
+        setEndRevision(n => n + 1);
         bump(e.conversationId);
         refreshList();
         refreshWorker();
@@ -477,6 +481,7 @@ export function App() {
                 conversationId={current}
                 profile={profile}
                 modelName={modelName}
+                usage={contextUsage}
                 drafts={drafts}
                 runStarts={runStarts}
                 notices={current ? notices[current] ?? [] : []}
@@ -509,7 +514,7 @@ export function App() {
       {!narrow && (
         <StatusBar
           connected={connected} worker={worker} runStartedAt={runningId ? runStarts[runningId] : undefined} approvals={approvals.length}
-          modelName={modelName} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
+          modelName={modelName} usage={shown.page === 'chat' ? contextUsage : null} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
           onOpenApproval={openApproval} onOpenNotifications={toggleNotifications} inert={settingsCovers}
         />
       )}

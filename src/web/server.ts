@@ -117,6 +117,16 @@ export function createWebServer(app: App): WebServer {
       approvals: app.approvals.pending().filter(a => a.conversationId === id).map(approvalWire),
     });
   });
+  // 次に送るときの量。何も書かない（まだ無い会話を作らず、system も固定しない）
+  router.add('GET', '/api/conversations/:id/context', ({ res, params, url }) => {
+    const id = params[0]!;
+    const existing = app.conversations.get(id);
+    if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
+    const outcome = app.engine.contextUsage(id, url.searchParams.get('modelId') || undefined);
+    if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
+    const { ok: _ok, ...usage } = outcome;
+    sendJson(res, 200, usage);
+  });
   router.add('POST', '/api/conversations/:id/messages', async ({ req, res, params }) => {
     const id = params[0]!;
     const body = requireObject(await readJson(req));

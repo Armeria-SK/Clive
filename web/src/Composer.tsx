@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, type KeyboardEvent, type RefObject } from 'react';
-import type { UploadView } from './api.ts';
-import { slashMatches, type SlashCommand } from './chat-logic.ts';
+import type { ContextUsage, UploadView } from './api.ts';
+import { compactTokens, contextPercent, slashMatches, type SlashCommand } from './chat-logic.ts';
 import { useT } from './i18n/index.ts';
 import { Icon } from './icons.tsx';
 import { isComposing } from './keys.ts';
@@ -19,6 +19,7 @@ interface Props {
   approvalId: string | null;
   assistantName: string;
   modelName: string | null;
+  usage: ContextUsage | null;
   onInput: (value: string) => void;
   onAttach: (files: FileList | null) => void;
   onDetach: (id: string) => void;
@@ -27,6 +28,24 @@ interface Props {
   onApproveOnce: (approvalId: string) => void;
   onSlash: (command: SlashCommand) => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
+}
+
+// 入力欄の右の、コンテキストの使用量の輪と割合。1 を超えたら「100%+」にして、古い部分が要約されると添える
+function ContextMeter({ usage }: { usage: ContextUsage }) {
+  const t = useT();
+  const { text, over, fraction } = contextPercent(usage.ratio);
+  const tip = `${t('context.tip', compactTokens(usage.tokens), compactTokens(usage.available), compactTokens(usage.capacity))}${over ? ` · ${t('context.over')}` : ''}`;
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  return (
+    <span className={`chat-ctx${over ? ' over' : ''}`} data-tip={tip} role="img" aria-label={`${t('context.label')}: ${text}. ${tip}`}>
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <circle className="chat-ctx-track" cx="9" cy="9" r={radius} />
+        <circle className="chat-ctx-fill" cx="9" cy="9" r={radius} strokeDasharray={`${circumference * fraction} ${circumference}`} transform="rotate(-90 9 9)" />
+      </svg>
+      <span className="chat-ctx-text">{text}</span>
+    </span>
+  );
 }
 
 export function Composer(props: Props) {
@@ -117,6 +136,7 @@ export function Composer(props: Props) {
             </span>
           )}
           <span className="chat-tools-fill" />
+          {props.usage && <ContextMeter usage={props.usage} />}
           <span className="chat-hint">{hint}</span>
           {generating
             ? (
