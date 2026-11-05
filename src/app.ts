@@ -170,7 +170,7 @@ export class App {
     this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));
     this.skills.onDraft = draft => {
-      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: '#/review', dedupKey: `skill-draft:${draft.id}` });
+      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
       // 道具を多く使った重い会話の後に振り返る
