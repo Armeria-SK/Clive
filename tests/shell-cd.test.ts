@@ -124,3 +124,17 @@ test('cd で動いた先にだけある守る場所への相対パスの書き�
   assert.equal(run('cd . && echo x > a.md').decision, 'allow');
   assert.equal(run('echo x > a.md').decision, 'allow');
 });
+
+test('git push の宛先の名前は、cd で動いた先のリポジトリの設定で調べる。いられるリポジトリのどれかに無い名前は今回だけ', t => {
+  const f = fixture(t);
+  mkdirSync(join(f.ws, 'rem'), { recursive: true });
+  gitDir(join(f.ws, 'rem'), `${PLAIN}[remote "origin"]\n\turl = https://example.com/a.git\n`);
+  assert.equal(f.run('cd rem && git push origin main').decision, 'ask');
+  assert.equal(f.run('cd rem && git push origin main').onceOnly, false);
+  assert.equal(f.run('git -C rem push origin main').onceOnly, false);
+  for (const c of ['cd rem && git push victim', 'git -C rem push victim', 'cd rem && git push upstream main', 'cd rem && cd ../ok && git push origin main', 'cd ok && git push origin main']) {
+    assert.equal(once(f.run(c)), true, c);
+    assert.match(f.run(c).reasons.join(), /remote の名前ではありません/u, c);
+  }
+  assert.equal(once(f.run('cd rem; Set-Location ../ok; git push origin main', 'powershell')), true);
+});

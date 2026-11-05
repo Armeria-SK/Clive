@@ -218,8 +218,30 @@ export function findGitDir(start: string): Found | null {
   return { gitDir: dir, commonDir: dir, broken: true };
 }
 
+// push の宛先に使える名前: 設定に remote.<名前>.url があるもの（名前にドットがあってもよい）。無い名前は、git がフォルダ・URL として扱い、そのフォルダのフックを動かす
+function remoteNames(entries: readonly ConfigEntry[]): string[] {
+  const names: string[] = [];
+  for (const { key } of entries) {
+    const parts = key.split('.');
+    if (parts[0] === 'remote' && parts.length >= 3 && parts.at(-1) === 'url') {
+      const name = parts.slice(1, -1).join('.');
+      if (!names.includes(name)) names.push(name);
+    }
+  }
+  return names;
+}
+
+// ブランチの既定の宛先（branch.<名前>.remote・pushremote）が、remote の名前か . でなければ、フォルダを指す（push がそのフォルダのフックを動かす）。ふつうでない項目として返す
+function danglingRemote(entries: readonly ConfigEntry[], remotes: readonly string[]): string | null {
+  for (const { key, value } of entries) {
+    const parts = key.split('.');
+    if (parts[0] === 'branch' && parts.length >= 3 && (parts.at(-1) === 'remote' || parts.at(-1) === 'pushremote') && value.trim() !== '.' && !remotes.includes(value.trim())) return `${key} = ${value.slice(0, 40)}`;
+  }
+  return null;
+}
+
 export function inspectRepo(start: string): RepoInfo {
-  const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false };
+  const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, remotes: [] };
   const found = findGitDir(start);
   if (!found) return none;
   if (found.broken) return { ...none, found: true, unreadable: true };
@@ -236,11 +258,12 @@ export function inspectRepo(start: string): RepoInfo {
       entries.push(...parsed);
     } catch { return { ...none, found: true, unreadable: true }; }
   }
-  const bad = unusualKey(entries);
+  const remotes = remoteNames(entries);
+  const bad = unusualKey(entries) ?? danglingRemote(entries, remotes);
   let hooksFiles = false;
   try { hooksFiles = readdirSync(join(commonDir, 'hooks')).some(name => !name.endsWith('.sample')); } catch { /* hooks フォルダが無い */ }
   return {
-    found: true, configOk: bad === null, badKey: bad ?? '', unreadable: false,
+    found: true, configOk: bad === null, badKey: bad ?? '', unreadable: false, remotes,
     hooksPath: entries.some(e => e.key === 'core.hookspath'), hooksFiles,
   };
 }

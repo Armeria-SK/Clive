@@ -201,9 +201,11 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     track.cwd = e.path;
     track.cwds.push(e.path);
   };
-  const unresolvedRepo = (badKey: string): RepoInfo => ({ found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false });
+  const unresolvedRepo = (badKey: string): RepoInfo => ({ found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false, remotes: [] });
   const mergeRepos = (infos: readonly RepoInfo[]): RepoInfo => infos.find(i => i.unreadable) ?? infos.find(i => !i.configOk) ?? {
     found: infos.some(i => i.found), configOk: true, badKey: '', unreadable: false, hooksPath: infos.some(i => i.hooksPath), hooksFiles: infos.some(i => i.hooksFiles),
+    // 宛先の名前は、見つかったすべてのリポジトリにあるものだけ（どれか 1 つでも無ければ、そこでは git がフォルダとして扱う）
+    remotes: infos.filter(i => i.found).reduce<readonly string[] | null>((common, i) => (common === null ? i.remotes : common.filter(n => i.remotes.includes(n))), null) ?? [],
   };
   const repoFor = (dashC: string | undefined): RepoInfo => {
     if (!seen.known) return unresolvedRepo('cwd');

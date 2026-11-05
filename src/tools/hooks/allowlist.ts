@@ -136,5 +136,5 @@ export function classifyStatements(command: string, ctx: MatchCtx): Classified {
   return { level: results.reduce<Level>((l, r) => worstLevel(l, r.level), 'allow'), results, statements: lexed.statements };
 }
 
-export const noRepo = (): RepoInfo => ({ found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false });
+export const noRepo = (): RepoInfo => ({ found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, remotes: [] });
 export type { Word };

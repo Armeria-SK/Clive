@@ -274,6 +274,25 @@ test('git: 前に置ける引数・サブコマンドごとの扱い', () => {
   assert.deepEqual(wrong, []);
 });
 
+// 審査の指摘（深い審査）: push の宛先が、このリポジトリの設定に無い名前だと、git はそれをフォルダ（や URL）として扱い、そのフォルダのフックを動かす。設定にある名前だけを通す
+test('git push の宛先は、このリポジトリの設定にある remote の名前だけ。無い名前（フォルダ名になりうる）は今回だけ', () => {
+  const found = (remotes: string[]) => ({ repo: repo({ remotes }) });
+  const level = (c: string, remotes: string[]) => levelOf(c, 'bash', found(remotes));
+  assert.equal(level('git push origin main', ['origin']), 'ask');
+  assert.equal(level('git push -u origin main', ['origin', 'upstream']), 'ask');
+  assert.equal(level('git push upstream', ['origin', 'upstream']), 'ask');
+  assert.equal(level('git push', ['origin']), 'ask', '宛先なしは、設定の既定の宛先');
+  for (const c of ['git push victim', 'git push victim main', 'git push origin2 main', 'git push Origin']) assert.equal(level(c, ['origin']), 'once', c);
+  assert.equal(level('git push origin', []), 'once', 'remote が 1 つも無いなら、どの名前もフォルダ');
+  const keys = classify('git push victim', 'bash', found(['origin'])).results.flatMap(r => r.reasons.map(x => `${x.level}:${x.key}:${x.exempt}`));
+  assert.equal(keys.includes('once:list.git_remote:false'), true, keys.join());
+  // リポジトリが見つからないときは、git が先に失敗する（宛先を使わない）ので、これまでどおり
+  assert.equal(levelOf('git push origin main'), 'ask');
+  assert.equal(levelOf('git push victim', 'bash', { repo: repo({ found: false }) }), 'ask');
+  // 名前に見えないもの（フォルダ・URL）は、これまでどおり今回だけ
+  for (const c of ['git push ../victim', 'git push ./v', 'git push /abs/v', 'git push https://x/y.git', 'git push "ext::sh -c x" main', 'git push $x']) assert.equal(level(c, ['origin']), 'once', c);
+});
+
 test('git の remote の URL に、コードを動かす書き方（ext::）は押し込めない（push の宛先）', () => {
   assert.equal(levelOf('git push "ext::sh -c x" main'), 'once');
   assert.equal(levelOf('git push origin'), 'ask');

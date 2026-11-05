@@ -166,6 +166,8 @@ function push(rest: Word[], acc: Acc, ctx: MatchCtx, repo: ReturnType<MatchCtx['
   const p = parseGnu(spec('push', PUSH_FLAGS), rest, acc, ctx);
   const [remote, ...refs] = p.pos;
   if (remote && (remote.dynamic || !REMOTE_NAME.test(remote.text))) acc.add('once', 'list.form', { cmd: 'git push', detail: remote.text }, true);
+  // 設定に無い名前は、git がフォルダとして扱い、そのフォルダのフックを動かす（リポジトリが見つからないときは、git が先に失敗する）
+  else if (remote && repo.found && !repo.remotes.includes(remote.text)) acc.add('once', 'list.git_remote', { remote: remote.text }, false);
   for (const r of refs) if (r.dynamic || !/^[A-Za-z0-9_./:+@{}~^-]+$/u.test(r.text)) acc.add('once', 'list.form', { cmd: 'git push', detail: r.text }, true);
   if (!hooksCheck('push', acc, repo)) return;
   acc.add('ask', 'list.git_push', {}, false);

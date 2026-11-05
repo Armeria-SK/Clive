@@ -389,3 +389,43 @@ test('実機（Windows PowerShell 5.1・制限モード）: 引用符つきの�
   }
   assert.deepEqual(files.map(([f]) => readFileSync(join(root, f), 'utf8')), before, 'ファイルが変わった');
 });
+
+// 審査の指摘（深い審査）: `git push victim` の victim が remote の名前でなければ、git はそれをフォルダとして扱い、そのフォルダ（裏のリポジトリ）のフックを動かす。
+// 本物の git で、今回だけの確かめを断れば動かないこと、設定にある remote の名前なら ふつうの確かめ（今回だけにはならない）であることを確かめる
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: remote の名前でない push の宛先は、フックが動くので今回だけの確かめになり、断れば動かない。設定にある名前は今までどおり`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const fwd = (p: string): string => p.replaceAll('\\', '/');
+    const marker = join(root, 'marker');
+    const victim = join(root, 'victim');
+    const gr = join(root, 'gr');
+    spawnSync('git', ['init', '-q', '--bare', victim]);
+    mkdirSync(gr);
+    spawnSync('git', ['init', '-q'], { cwd: gr });
+    writeFileSync(join(gr, 'f.txt'), 'one\n');
+    spawnSync('git', ['add', 'f.txt'], { cwd: gr });
+    spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'one'], { cwd: gr });
+    mkdirSync(join(victim, 'hooks'), { recursive: true });
+    writeFileSync(join(victim, 'hooks', 'pre-receive'), `#!/bin/sh\necho ran > "${fwd(marker)}"\nexit 0\n`, { mode: 0o755 });
+    // 前提: 素の git は、フォルダ名の宛先に push すると、そのフォルダのフックを動かす
+    spawnSync('git', ['push', '-q', '../victim', 'HEAD:refs/heads/probe'], { cwd: gr });
+    assert.equal(existsSync(marker), true, '前提: 本物の git は、宛先のフォルダのフックを動かす');
+    rmSync(marker);
+    spawnSync('git', ['remote', 'add', 'origin', fwd(victim)], { cwd: gr });
+    const ps = shell === 'powershell';
+    for (const command of ps ? ['cd gr; git push ../victim HEAD:refs/heads/x', 'cd gr; git push victim HEAD:refs/heads/x'] : ['cd gr && git push ../victim HEAD:refs/heads/x', 'cd gr && git push victim HEAD:refs/heads/x']) {
+      await expectAsk(s, command);
+      assert.equal(existsSync(marker), false, `${command}: 断ったのに、宛先のフォルダのフックが動いた`);
+    }
+    // 設定にある名前は、ふつうの確かめ（会話の許可で通る。今回だけにはならない）
+    const pending = s.call(ps ? 'cd gr; git push origin HEAD:refs/heads/x' : 'cd gr && git push origin HEAD:refs/heads/x');
+    for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+    const request = s.approvals.pending()[0];
+    assert.ok(request, '承認の依頼が来ていない');
+    assert.equal(request.onceOnly, false, '設定にある名前が今回だけの確かめになった');
+    s.approvals.decide(request.id, 'deny');
+    await pending;
+  });
+}

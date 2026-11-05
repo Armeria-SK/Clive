@@ -26,7 +26,7 @@ function repoWith(t: { after: (fn: () => void) => void }, config: string): strin
 
 test('ふつうの設定のリポジトリは「ふつう」と読む', t => {
   const info = inspectRepo(repoWith(t, PLAIN));
-  assert.deepEqual(info, { found: true, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false });
+  assert.deepEqual(info, { found: true, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, remotes: ['origin'] });
 });
 
 test('コードを動かせる項目がひとつでもあれば、ふつうでないと読む（項目の名前を返す）', t => {
@@ -442,4 +442,20 @@ test('.git ファイル（gitdir:）: 本物の git が使うときだけ、ガ�
     if ((gitUses && !guardOk && !brokenHere) || (!gitUses && guardOk)) wrong.push(`${label}: git は ${gitUses ? 'gd を使う' : '使わない'}、ガードは ${guardOk ? 'gd を使う' : brokenHere ? '読めない' : '上へ'}`);
   }
   assert.deepEqual(wrong, []);
+});
+
+// 審査の指摘（深い審査）: push の宛先に使える remote の名前は、設定の remote.<名前>.url がある名前。ブランチの既定の宛先も、その名前か . のどれか（フォルダを指すと、push がそのフォルダのフックを動かす）
+test('remote の名前: remote.<名前>.url がある名前だけ（名前にドットがあってもよい）。ブランチの既定の宛先が名前でないものは、ふつうでない', t => {
+  const cfg = (extra: string) => `${PLAIN}[remote "my.remote"]\n\turl = ../x\n[remote "fetchonly"]\n\tfetch = +refs/heads/*:refs/remotes/fetchonly/*\n${extra}`;
+  assert.deepEqual(inspectRepo(repoWith(t, cfg(''))).remotes, ['origin', 'my.remote']);
+  assert.deepEqual(inspectRepo(repoWith(t, PLAIN.replace('[remote "origin"]\n\turl = https://example.com/a.git\n', '[remote "origin"]\n'))).remotes, [], 'url が無い remote は、宛先として使えない');
+  assert.deepEqual(inspectRepo(tempDir(t)).remotes, [], 'リポジトリが無ければ空');
+  // ブランチの既定の宛先: remote の名前か . なら、ふつう。それ以外（フォルダ）はふつうでない
+  assert.equal(inspectRepo(repoWith(t, cfg('[branch "b"]\n\tremote = origin\n\tpushremote = my.remote\n'))).configOk, true);
+  assert.equal(inspectRepo(repoWith(t, cfg('[branch "b"]\n\tremote = .\n'))).configOk, true);
+  const dir = inspectRepo(repoWith(t, cfg('[branch "b"]\n\tremote = ../victim\n')));
+  assert.equal(dir.configOk, false);
+  assert.equal(dir.badKey, 'branch.b.remote = ../victim');
+  assert.equal(inspectRepo(repoWith(t, cfg('[branch "b"]\n\tpushremote = victim\n'))).badKey, 'branch.b.pushremote = victim');
+  assert.equal(inspectRepo(repoWith(t, cfg('[branch "b"]\n\tremote = fetchonly\n'))).configOk, false, 'url の無い名前は宛先として使えない');
 });
