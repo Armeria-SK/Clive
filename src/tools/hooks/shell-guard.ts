@@ -272,9 +272,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         continue;
       }
       // copy
-      if (unresolvedWord(use.dest) || !use.dest) { dyn(use.dest); continue; }
-      const dest = (resolveWord(use.dest, base, windows, language) as { path: string }).path;
-      const destIsDir = !use.noTargetDir && (use.dirFlag || use.sources.length > 1 || /[\\/]$/u.test(use.dest.text) || isDirectory(dest));
+      if (use.dest !== null && unresolvedWord(use.dest)) { dyn(use.dest); continue; }
+      // -Destination を付けない Copy-Item・Move-Item は、作業フォルダに入れる（同じ名前なら上書きする。本物の PowerShell 5.1 で確かめた）
+      const dest = use.dest === null ? base : (resolveWord(use.dest, base, windows, language) as { path: string }).path;
+      const destIsDir = use.dest === null || (!use.noTargetDir && (use.dirFlag || use.sources.length > 1 || /[\\/]$/u.test(use.dest.text) || isDirectory(dest)));
       let unknownNames = false;
       const names: string[] = [];
       for (const source of use.sources) {

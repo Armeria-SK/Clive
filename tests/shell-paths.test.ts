@@ -49,12 +49,14 @@ test('Copy-Item・Move-Item・Rename-Item・New-Item: 同じ組み立て（Power
   for (const command of [
     'Copy-Item tmp/SOUL.md -Destination .', 'Copy-Item tmp\\SOUL.md .\\', 'Copy-Item -Path tmp/SOUL.md -Destination .', 'Move-Item tmp/SOUL.md .', 'Copy-Item tmp/x.txt SOUL.md', 'Copy-Item tmp/x.txt skills',
     'Rename-Item notes.md -NewName SOUL.md', 'Rename-Item -Path notes.md -NewName USER.md', 'New-Item -Path . -Name SOUL.md', 'New-Item -Path skills -Name new -ItemType Directory', 'New-Item -Path . -Name $n', 'mkdir skills\\new','mkdir -Path . -Name SOUL.md',
+    'Copy-Item tmp/SOUL.md', 'Copy-Item -Path tmp/SOUL.md', 'cp tmp/SOUL.md', 'copy tmp/SOUL.md', 'Move-Item tmp/SOUL.md', 'Copy-Item tmp\\SOUL.md -Force', 'Copy-Item tmp\\* ', 'Copy-Item -Recurse tmp/.',
     'Copy-Item tmp\\* .', 'Copy-Item tmp/* . -Recurse', 'Copy-Item -Recurse tmp/. .', 'Get-ChildItem tmp | Copy-Item -Destination .', 'Copy-Item $f .', 'Rename-Item notes.md -NewName $n', 'Set-Content -Path skills/a.md x', 'Remove-Item skills -Recurse',
   ]) {
     const v = f.ps(command);
     assert.equal(once(v), true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
   }
   for (const command of [
+    'Copy-Item tmp/x.txt', 'Copy-Item tmp\\nested -Recurse', 'Move-Item tmp/x.txt',
     'Copy-Item tmp/x.txt .', 'Copy-Item tmp/x.txt -Destination docs', 'Copy-Item -Recurse tmp/nested .', 'Move-Item tmp/x.txt notes2.md', 'Rename-Item notes.md -NewName notes2.md', 'New-Item -Path docs -Name b.md',
     'New-Item -ItemType Directory out', 'Copy-Item *.md docs', 'Copy-Item tmp/x.txt docs/y.txt',
     'mkdir out', 'md out2', 'mkdir -Path docs -Name made',

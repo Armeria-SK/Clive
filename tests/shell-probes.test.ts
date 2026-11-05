@@ -52,7 +52,7 @@ const HIGH_BASH = [
 const HIGH_PS = [
   'node --eval=1', 'python -cprint(1)', 'node -r ./p.js -v', 'node --import=./p.mjs', 'python3 -mhttp.server', 'cmd /c put', 'forfiles /c "cmd /c put"', 'tar -xf a.tar', 'tar.exe -I ./p.sh -cf a.tar x',
   'git init --template=./tpl sub', 'git -C sub commit -m x', 'git clone --template=./tpl a b', 'git -C fake log -p', 'git ls-remote --upload-pack=x .', 'git log --output=SOUL.md',
-  'Copy-Item tmp/SOUL.md -Destination .', 'Copy-Item tmp\\SOUL.md .\\', 'Move-Item tmp/SOUL.md .', 'Get-ChildItem *.md | Remove-Item', 'Get-ChildItem tmp | Copy-Item -Destination .', 'Expand-Archive a.zip out',
+  'Copy-Item tmp/SOUL.md -Destination .', 'Copy-Item tmp/SOUL.md', 'Move-Item tmp/SOUL.md', 'copy tmp/SOUL.md', 'Copy-Item tmp\\SOUL.md .\\', 'Move-Item tmp/SOUL.md .', 'Get-ChildItem *.md | Remove-Item', 'Get-ChildItem tmp | Copy-Item -Destination .', 'Expand-Archive a.zip out',
   'pip install .', 'pip install -e .', 'npm install', 'npm install ./pkg', 'Set-Content .git/hooks/pre-commit x', 'Set-Content sub/.git/hooks/pre-commit x',
 ] as const;
 // 止める書き方
