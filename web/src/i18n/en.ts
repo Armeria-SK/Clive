@@ -78,7 +78,6 @@ export const en: Dict = {
   'chat.you': 'You',
   'chat.writing': 'writing',
   'chat.thinking': 'Thinking',
-  'chat.thinkingWith': model => `Thinking · ${model}`,
   'chat.seconds': n => `${n}s`,
   'chat.copy': 'Copy',
   'chat.copied': 'Copied',

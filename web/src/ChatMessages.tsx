@@ -80,9 +80,9 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-interface ReplyProps { profile: Profile | null; text: string; time: number; model: string | null }
+interface ReplyProps { profile: Profile | null; text: string; time: number }
 
-export const AssistantMessage = memo(function AssistantMessage({ profile, text, time, model }: ReplyProps) {
+export const AssistantMessage = memo(function AssistantMessage({ profile, text, time }: ReplyProps) {
   return (
     <div className="chat-reply">
       <ReplyAvatar profile={profile} live={false} />
@@ -90,7 +90,6 @@ export const AssistantMessage = memo(function AssistantMessage({ profile, text, 
         <ReplyHead profile={profile} time={time} live={false} />
         <div className="chat-reply-body"><Markdown text={text} /></div>
         <div className="chat-reply-foot">
-          {model && <span className="chat-model">{model}</span>}
           <CopyButton text={text} />
         </div>
       </div>
@@ -98,7 +97,7 @@ export const AssistantMessage = memo(function AssistantMessage({ profile, text, 
   );
 });
 
-export function LiveReply({ profile, text, time }: Omit<ReplyProps, 'model'>) {
+export function LiveReply({ profile, text, time }: ReplyProps) {
   return (
     <div className="chat-reply chat-live">
       <ReplyAvatar profile={profile} live />
@@ -123,13 +122,13 @@ function ReplyHead({ profile, time, live }: { profile: Profile | null; time: num
 
 const secondsSince = (startedAt: number | null, now: number): number | null => (startedAt === null ? null : Math.max(0, Math.floor((now - startedAt) / 1000)));
 
-export function ThinkingRow({ profile, model, startedAt }: { profile: Profile | null; model: string | null; startedAt: number | null }) {
+export function ThinkingRow({ profile, startedAt }: { profile: Profile | null; startedAt: number | null }) {
   const t = useT();
   const seconds = secondsSince(startedAt, useNow(1000, startedAt !== null));
   return (
     <div className="chat-think">
       <ReplyAvatar profile={profile} live />
-      <span className="chat-shimmer chat-think-text">{model ? t('chat.thinkingWith', model) : t('chat.thinking')}</span>
+      <span className="chat-shimmer chat-think-text">{t('chat.thinking')}</span>
       {seconds !== null && <span className="chat-meta">{t('chat.seconds', seconds)}</span>}
     </div>
   );

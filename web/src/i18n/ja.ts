@@ -75,7 +75,6 @@ export const ja = {
   'chat.you': 'あなた',
   'chat.writing': '書いています',
   'chat.thinking': '考えています',
-  'chat.thinkingWith': (model: string) => `考えています · ${model}`,
   'chat.seconds': (n: number) => `${n} 秒`,
   'chat.copy': 'コピー',
   'chat.copied': 'コピーしました',

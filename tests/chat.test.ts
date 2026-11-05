@@ -3,7 +3,7 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, modelNameOf, renameTitleOf, resolveRunModels,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf,
   restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
@@ -67,21 +67,6 @@ test('runOverflowOf: 途中で収まらなくなった失敗だけ、来た 2 �
   assert.equal(runOverflowOf({ errorKind: 'context_overflow', measured: 18488 }), null, '片方しか無いときは数字の札にしない');
   assert.equal(runOverflowOf({ errorKind: 'provider_error', measured: 1, required: 2 }), null);
   assert.equal(runOverflowOf({}), null);
-});
-
-test('modelNameOf / resolveRunModels: 返事ごとのモデル名は、実行の記録の model を優先し、なければ設定の id から引く', () => {
-  const models = [model('a'), model('b')];
-  assert.equal(modelNameOf(models, 'a'), 'a-name');
-  assert.equal(modelNameOf(models, 'removed'), 'removed', '設定から消えたモデルは id のまま');
-  assert.equal(modelNameOf(models, null), null);
-  const rows = [
-    { id: 'r1', model_id: 'a', model: 'served-name', started_at: 1 },
-    { id: 'r2', model_id: 'b', started_at: 2 },
-    { id: 'r3', model_id: null, model: null, started_at: 3 },
-  ];
-  const { found, missing } = resolveRunModels(rows, ['r1', 'r2', 'r3', 'r-old'], models);
-  assert.deepEqual([...found], [['r1', 'served-name'], ['r2', 'b-name']]);
-  assert.deepEqual(missing, ['r-old'], '記録に無い（500 件より古い）ものだけが missing。終わっていない実行は missing にしない');
 });
 
 test('slashMatches: 先頭の / のあとの 1 語を前方一致で候補にする。rename と archive も入っている', () => {

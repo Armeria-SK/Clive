@@ -3,7 +3,7 @@ import { api, ApiError, type Approval, type Message, type ModelView, type Profil
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, joinsToolRun, modelNameOf, renameTitleOf, resolveRunModels, restartApprovalGate, runOverflowOf, sendFailureOf, toolInputSummary,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, toolInputSummary,
   type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
@@ -92,7 +92,6 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const [attached, setAttached] = useState<UploadView[]>([]);
   const [uploading, setUploading] = useState(false);
   const [models, setModels] = useState<ModelView[]>([]);
-  const [runModels, setRunModels] = useState<ReadonlyMap<string, string>>(new Map());
   const [confirmArchive, setConfirmArchive] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -100,7 +99,6 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const stick = useRef(true);
   const created = useRef<string | null>(null);
   const frontGate = useRef<ApprovalGate>({ id: null, since: 0 });
-  const unresolved = useRef(new Set<string>());
   const seen = useRef(new Set<string>());
   const primed = useRef(false);
   const draft = drafts.find(d => d.conversationId === conversationId);
@@ -121,20 +119,6 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
 
   useEffect(() => { void load(); }, [load, revision]);
   useEffect(() => { void api.models().then(r => setModels(r.models)).catch(() => undefined); }, []);
-
-  const liveRunId = draft?.runId;
-  useEffect(() => {
-    const wanted = [...new Set(messages.flatMap(m => (m.role === 'assistant' && m.runId && m.runId !== liveRunId && !runModels.has(m.runId) && !unresolved.current.has(m.runId) ? [m.runId] : [])))];
-    if (!wanted.length) return undefined;
-    let live = true;
-    void fetchRecentRuns().then(rows => {
-      if (!live) return;
-      const { found, missing } = resolveRunModels(rows, wanted, models);
-      for (const id of missing) unresolved.current.add(id);
-      if (found.size) setRunModels(current => new Map([...current, ...found]));
-    }).catch(() => undefined);
-    return () => { live = false; };
-  }, [messages, liveRunId, models, runModels]);
 
   const lastIsUser = messages.at(-1)?.role === 'user';
   const errorNotice = notices.find(n => n.kind === 'error');
@@ -267,11 +251,6 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
     });
   }
 
-  const replyModel = (runId: string | null): string | null => {
-    if (!runId) return null;
-    if (runId === liveRunId) return models.length ? modelNameOf(models, draft?.modelId) : null;
-    return runModels.get(runId) ?? null;
-  };
   const keys: string[] = [];
   const items: Array<{ key: string; kind: ChatItemKind; node: ReactNode }> = [];
   const push = (key: string, kind: ChatItemKind, node: ReactNode): void => { keys.push(key); items.push({ key, kind, node }); };
@@ -280,13 +259,13 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
     if (m.role === 'tool') push(`m-${m.id}`, 'tool', <ToolMessage message={m} />);
     else if (m.role === 'user') push(`m-${m.id}`, 'user', <UserMessage message={m} />);
     else push(`m-${m.id}`, 'assistant', (
-      <AssistantMessage profile={profile} text={m.text} time={m.createdAt} model={replyModel(m.runId)} />
+      <AssistantMessage profile={profile} text={m.text} time={m.createdAt} />
     ));
   }
   if (draft) {
     if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} />);
     else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} />);
-    else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} model={models.length ? modelNameOf(models, draft.modelId) : null} startedAt={startedAt} />);
+    else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} startedAt={startedAt} />);
   }
   notices.filter(n => n.kind !== 'error').forEach((n, i) => {
     const key = `n-${n.runId}-${i}`;

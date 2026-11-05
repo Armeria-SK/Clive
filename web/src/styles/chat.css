@@ -37,7 +37,6 @@
 .chat-live-label { font-size: 11.5px; color: var(--color-accent-text); }
 .chat-reply-body { font-size: 15px; line-height: 1.82; overflow-wrap: anywhere; }
 .chat-reply-foot { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 11.5px; color: var(--color-text-muted-faint); font-variant-numeric: tabular-nums; }
-.chat-model { font-family: var(--font-mono); font-size: 11px; }
 .chat-copy { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: inherit; cursor: pointer; transition: background-color .14s ease; }
 .chat-copy:hover { background: color-mix(in srgb, var(--color-text) 8%, transparent); color: var(--color-text); transition: none; }
 

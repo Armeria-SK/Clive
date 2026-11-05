@@ -96,24 +96,6 @@ export function runOverflowOf(notice: { errorKind?: string | undefined; measured
 
 export interface ChatRunRow { id: string; model_id: string | null; model?: string | null; started_at: number }
 
-export function modelNameOf(models: readonly ModelView[], modelId: string | null | undefined): string | null {
-  if (!modelId) return null;
-  return models.find(m => m.id === modelId)?.model ?? modelId;
-}
-
-export function resolveRunModels(rows: readonly ChatRunRow[], runIds: readonly string[], models: readonly ModelView[]): { found: Map<string, string>; missing: string[] } {
-  const byId = new Map(rows.map(row => [row.id, row] as const));
-  const found = new Map<string, string>();
-  const missing: string[] = [];
-  for (const id of runIds) {
-    const row = byId.get(id);
-    if (!row) { missing.push(id); continue; }
-    const name = text(row.model) ?? modelNameOf(models, row.model_id);
-    if (name) found.set(id, name);
-  }
-  return { found, missing };
-}
-
 export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
 
 const TOOL_KINDS: ReadonlySet<ChatItemKind> = new Set<ChatItemKind>(['tool', 'run']);
