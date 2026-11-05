@@ -1,10 +1,12 @@
+import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useT } from './i18n/index.ts';
 
 const SAFE_PROTOCOLS = /^(https?:|mailto:|#|\/)/i;
 
-export function Markdown({ text }: { text: string }) {
+// 同じ文なら描き直さない（流れている返事の描き直しを、呼ぶ側が間引けるように）
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const t = useT();
   return (
     <div className="markdown">
@@ -22,4 +24,4 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});

@@ -122,6 +122,12 @@ export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'no
 
 const TOOL_KINDS: ReadonlySet<ChatItemKind> = new Set<ChatItemKind>(['tool', 'run']);
 
+// 流れている返事を描き直す間隔（ミリ秒）。描き直しは文の長さに比例して重く（1000 文字で約 1 ms、5 万文字で約 60 ms）、
+// 断片が届くたびに全文を描き直すと、長い返事の終わりごろには画面がほぼ描き直しだけで埋まる。短い返事は今までどおり届くたびに描く
+export function liveRenderDelay(length: number): number {
+  return length < 3000 ? 0 : Math.min(1000, Math.round(length / 100));
+}
+
 export interface ReplyTurn {
   // この返事の文に、見出し（姿・名前・時刻）を付ける。1 回の返事（同じ runId）の最初の文だけ
   head: boolean;

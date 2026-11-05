@@ -291,6 +291,8 @@
     "file.replaced": "{count} か所を置き換えました: {path}",
     "file.no_dir": "フォルダがありません: {path}",
     "file.list_cut": "[500 件で打ち切りました]",
+    "file.list_skipped_mark": "（中は省略）",
+    "file.list_skipped_note": "[{names} の中は一覧していません（大きいため）。中も見るときは all を true にするか、path にそのフォルダを指定してください]",
     "file.list_empty": "{path}/ は空です",
     "shell.spawn_failed": "シェル（{shell}）を起動できません: {detail}",
     "shell.header": "（{shell}、cwd: {cwd}、終了コード: {code}、{seconds} 秒）",

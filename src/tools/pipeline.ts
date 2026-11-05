@@ -31,11 +31,11 @@ export interface ToolCallOutcome {
   invalidArguments: boolean;
 }
 
-function capOutput(output: ToolOutput, language: Language): ToolOutput {
+function capOutput(output: ToolOutput, language: Language, limit: number): ToolOutput {
   const content = redactSecrets(output.content);
-  if (content.length <= TOOL_OUTPUT_LIMIT) return { ...output, content };
+  if (content.length <= limit) return { ...output, content };
   const note = output.fullRef ? toolText(language, 'pipeline.note_full', { ref: output.fullRef }) : toolText(language, 'pipeline.note_none');
-  return { ...output, content: `${content.slice(0, TOOL_OUTPUT_LIMIT)}\n\n${toolText(language, 'pipeline.truncated', { total: content.length.toLocaleString('en-US'), shown: TOOL_OUTPUT_LIMIT.toLocaleString('en-US'), note })}` };
+  return { ...output, content: `${content.slice(0, limit)}\n\n${toolText(language, 'pipeline.truncated', { total: content.length.toLocaleString('en-US'), shown: limit.toLocaleString('en-US'), note })}` };
 }
 
 const matches = (matcher: string, name: string) => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
@@ -49,7 +49,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   deps.emit({ type: 'tool.call', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, input: shownInput });
 
   const finish = (outcome: ToolCallOutcome, approvalId?: string): ToolCallOutcome => {
-    const output = capOutput(outcome.output, language);
+    const output = capOutput(outcome.output, language, ctx.outputLimit ?? TOOL_OUTPUT_LIMIT);
     deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, ctx.runId, ctx.conversationId, call.name, shownInput, outcome.decision, outcome.decidedBy, approvalId ?? null,

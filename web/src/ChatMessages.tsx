@@ -1,8 +1,8 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { openSetup } from './onboarding.ts';
 import type { Message, Profile } from './api.ts';
 import { Avatar } from './Avatar.tsx';
-import { chatTime, firstLine, toolIcon, type ContextNumbers } from './chat-logic.ts';
+import { chatTime, firstLine, liveRenderDelay, toolIcon, type ContextNumbers } from './chat-logic.ts';
 import { useNow } from './hooks.ts';
 import { formatNumber, useT, type PlainKey } from './i18n/index.ts';
 import { Icon, type IconName } from './icons.tsx';
@@ -106,14 +106,31 @@ export const AssistantMessage = memo(function AssistantMessage({ profile, text, 
   );
 });
 
+// 流れている文を、長さに応じた間隔でしか描き直さない。間隔が過ぎていれば、届いた分をすぐ描く。届かなくなったら、残りを間隔の終わりに描く
+function useThrottledText(text: string): string {
+  const shown = useRef(text);
+  const drawnAt = useRef(0);
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
+  const delay = liveRenderDelay(text.length);
+  const now = typeof performance === 'undefined' ? Date.now() : performance.now();
+  if (delay === 0 || now - drawnAt.current >= delay || !text.startsWith(shown.current)) { shown.current = text; drawnAt.current = now; }
+  useEffect(() => {
+    if (shown.current === text) return;
+    const timer = setTimeout(redraw, Math.max(0, delay - (performance.now() - drawnAt.current)));
+    return () => clearTimeout(timer);
+  }, [text, delay]);
+  return shown.current;
+}
+
 export function LiveReply({ profile, text, time, head }: ReplyProps) {
   const t = useT();
+  const drawn = useThrottledText(text);
   return (
     <div className={`chat-reply chat-live${head ? '' : ' cont'}`}>
       {head ? <ReplyAvatar profile={profile} live /> : <span aria-hidden />}
       <div className="chat-reply-main">
         {head ? <ReplyHead profile={profile} time={time} live /> : <span className="chat-live-label">{t('chat.writing')}</span>}
-        <div className="chat-reply-body"><Markdown text={text} /></div>
+        <div className="chat-reply-body"><Markdown text={drawn} /></div>
       </div>
     </div>
   );

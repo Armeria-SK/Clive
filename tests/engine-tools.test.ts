@@ -133,6 +133,32 @@ test('V1: スクリプトを書いて node で動かす筋道は、中身つき�
   await third.done;
 });
 
+test('道具の結果は、モデルのコンテキストに合わせて切る（小さなコンテキストで、大きな一覧 1 つが入りきらなくならない）', async t => {
+  const small = await setup(t, { contextLength: 16384, minContext: 4096, maxOutputTokens: 1024 });
+  const lines = Array.from({ length: 600 }, (_, i) => `remotion-app/node_modules/@remotion/renderer/dist/esm/file${i}.js`).join('\n');
+  writeFileSync(join(small.paths.workspace, 'listing.txt'), lines);
+  small.adapter().scripts.push(...[1, 2, 3].map(() => toolCall('file_read', { path: 'listing.txt' })), reply('読みました'));
+  const run = await small.send('一覧を読んで');
+  const result = await run.done;
+  assert.ok(result.ok, JSON.stringify(result));
+  const results = small.app.conversations.messages('c1').filter(m => m.role === 'tool').map(m => m.text);
+  assert.equal(results.length, 3);
+  for (const text of results) {
+    assert.ok(text.length < 9100, `16k のモデルでは、1 つの結果を約 8,700 文字までにする: ${text.length}`);
+    assert.match(text, /文字中 8,\d{3} 文字だけを返しました/u);
+  }
+  const last = small.adapter().calls.at(-1)!;
+  assert.ok(last.messages.length >= 7, '3 回分の結果が入っている');
+  assert.equal(small.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), false, '古い発言を削らずに収まる');
+
+  const large = await setup(t, { contextLength: 200_000, minContext: 4096, maxOutputTokens: 4096 });
+  writeFileSync(join(large.paths.workspace, 'listing.txt'), lines.repeat(2));
+  large.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
+  assert.ok((await (await large.send('一覧を読んで')).done).ok);
+  const big = large.app.conversations.messages('c1').find(m => m.role === 'tool')!.text;
+  assert.match(big, /文字中 16,000 文字だけを返しました/u, '大きなコンテキストでは、今までどおり 16,000 文字');
+});
+
 test('本文に書かれたツール呼び出し（<tool_call>）も拾って実行する', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(

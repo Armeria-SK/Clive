@@ -355,6 +355,37 @@ test('V2: 表の抜け道は、道具の事前判定でも承認なしでは通�
   assert.equal((await shellRun.preCheck!({ command: '[IO.File]::WriteAllText("../config.json", "{}")' }, s.ctx)).decision === 'allow', false);
 });
 
+test('file_list: node_modules・.git など大きなフォルダの中は、下の階層を見るときは既定で入らない。all か path に指定したときだけ入る', async t => {
+  const s = setup(t);
+  const put = (rel: string) => { mkdirSync(join(s.paths.workspace, rel, '..'), { recursive: true }); writeFileSync(join(s.paths.workspace, rel), 'x'); };
+  put('package.json'); put('src/index.ts'); put('packages/a/src/a.ts'); put('packages/a/node_modules/dep/index.js');
+  for (let i = 0; i < 200; i++) put(`.git/objects/${String(i).padStart(2, '0')}/obj`);
+  for (let i = 0; i < 200; i++) { put(`node_modules/pkg${i}/index.js`); put(`node_modules/pkg${i}/package.json`); }
+
+  const out = (await s.call('file_list', { depth: 4 })).output.content;
+  assert.match(out, /\npackage\.json\n/u, '本当に見たいものが、500 件の枠に入る');
+  assert.match(out, /\n {2}index\.ts\n/u, 'src の中も出る');
+  assert.match(out, /\n\.git\/ （中は省略）\n/u);
+  assert.match(out, /\nnode_modules\/ （中は省略）\n/u);
+  assert.match(out, / {2}node_modules\/ （中は省略）/u, '深いところの node_modules も入らない');
+  assert.doesNotMatch(out, /pkg0|dep\/|objects/u);
+  assert.match(out, /\[\.git\/, node_modules\/ の中は一覧していません/u);
+  assert.doesNotMatch(out, /500 件で打ち切り/u);
+
+  const shallow = (await s.call('file_list', {})).output.content;
+  assert.doesNotMatch(shallow, /中は省略|一覧していません/u, '1 階層だけ見るときは、これまでどおり（中に入らないので注記もいらない）');
+  assert.match(shallow, /\nnode_modules\/\n/u);
+
+  const inside = (await s.call('file_list', { path: 'node_modules', depth: 2 })).output.content;
+  assert.match(inside, /pkg0\/\n {2}index\.js/u, 'path に指定すれば、そのフォルダの中を一覧する');
+  assert.doesNotMatch(inside, /中は省略/u);
+
+  const all = (await s.call('file_list', { depth: 3, all: true })).output.content;
+  assert.match(all, /objects\//u, 'all なら中も入る');
+  assert.doesNotMatch(all, /中は省略|一覧していません/u);
+  assert.match(all, /500 件で打ち切り/u, '入ると、枠を使い切る');
+});
+
 test('taint: Web や添付の内容を読んだ後は、書き込みも承認制になる', async t => {
   const s = setup(t);
   const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };

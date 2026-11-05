@@ -3,7 +3,7 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
   restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
@@ -191,6 +191,18 @@ test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引
   assert.match(ja['notice.compacted'](4), /^古い発言 4 件を要約しました（原文は残っていて、.*探せます）$/u);
   assert.equal(en['chat.pdfPages'](1), 'PDF, 1 page');
   assert.equal(en['approval.position'](1, 2), '1 / 2');
+});
+
+test('liveRenderDelay: 短い返事は届くたびに描き、長い返事は長さに比例して間引く（上限 1 秒）', () => {
+  assert.equal(liveRenderDelay(0), 0);
+  assert.equal(liveRenderDelay(2999), 0, '3,000 文字までは、これまでどおり届くたびに描く');
+  assert.equal(liveRenderDelay(3000), 30);
+  assert.equal(liveRenderDelay(10_000), 100);
+  assert.equal(liveRenderDelay(50_000), 500);
+  assert.equal(liveRenderDelay(1_000_000), 1000, '上限は 1 秒');
+  const lengths = [3000, 6000, 12_000, 25_000, 50_000, 100_000];
+  const delays = lengths.map(liveRenderDelay);
+  assert.ok(delays.every((d, i) => i === 0 || d >= delays[i - 1]!), '長いほど間隔は広い（縮まない）');
 });
 
 test('replyTurns: 1 回の返事（同じ runId）は見出し 1 つ。中間の文は見出しなしで続き、コピーは最後の文に 1 つ（その回の文を全部まとめる）', () => {

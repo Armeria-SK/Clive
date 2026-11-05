@@ -53,6 +53,8 @@ export interface ToolContext {
     web?: { network?: PageNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
+  // 道具の結果を返せる文字数の上限（モデルのコンテキストに合わせて、エンジンが呼ぶたびに決める）。無ければ 16,000 文字
+  outputLimit?: number | undefined;
   // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）
   forbiddenTools?: ReadonlySet<string> | undefined;
 }

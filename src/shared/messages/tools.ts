@@ -42,6 +42,8 @@ const ja = {
   'file.replaced': '{count} か所を置き換えました: {path}',
   'file.no_dir': 'フォルダがありません: {path}',
   'file.list_cut': '[500 件で打ち切りました]',
+  'file.list_skipped_mark': '（中は省略）',
+  'file.list_skipped_note': '[{names} の中は一覧していません（大きいため）。中も見るときは all を true にするか、path にそのフォルダを指定してください]',
   'file.list_empty': '{path}/ は空です',
 
   'shell.spawn_failed': 'シェル（{shell}）を起動できません: {detail}',
@@ -180,6 +182,8 @@ const en: Record<keyof typeof ja, string> = {
   'file.replaced': 'Replaced {count} occurrence(s): {path}',
   'file.no_dir': 'The folder does not exist: {path}',
   'file.list_cut': '[Cut off at 500 entries]',
+  'file.list_skipped_mark': '(contents skipped)',
+  'file.list_skipped_note': '[The contents of {names} were not listed (they are large). To look inside, set all to true or give that folder as path]',
   'file.list_empty': '{path}/ is empty',
 
   'shell.spawn_failed': 'Cannot start the shell ({shell}): {detail}',

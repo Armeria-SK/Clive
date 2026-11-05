@@ -9,7 +9,7 @@ import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
-import { REVIEW_FORBIDDEN, runToolCall } from '../tools/pipeline.ts';
+import { REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import type { RunKind, TaskControl, ToolContext, ToolDef } from '../tools/types.ts';
@@ -17,7 +17,7 @@ import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import type { RunBus } from './bus.ts';
-import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable } from './context-budget.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolOutputLimit } from './context-budget.ts';
 import { ContextOverflow, fitMessages } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
@@ -357,6 +357,9 @@ export class ChatEngine {
       for (const toolCall of call.toolCalls) {
         if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
         counters.toolCalls++;
+        const toolModel = lastRoute.model;
+        const toolCapacity = d.status.get(toolModel.id)?.effective ?? toolModel.contextLength ?? 0;
+        ctx.outputLimit = toolCapacity > 0 ? toolOutputLimit(contextAvailable(toolCapacity, toolModel), TOOL_OUTPUT_LIMIT) : undefined;
         const outcome = await runToolCall(toolCall, ctx, { registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e) });
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {
