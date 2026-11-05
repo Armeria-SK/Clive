@@ -154,19 +154,19 @@ test('L2・R1.8: 守るファイル・スキルのフォルダ・.git への書�
   for (const command of ['Get-Content skills/a/SKILL.md', 'Get-ChildItem -Force .git', 'cat SOUL.md', 'Select-String foo SOUL.md']) {
     assert.equal(f.ps(command).decision, 'allow', command);
   }
-  for (const command of ['curl -o notes.txt https://example.com/x', 'curl -O https://example.com/notes.txt', 'wget -P sub https://example.com/a.txt', 'curl -o - https://example.com/x', 'wget -O - https://example.com/x']) {
+  for (const command of ['curl -o notes.txt https://example.com/x', 'curl -O https://example.com/notes.txt', 'wget --max-redirect=0 -P sub https://example.com/a.txt', 'curl -o - https://example.com/x', 'wget --max-redirect=0 -O - https://example.com/x']) {
     assert.equal(f.bash(command).decision, 'allow', command);
   }
-  assert.equal(f.ps('iwr https://example.com/x -OutFile sub/a.html').decision, 'allow');
+  assert.equal(f.ps('iwr https://example.com/x -OutFile sub/a.html -MaximumRedirection 0').decision, 'allow');
 });
 
 // ask.curl・ask.powershell・ask.git_push など、中身が文字に見える外への送信は、これまでどおり会話の許可で済ませてよい
 const PLAIN_ASKS_BASH = [
   'curl -X PUT https://example.com/x', 'curl -XPUT https://example.com/x', 'curl -XDELETE https://example.com/x', 'curl -sXPOST https://example.com/x',
   'curl -d@body.json https://example.com/', 'curl --data-binary=@body.json https://example.com/', 'curl --upload-file=x.txt https://example.com/', 'curl --request=DELETE https://example.com/x',
-  'curl -F file=@x.txt https://example.com/', 'curl -sT x.txt https://example.com/', 'wget --post-data=x https://example.com/', 'git push origin main',
+  'curl -F file=@x.txt https://example.com/', 'curl -sT x.txt https://example.com/', 'wget --max-redirect=0 --post-data=x https://example.com/', 'git push origin main',
 ];
-const PLAIN_ASKS_PS = ['Invoke-WebRequest -Method Put https://example.com/x', 'iwr https://example.com -Method:Post', 'iwr https://example.com -Body x', 'Invoke-RestMethod https://example.com -Method Delete'];
+const PLAIN_ASKS_PS = ['Invoke-WebRequest -Method Put https://example.com/x -MaximumRedirection 0', 'iwr https://example.com -Method:Post -MaximumRedirection 0', 'iwr https://example.com -Body x -MaximumRedirection 0', 'Invoke-RestMethod https://example.com -Method Delete -MaximumRedirection 0'];
 
 test('V2: 外への送信の確かめ（R1.9）は、これまでどおり会話の許可を越えない形のまま（onceOnly にしない）。省略した書き方は一覧に無いので今回だけ', t => {
   const f = fixture(t);
@@ -285,7 +285,7 @@ const LEGIT_BASH = [
   'ls', 'ls -la sub', 'cat put.js', 'grep -rn foo .', 'rg fetch put.js', 'git status', 'git log --oneline -5', 'git diff', 'git diff put.js', 'git show HEAD', 'git branch', 'git stash list',
   'git config --get user.name', 'node --version', 'node -v', 'python -V', 'python --version', 'npm ls', 'npm --version', 'npm -v', 'npm view left-pad version', 'pnpm -v', 'go version', 'cargo --version',
   'echo "see put.js"', 'find . -name "*.md"', 'find . -name "*.js"', 'ls *.ts', 'wc -l put.js', 'diff put.js b.js', 'cp put.js b.js', 'mv put.js c.js', 'rm sub/old.js', 'mkdir sub2', 'touch new.js',
-  'curl https://example.com', 'curl -sSL https://example.com/x -o out.txt', 'curl -O https://example.com/notes.txt', 'wget https://example.com/notes.txt', 'wget -O out.txt https://example.com',
+  'curl https://example.com', 'curl -sS https://example.com/x -o out.txt', 'curl -O https://example.com/notes.txt', 'wget --max-redirect=0 https://example.com/notes.txt', 'wget --max-redirect=0 -O out.txt https://example.com',
   'for f in a b; do echo hi; done', 'if [ -f put.js ]; then echo yes; fi', 'echo hi > out.txt', 'echo hi >> out.txt', 'ls 2>&1 | head', 'cat put.js | grep fetch', 'cat put.js | wc -l', 'git diff SOUL.md', 'cat SOUL.md',
   'grep foo SOUL.md', 'LC_ALL=C sort a.txt', 'tar tf a.tgz', 'tar czf a.tgz sub', 'tsc --noEmit', 'sort a.txt | uniq', 'unzip -l a.zip', 'jq .name package.json', 'sed -n 1p put.js', 'head -n 5 put.js',
   'x=5', 'x="a$y"', 'echo $x', 'cd sub && ls',
@@ -294,7 +294,7 @@ const LEGIT_PS = [
   'ls', 'Get-ChildItem -Recurse -Filter *.js', 'cat put.js', 'Get-Content put.js', 'type put.js', 'git status', 'git log --oneline -5', 'git diff', 'git show HEAD', 'git branch', 'rg fetch put.js',
   'node --version', 'node -v', 'python -V', 'npm ls', 'npm --version', 'npm view left-pad version', 'go version', 'cargo --version',
   '[DateTime]::Now', '[int]$x', '$x = 5', '$x = "a" + "b"', '(Get-Date).ToString("yyyy")', 'Get-Date', 'Write-Host hello', 'echo "see put.js"', 'Get-ChildItem -Name', 'Copy-Item put.js b.js', 'Move-Item put.js c.js',
-  'Remove-Item sub/old.js', 'New-Item -ItemType Directory sub2', 'New-Item new.js', 'iwr https://example.com', 'Invoke-WebRequest https://example.com -OutFile page.html', 'curl.exe https://example.com',
+  'Remove-Item sub/old.js', 'New-Item -ItemType Directory sub2', 'New-Item new.js', 'iwr https://example.com -MaximumRedirection 0', 'Invoke-WebRequest https://example.com -OutFile page.html -MaximumRedirection 0', 'curl.exe https://example.com',
   'Get-Process | Sort-Object CPU -Descending | Select-Object -First 5', 'if (Test-Path put.js) { Write-Host yes }', 'if (Test-Path put.js) { Write-Host yes } else { Write-Host no }',
   'Set-Content out.txt hi', 'Add-Content out.txt hi', 'echo hi > out.txt', 'Get-Content put.js | Select-String fetch', 'Get-Content put.js | Measure-Object -Line', 'git diff SOUL.md', 'cat SOUL.md',
   '$env:PATH', '$env:PATH -split ";"', 'tar.exe tf a.tgz', 'Select-String foo put.js', 'Join-Path sub a.txt', 'Test-Path put.js', 'Set-Location sub; Get-ChildItem',

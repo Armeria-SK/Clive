@@ -190,6 +190,8 @@
     "list.protected_write": "守る場所に、書き込み・削除・名前の変更をします（{path}）",
     "list.expand": "展開は、中の名前が守る場所になりえます（{cmd}）",
     "list.lan": "LAN の宛先につなぎます（{host}）",
+    "list.redirect": "転送（リダイレクト）を追うと、この PC の中の宛先（Clive 自身を含む）に飛ばされうるので、確かめます（{cmd}）",
+    "list.header": "{cmd} の {header} ヘッダは、宛先を偽って Clive 自身の画面の API に届かせるのに使えるので、確かめます",
     "list.send": "外へ送る形です（{cmd}）",
     "list.read_dynamic": "読むパスが分かりません（変数や展開: {input}）",
     "list.wild_many": "ワイルドカードに当たるものが多いので、全部は調べきれません（{input}）",

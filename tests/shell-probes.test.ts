@@ -49,11 +49,14 @@ const HIGH_BASH = [
   // 設計の途中で見つけた抜け
   "git ls-remote --upload-pack='touch pwned' .", 'git log --output=SOUL.md',
   // MEDIUM・LOW
+  // 名前では見抜けない宛先: Host ヘッダの偽装・転送
+  'curl -H "Host: 127.0.0.1:7800" https://127.0.0.1.nip.io:7800/api/settings', 'curl -L https://redirects.example/to-loopback', 'wget https://redirects.example/to-loopback',
   'pip install .', 'pip install -e .', 'npm install', 'npm install ./pkg', 'echo x > .git/hooks/pre-commit', 'echo x > sub/.git/hooks/pre-commit', 'cp p.sh sub/.git/hooks/post-commit',
 ] as const;
 const HIGH_PS = [
   'node --eval=1', 'python -cprint(1)', 'node -r ./p.js -v', 'node --import=./p.mjs', 'python3 -mhttp.server', 'cmd /c put', 'forfiles /c "cmd /c put"', 'tar -xf a.tar', 'tar.exe -I ./p.sh -cf a.tar x',
   'git init --template=./tpl sub', 'git -C sub commit -m x', 'git clone --template=./tpl a b', 'git -C fake log -p', 'git -C cx log -p', 'git ls-remote --upload-pack=x .', 'git log --output=SOUL.md',
+  'Invoke-WebRequest -Uri https://redirects.example/to-loopback', 'irm https://redirects.example/to-loopback', 'iwr https://127.0.0.1.nip.io:7800/api/settings -MaximumRedirection 0 -Headers @{Host="127.0.0.1:7800"}',
   'Copy-Item tmp/SOUL.md -Destination .', 'Copy-Item tmp/SOUL.md', 'Move-Item tmp/SOUL.md', 'copy tmp/SOUL.md', 'Copy-Item tmp\\SOUL.md .\\', 'Move-Item tmp/SOUL.md .', 'Get-ChildItem *.md | Remove-Item', 'Get-ChildItem tmp | Copy-Item -Destination .', 'Expand-Archive a.zip out',
   'pip install .', 'pip install -e .', 'npm install', 'npm install ./pkg', 'Set-Content .git/hooks/pre-commit x', 'Set-Content sub/.git/hooks/pre-commit x',
 ] as const;

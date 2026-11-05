@@ -32,7 +32,7 @@ const BASH_ALLOW = [
 const PS_ALLOW = [
   'Get-ChildItem -Recurse -Filter *.md', 'dir', 'ls', 'Get-ChildItem -Path src -Recurse -File', 'Get-Content x -TotalCount 20', 'Get-Content -Path a.txt -Raw', 'Select-String -Path *.ts -Pattern foo',
   'Get-ChildItem *.log | ForEach-Object { $_.Name }', 'Get-ChildItem | Where-Object { $_.Length -gt 1MB }', '$files = Get-ChildItem -Recurse; $files.Count',
-  'Set-Content -Path a.txt -Value "x"', 'New-Item -ItemType Directory out', 'Invoke-WebRequest -Uri https://example.com -UseBasicParsing', 'git status', 'git log --oneline', 'rg -n foo', 'node --version',
+  'Set-Content -Path a.txt -Value "x"', 'New-Item -ItemType Directory out', 'Invoke-WebRequest -Uri https://example.com -UseBasicParsing -MaximumRedirection 0', 'git status', 'git log --oneline', 'rg -n foo', 'node --version',
   'Write-Output hi', 'Set-Location sub', 'Remove-Item -Recurse -Force build', 'cat a.txt', 'Get-Process', 'Start-Sleep 5', 'Get-ChildItem | Sort-Object Length -Descending | Select-Object -First 5',
   'Get-Date -Format yyyy-MM-dd', 'Get-ChildItem | Select-Object Name, Length', 'Test-Path src', 'Measure-Object -Line', 'Get-Content a.txt | Measure-Object -Line', 'Get-ChildItem | Format-Table Name, Length',
   'Select-String -Pattern foo -Path a.txt', 'curl.exe -sS https://example.com', 'tar.exe -tf a.tar', '& git status', 'Get-Location', 'Join-Path a b', 'Resolve-Path .', 'Get-FileHash a.txt -Algorithm SHA256',
@@ -101,9 +101,9 @@ test('書き方を判定できないものは止める（deny）', () => {
 test('ふつうの確かめ（会話の許可で越えられる）になるもの', () => {
   const rows: Array<[string, ShellKind, string]> = [
     ['git add .', 'bash', 'ask:list.git_write'], ['git commit -m "x"', 'bash', 'ask:list.git_write'], ['git push', 'bash', 'ask:list.git_push'], ['git push origin main', 'bash', 'ask:list.git_push'],
-    ['curl -X POST https://api.example.com -d @a.json', 'bash', 'ask:ask.curl'], ['curl --json "{}" https://e', 'bash', 'ask:ask.curl'], ['wget --post-data=x https://e', 'bash', 'ask:ask.wget'],
-    ['curl http://192.168.1.5/x', 'bash', 'ask:list.lan'], ['curl http://printer.local/x', 'bash', 'ask:list.lan'], ['Invoke-WebRequest -Uri https://e -Method Post -Body x', 'powershell', 'ask:ask.powershell'],
-    ['Invoke-RestMethod https://e -Method Put', 'powershell', 'ask:ask.powershell'], ['git commit -m x', 'powershell', 'ask:list.git_write'],
+    ['curl -X POST https://api.example.com -d @a.json', 'bash', 'ask:ask.curl'], ['curl --json "{}" https://e', 'bash', 'ask:ask.curl'], ['wget --max-redirect=0 --post-data=x https://e', 'bash', 'ask:ask.wget'],
+    ['curl http://192.168.1.5/x', 'bash', 'ask:list.lan'], ['curl http://printer.local/x', 'bash', 'ask:list.lan'], ['Invoke-WebRequest -Uri https://e -Method Post -Body x -MaximumRedirection 0', 'powershell', 'ask:ask.powershell'],
+    ['Invoke-RestMethod https://e -Method Put -MaximumRedirection 0', 'powershell', 'ask:ask.powershell'], ['git commit -m x', 'powershell', 'ask:list.git_write'],
   ];
   for (const [command, shell, key] of rows) assert.ok(keysOf(command, shell).includes(key), `${command}: ${keysOf(command, shell).join(',')}`);
   for (const [command, shell] of rows) assert.equal(levelOf(command, shell), 'ask', command);
@@ -254,7 +254,7 @@ test('代入（C8）', () => {
 
 test('ネットワーク: 宛先の決まり（C9）と、書き込み先（-o・-O・wget の名前）', () => {
   assert.equal(levelOf('curl https://example.com'), 'allow');
-  assert.equal(levelOf('curl -L https://example.com/a.tgz -o a.tgz'), 'allow');
+  assert.equal(levelOf('curl https://example.com/a.tgz -o a.tgz'), 'allow');
   assert.equal(levelOf('curl -sS ftp://example.com/x'), 'once');
   assert.equal(levelOf('curl example.com'), 'once');
   assert.equal(levelOf('curl $url'), 'once');
@@ -264,19 +264,19 @@ test('ネットワーク: 宛先の決まり（C9）と、書き込み先（-o�
   assert.equal(levelOf('curl http://2130706433/'), 'once');
   assert.equal(levelOf('curl http://app.localhost/'), 'once');
   assert.equal(levelOf('curl http://tailnet.example.ts.net/', 'bash', { selfHosts: ['tailnet.example.ts.net'] }), 'once');
-  assert.equal(levelOf('wget -q https://e/x.zip'), 'allow');
-  assert.equal(levelOf('wget -qO- https://e/x'), 'allow');
-  assert.equal(levelOf('wget -O out.txt https://e/x'), 'allow');
+  assert.equal(levelOf('wget -q --max-redirect=0 https://e/x.zip'), 'allow');
+  assert.equal(levelOf('wget -qO- --max-redirect=0 https://e/x'), 'allow');
+  assert.equal(levelOf('wget -O out.txt --max-redirect=0 https://e/x'), 'allow');
   const c = classify('curl -O https://e/a/b.txt --output-dir out').results[0]!;
   assert.deepEqual(c.remoteNames.map(r => [r.url.text, r.dir?.text]), [['https://e/a/b.txt', 'out']]);
   assert.equal(c.fetch, true);
-  assert.equal(classify('wget https://e/a.zip').results[0]!.remoteNames.length, 1);
-  assert.equal(classify('wget -O x https://e/a.zip').results[0]!.remoteNames.length, 0);
-  assert.equal(levelOf('Invoke-WebRequest -Uri https://e -OutFile a.html', 'powershell'), 'allow');
-  assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Delete', 'powershell'), 'ask');
-  assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Trace', 'powershell'), 'once');
-  assert.equal(levelOf('curl https://e', 'powershell'), 'allow');
-  assert.equal(levelOf('curl https://e -Method Post', 'powershell'), 'ask');
+  assert.equal(classify('wget --max-redirect=0 https://e/a.zip').results[0]!.remoteNames.length, 1);
+  assert.equal(classify('wget --max-redirect=0 -O x https://e/a.zip').results[0]!.remoteNames.length, 0);
+  assert.equal(levelOf('Invoke-WebRequest -Uri https://e -OutFile a.html -MaximumRedirection 0', 'powershell'), 'allow');
+  assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Delete -MaximumRedirection 0', 'powershell'), 'ask');
+  assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Trace -MaximumRedirection 0', 'powershell'), 'once');
+  assert.equal(levelOf('curl https://e -MaximumRedirection 0', 'powershell'), 'allow');
+  assert.equal(levelOf('curl https://e -Method Post -MaximumRedirection 0', 'powershell'), 'ask');
   assert.equal(levelOf('wget http://127.0.0.1/', 'powershell'), 'once');
   assert.equal(classify('Invoke-WebRequest -Uri https://e', 'powershell').results[0]!.fetch, true);
 });
@@ -372,4 +372,40 @@ test('名前の決まり（C1）: 引用符・変数・パスのコマンド名�
   assert.equal(levelOf('git.exe status', 'powershell'), 'allow');
   assert.equal(levelOf('where.exe git', 'powershell'), 'allow');
   assert.equal(levelOf('ls.exe', 'powershell'), 'once');
+});
+
+// 審査で見つかった: 転送（リダイレクト）や Host・Origin ヘッダで、名前だけでは見抜けない形で Clive 自身の画面の API に届く。
+// curl の -L・Host/Origin などのヘッダ、wget と iwr/irm の既定の転送の追いかけは、今回だけにする
+test('Clive 自身の API に名前では届かせない: Host・Origin などのヘッダ・転送を追う指定は今回だけ', () => {
+  const once = [
+    'curl -H "Host: 127.0.0.1:7800" https://127.0.0.1.nip.io:7800/api/settings', "curl -H 'host:127.0.0.1' https://e.example/", 'curl --header "Origin: http://127.0.0.1:7800" https://e.example/',
+    'curl --header="Origin: http://localhost" https://e.example/', 'curl -H "Sec-Fetch-Site: same-origin" https://e.example/', 'curl -H "X-Forwarded-Host: 127.0.0.1" https://e.example/',
+    'curl -H "Tailscale-User-Login: me@example.com" https://e.example/', 'curl -H "Forwarded: host=127.0.0.1" https://e.example/', 'curl -H @headers.txt https://e.example/', 'curl -sS -H "Accept: x" -H "HOST: y" https://e.example/',
+    'curl -L https://e.example/', 'curl -sSL https://e.example/x', 'curl --location https://e.example/', 'curl -sSLo out.html https://e.example/', 'curl -I -L https://e.example/',
+    'wget https://e.example/x', 'wget -q https://e.example/x', 'wget --max-redirect=5 https://e.example/x', 'wget --max-redirect 3 https://e.example/x',
+  ];
+  const wrong = once.filter(c => levelOf(c, 'bash') !== 'once');
+  assert.deepEqual(wrong, []);
+  const allow = [
+    'curl https://e.example/', 'curl -sS https://e.example/x', 'curl -H "Accept: application/json" https://e.example/', "curl -H 'User-Agent: clive' https://e.example/", 'curl -H "X-Api-Version: 2" https://e.example/',
+    'wget --max-redirect=0 https://e.example/x', 'wget -q --max-redirect 0 https://e.example/x',
+  ];
+  assert.deepEqual(allow.filter(c => levelOf(c, 'bash') !== 'allow'), []);
+  for (const c of ['curl -H "Host: x" https://e.example/']) assert.equal(classify(c).results[0]!.reasons.every(r => !r.exempt), true, 'ヘッダの偽装は tools.shell.allow でも外せない');
+  assert.equal(classify('curl -L https://e.example/').results[0]!.reasons.some(r => r.exempt), true, '転送を追う指定は、持ち主が選んだコマンドとして外せる');
+});
+
+test('Invoke-WebRequest・Invoke-RestMethod（5.1 の curl・wget も）: 転送は既定で追うので、-MaximumRedirection 0 を付けたときだけ許す。-Headers は一覧に無い', () => {
+  const once = [
+    'Invoke-WebRequest -Uri https://e.example/', 'iwr https://e.example/', 'Invoke-RestMethod https://e.example/api', 'irm https://e.example/', 'iwr https://e.example/ -MaximumRedirection 5', 'iwr https://e.example/ -MaximumRedirection 1',
+    'iwr https://e.example/ -MaximumRedirection $n', 'iwr https://e.example/ -UseBasicParsing', 'curl https://e.example/', 'wget https://e.example/x', 'iwr https://e.example/ -OutFile a.html',
+    'iwr https://e.example/ -MaximumRedirection 0 -Headers @{Host="127.0.0.1:7800"}', 'irm https://e.example/ -MaximumRedirection 0 -Headers $h',
+  ];
+  for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+    const list = shell === 'pwsh' ? once.filter(c => !c.startsWith('curl ') && !c.startsWith('wget ')) : once;
+    assert.deepEqual(list.filter(c => levelOf(c, shell) !== 'once'), [], shell);
+  }
+  const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -OutFile a.html', 'curl https://e.example/ -MaximumRedirection 0'];
+  assert.deepEqual(allow.filter(c => levelOf(c, 'powershell') !== 'allow'), []);
+  assert.equal(levelOf('iwr https://e.example/ -MaximumRedirection 0 -Method Post -Body x', 'powershell'), 'ask', '送る形は、これまでどおりふつうの確かめ');
 });

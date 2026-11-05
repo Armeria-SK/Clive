@@ -96,13 +96,13 @@ test('ワイルドカード: 書く・消す側は当たるものを全部調べ
 test('curl -O・wget の既定の名前: URL の最後の名前で作業場所に書く', t => {
   const f = fixture(t);
   for (const command of [
-    'curl -O https://example.com/SOUL.md', 'curl -sSLO https://example.com/USER.md', 'curl --remote-name https://example.com/SOUL.md', 'wget https://example.com/USER.md', 'wget -P . https://example.com/USER.md',
-    'wget -P skills https://example.com/a.txt', 'curl -O --output-dir skills https://example.com/a.txt', 'curl -O https://example.com/%53OUL.md', 'curl -O https://example.com/SOUL.md?x=1',
+    'curl -O https://example.com/SOUL.md', 'curl -sSO https://example.com/USER.md', 'curl --remote-name https://example.com/SOUL.md', 'wget --max-redirect=0 https://example.com/USER.md', 'wget --max-redirect=0 -P . https://example.com/USER.md',
+    'wget --max-redirect=0 -P skills https://example.com/a.txt', 'curl -O --output-dir skills https://example.com/a.txt', 'curl -O https://example.com/%53OUL.md', 'curl -O https://example.com/SOUL.md?x=1',
   ]) {
     const v = f.bash(command);
     assert.equal(once(v), true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
   }
-  for (const command of ['curl -O https://example.com/notes.txt', 'curl -O --output-dir sub https://example.com/SOUL.md', 'wget -P sub https://example.com/USER.md', 'wget https://example.com/', 'wget -O out.txt https://example.com/SOUL.md', 'curl https://example.com/SOUL.md']) {
+  for (const command of ['curl -O https://example.com/notes.txt', 'curl -O --output-dir sub https://example.com/SOUL.md', 'wget --max-redirect=0 -P sub https://example.com/USER.md', 'wget --max-redirect=0 https://example.com/', 'wget --max-redirect=0 -O out.txt https://example.com/SOUL.md', 'curl https://example.com/SOUL.md']) {
     const v = f.bash(command);
     assert.equal(v.decision, 'allow', `${command}: ${v.reasons.join(' / ')}`);
   }

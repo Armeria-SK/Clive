@@ -366,6 +366,8 @@ gnu({ names: ['zcat'], flags: '', pos: ['path-r…'] });
 
 // ── ネットワーク（11.3.4）──
 const SEND_METHODS = /^(?:post|put|patch|delete)$/iu;
+// 宛先を偽るのに使える（サーバーは Host・Origin・Sec-Fetch-*・Tailscale のヘッダで自分宛てか見分ける）ヘッダ。@ファイルは中身が分からない
+const SPOOF_HEADERS = /^(?:host|origin|sec-fetch-[a-z-]+|x-forwarded-[a-z-]+|forwarded|tailscale-[a-z-]+|x-real-ip|x-original-url|x-rewrite-url)$/iu;
 const CURL_FLAGS = flagMap('-s -S -L -I -i -f --fail -v -m:n --max-time:n --connect-timeout:n --retry:n -A:s --user-agent:s -H:s --header:s --compressed --http1.1 --http2 -X:s --request:s -o:path-w --output:path-w -O --remote-name --output-dir:path-w --create-dirs -d:s --data:s --data-raw:s --data-binary:s --data-urlencode:s -F:s --form:s --form-string:s -T:path-r --upload-file:path-r --json:s');
 const CURL_SEND = new Set(['-d', '--data', '--data-raw', '--data-binary', '--data-urlencode', '-F', '--form', '--form-string', '-T', '--upload-file', '--json']);
 register(['curl'], (words, acc, ctx) => {
@@ -386,11 +388,17 @@ register(['curl'], (words, acc, ctx) => {
       const def = CURL_FLAGS.get(name);
       if (!def) { acc.add('once', 'list.flag', { cmd: 'curl', flag: name }, true); break; }
       if (name === '-O' || name === '--remote-name') remoteName = true;
+      if (name === '-L') acc.add('once', 'list.redirect', { cmd: 'curl' }, true);
       if (def.type === 'bool') { if (eq > 0) acc.add('once', 'list.flag', { cmd: 'curl', flag: text }, true); continue; }
       const attached = text.startsWith('--') ? (eq > 0 ? text.slice(eq + 1) : '') : text.slice(k + 2);
       const value = attached !== '' ? { ...w, text: attached, dynamic: false, glob: false } : args[++i];
       if (!value) { formOnce(acc, 'curl', `${name} の値`); break; }
       if (value.dynamic || value.glob) acc.add('once', 'list.dynamic', { cmd: 'curl', detail: value.text }, true);
+      if (name === '-H' || name === '--header') {
+        const header = /^\s*([A-Za-z][A-Za-z0-9-]*)\s*[:;]/u.exec(value.text)?.[1];
+        if (value.text.startsWith('@') || (header && SPOOF_HEADERS.test(header))) acc.add('once', 'list.header', { cmd: 'curl', header: header ?? value.text }, false);
+        break;
+      }
       if (name === '-X' || name === '--request') {
         if (SEND_METHODS.test(value.text)) sends = true;
         else if (!/^(?:get|head)$/iu.test(value.text)) acc.add('once', 'list.form', { cmd: 'curl', detail: `${name} ${value.text}` }, true);
@@ -415,13 +423,14 @@ register(['curl'], (words, acc, ctx) => {
   }
   if (sends) acc.add('ask', 'ask.curl');
 });
-const WGET_FLAGS = flagMap('-q -S --spider -T:n --timeout:n -t:n --tries:n -U:s -O:path-w --output-document:path-w -P:path-w --directory-prefix:path-w --post-data:s --post-file:path-r --method:s --body-data:s --body-file:path-r');
+const WGET_FLAGS = flagMap('-q -S --spider --max-redirect:n -T:n --timeout:n -t:n --tries:n -U:s -O:path-w --output-document:path-w -P:path-w --directory-prefix:path-w --post-data:s --post-file:path-r --method:s --body-data:s --body-file:path-r');
 register(['wget'], (words, acc, ctx) => {
   const args = words.slice(1);
   const urls: Word[] = [];
   let dir: Word | null = null;
   let output = false;
   let sends = false;
+  let redirects: string | undefined;
   acc.fetch = true;
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
@@ -438,6 +447,7 @@ register(['wget'], (words, acc, ctx) => {
       const value = attached !== '' ? { ...w, text: attached, dynamic: false, glob: false } : args[++i];
       if (!value) { formOnce(acc, 'wget', `${name} の値`); break; }
       if (value.dynamic || value.glob) acc.add('once', 'list.dynamic', { cmd: 'wget', detail: value.text }, true);
+      if (name === '--max-redirect') redirects = value.text;
       if (name === '-O' || name === '--output-document') output = true;
       if (name === '-P' || name === '--directory-prefix') dir = value;
       if (/^--(?:post-data|post-file|method|body-data|body-file)$/u.test(name)) {
@@ -449,6 +459,8 @@ register(['wget'], (words, acc, ctx) => {
       break;
     }
   }
+  // wget は転送を既定で（20 回まで）追う。0 にしたときだけ許す
+  if (redirects !== '0') acc.add('once', 'list.redirect', { cmd: 'wget' }, true);
   if (urls.length === 0) formOnce(acc, 'wget', '');
   for (const u of urls) {
     checkUrl(u, acc, ctx, 'wget');

@@ -188,6 +188,9 @@ const webExtra: PsCmd['extra'] = (p, acc) => {
     else if (method.dynamic || !/^(?:get|head)$/iu.test(method.text)) acc.add('once', 'list.form', { cmd: 'Invoke-WebRequest', detail: `-Method ${method.text}` }, true);
   }
   if (p.all.has('body') || p.all.has('infile') || p.all.has('contenttype')) sends = true;
+  // Invoke-WebRequest・Invoke-RestMethod は転送を既定で（5 回まで）追う。-MaximumRedirection 0 のときだけ許す
+  const redirects = first(p, 'maximumredirection')[0];
+  if (!redirects || redirects.dynamic || redirects.text !== '0') acc.add('once', 'list.redirect', { cmd: 'Invoke-WebRequest' }, true);
   if (sends) acc.add('ask', 'ask.powershell');
 };
 cmd('invoke-webrequest iwr invoke-restmethod irm', WEB, 'uri', webExtra);
