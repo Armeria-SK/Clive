@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import type { Approval, Conversation } from './api.ts';
+import { convMark } from './conversation-state.ts';
 import type { Draft } from './events.ts';
 import { Icon } from './icons.tsx';
 import { useT } from './i18n/index.ts';
@@ -53,8 +54,7 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, pane
         {tabs.map(tab => {
           const active = tab.key === activeKey;
           const id = chatIdOf(tab);
-          const generating = id !== null && drafts.some(d => d.conversationId === id);
-          const waiting = id !== null && !generating && approvals.some(a => a.conversationId === id);
+          const mark = id === null ? null : convMark(drafts, approvals, id);
           const label = labelOf(tab);
           const close = (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); onClose(tab.key); };
           return (
@@ -62,8 +62,8 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, pane
               <a href={tab.hash} className="tab-link" title={label}>
                 <span className="tab-icon"><Icon name={isChatTab(tab) ? 'msg' : PAGE_META[pageOfTab(tab)].icon} size={14} /></span>
                 <span className="tab-label">{label}</span>
-                {generating && <span className="spin tab-state"><Icon name="loader" size={11} /><span className="sr-only">{t('conversation.generating')}</span></span>}
-                {waiting && <span className="tab-dot"><span className="sr-only">{t('conversation.needsApproval')}</span></span>}
+                {mark === 'generating' && <span className="spin tab-state"><Icon name="loader" size={11} /><span className="sr-only">{t('conversation.generating')}</span></span>}
+                {mark === 'approval' && <span className="tab-dot"><span className="sr-only">{t('conversation.needsApproval')}</span></span>}
               </a>
               <button className="tab-close" aria-label={t('tab.close')} onClick={close}><Icon name="x" size={12} /></button>
             </div>

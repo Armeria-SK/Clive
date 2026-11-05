@@ -2,6 +2,7 @@ import { useEffect, useRef, type MouseEvent, type ReactNode } from 'react';
 import type { Approval, Conversation, Profile } from './api.ts';
 import { Avatar } from './Avatar.tsx';
 import type { Runtime } from './avatar.ts';
+import { conversationCountLabel, convMark } from './conversation-state.ts';
 import type { Draft } from './events.ts';
 import { useNow, useTheme } from './hooks.ts';
 import { Icon, type IconName } from './icons.tsx';
@@ -108,19 +109,18 @@ export function Sidebar(props: Props) {
 
       <div className="side-section">
         <span className="side-section-label">{t('nav.conversations')}</span>
-        <span className="side-section-count">{conversations.length}</span>
+        <span className="side-section-count">{conversationCountLabel(conversations.length)}</span>
       </div>
       <ul className="side-convs">
         {conversations.map(c => {
-          const generating = drafts.some(d => d.conversationId === c.id);
-          const waitingApproval = !generating && approvals.some(a => a.conversationId === c.id);
+          const mark = convMark(drafts, approvals, c.id);
           const active = c.id === activeId;
           return (
             <li key={c.id} className={isFresh(c.id) ? 'flash' : undefined}>
               <a href={chatHash(c.id)} className={`conv${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined} onClick={props.onNavigate}>
                 <span className="conv-state">
-                  {generating && <span className="spin" data-tip={t('conversation.generating')} data-tip-pos="right"><Icon name="loader" size={12} /><span className="sr-only">{t('conversation.generating')}</span></span>}
-                  {waitingApproval && (
+                  {mark === 'generating' && <span className="spin" data-tip={t('conversation.generating')} data-tip-pos="right"><Icon name="loader" size={12} /><span className="sr-only">{t('conversation.generating')}</span></span>}
+                  {mark === 'approval' && (
                     <span data-tip={t('conversation.needsApprovalTip')} data-tip-pos="right">
                       <span className="conv-dot" /><span className="conv-dot ping" /><span className="sr-only">{t('conversation.needsApproval')}</span>
                     </span>

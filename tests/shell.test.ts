@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ModelView, WorkerStatus } from '../web/src/api.ts';
 import { presenceOf } from '../web/src/avatar.ts';
+import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, convMark, isChatRun, type RunContext } from '../web/src/conversation-state.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { formatElapsed, formatRelativeCompact, setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
@@ -9,7 +10,7 @@ import { closeTopLayer, ESC_ORDER, isComposing, modLabel, registerEscape, shortc
 import { layoutModeFor, loadPanelPreference, savePanelPreference } from '../web/src/layout.ts';
 import { PAGE_META, pickChatModel, workerState } from '../web/src/pages.ts';
 import { chatHash, parseRoute, routeHash } from '../web/src/routes.ts';
-import { closeTab, loadTabs, MAX_TABS, openTab, pruneMissingChats, sanitizeTabs, saveTabs, toTab, type Tab } from '../web/src/tabs.ts';
+import { closeTab, dropChats, findGoneChats, loadTabs, MAX_TABS, openTab, sanitizeTabs, saveTabs, toTab, unlistedChatIds, type ChatProbe, type Tab } from '../web/src/tabs.ts';
 
 const reset = () => { setLanguagePreference('ja'); setTimezone('Asia/Tokyo'); };
 const keys = (tabs: Tab[]) => tabs.map(x => x.key);
@@ -87,14 +88,54 @@ test('closeTab: 開いているタブを閉じたら隣へ移り、全部閉じ�
   assert.equal(closeTab(tabs, 'nope', 'tasks').tabs, tabs);
 });
 
-test('pruneMissingChats / sanitizeTabs: 無くなった会話のタブと、壊れた保存値を落とす', () => {
-  const tabs = [tab('#/c/a'), tab('#/c/gone'), tab('#/'), tab('#/tasks')];
-  assert.deepEqual(keys(pruneMissingChats(tabs, new Set(['a']), null)), ['chat:a', 'chat:new', 'tasks']);
-  assert.deepEqual(keys(pruneMissingChats(tabs, new Set(['a']), 'chat:gone')), ['chat:a', 'chat:gone', 'chat:new', 'tasks'], '今開いているタブは残す');
-  assert.equal(pruneMissingChats(tabs, new Set(['a', 'gone']), null), tabs);
+test('unlistedChatIds / dropChats: 一覧に無い会話のタブは確かめる対象にするだけで、消えた会話のタブだけを閉じる', () => {
+  const tabs = [tab('#/c/a'), tab('#/c/old'), tab('#/c/gone'), tab('#/'), tab('#/tasks')];
+  assert.deepEqual(unlistedChatIds(tabs, new Set(['a']), null), ['old', 'gone'], '新しい会話・ページは対象にしない');
+  assert.deepEqual(unlistedChatIds(tabs, new Set(['a']), 'chat:gone'), ['old'], '今開いているタブは対象にしない');
+  assert.deepEqual(keys(dropChats(tabs, new Set(['gone']), null)), ['chat:a', 'chat:old', 'chat:new', 'tasks'], '404 だった会話だけ閉じる（一覧に無いだけの会話は残る）');
+  assert.deepEqual(keys(dropChats(tabs, new Set(['gone']), 'chat:gone')), keys(tabs), '今開いているタブは閉じない');
+  assert.equal(dropChats(tabs, new Set(), null), tabs);
+});
+
+test('findGoneChats: サーバーが無いと答えた（404）会話だけを返し、読めなかったときは消えたと見なさない', async () => {
+  const verdicts: Record<string, ChatProbe> = { a: 'exists', b: 'gone', c: 'unknown' };
+  const gone = await findGoneChats(['a', 'b', 'c', 'd'], async id => { if (id === 'd') throw new Error('network'); return verdicts[id]!; });
+  assert.deepEqual([...gone], ['b']);
+  assert.deepEqual([...(await findGoneChats([], async () => 'gone'))], []);
+});
+
+test('sanitizeTabs: 壊れた保存値を落とす', () => {
   assert.deepEqual(sanitizeTabs(['#/tasks', '#/tasks/x', 5, null, '#/today', '#/c/a']).map(x => x.hash), ['#/tasks', '#/c/a'], '重複・文字列でないもの・きょうは捨てる');
   assert.deepEqual(sanitizeTabs('nope'), []);
   assert.equal(sanitizeTabs(Array.from({ length: 30 }, (_, i) => `#/c/${i}`)).length, MAX_TABS);
+});
+
+test('convMark: 承認の待ちは返事を作っている最中に起きるので、承認を優先する', () => {
+  const draft = { conversationId: 'c1' };
+  const approval = { conversationId: 'c1' };
+  assert.equal(convMark([draft], [approval], 'c1'), 'approval', '下書きがあっても、承認の待ちが見える');
+  assert.equal(convMark([draft], [], 'c1'), 'generating');
+  assert.equal(convMark([], [approval], 'c1'), 'approval');
+  assert.equal(convMark([draft], [approval], 'c2'), null, '別の会話には出ない');
+  assert.equal(convMark([], [], 'c1'), null);
+});
+
+test('approvalTargetHash / isChatRun: 会話かタスクかは、一覧に載っているかではなく実行の種類で決める', () => {
+  const context = (patch: Partial<RunContext> = {}): RunContext => ({ taskConversations: new Map([['task-conv', 't1']]), running: null, ...patch });
+  assert.equal(approvalTargetHash({ conversationId: 'old-chat', runId: 'r1' }, context()), '#/c/old-chat', '一覧に載っていない古い会話でも会話へ');
+  assert.equal(approvalTargetHash({ conversationId: 'task-conv', runId: 'r1' }, context()), '#/tasks/t1', 'タスクの実行の会話はタスクへ');
+  assert.equal(approvalTargetHash({ conversationId: 'unknown', runId: 'r9' }, context({ running: { kind: 'task', taskId: 't2', runId: 'r9' } })), '#/tasks/t2', 'タスクの会話がまだ分からなくても、実行中の実行なら');
+  assert.equal(approvalTargetHash({ conversationId: 'unknown', runId: 'r9' }, context({ running: { kind: 'review', taskId: null, runId: 'r9' } })), '#/c/unknown', '振り返りの実行はタスクへ送らない');
+  assert.equal(isChatRun('r1', 'old-chat', context()), true, '一覧に載っていない会話の返事も会話の返事');
+  assert.equal(isChatRun('r1', 'task-conv', context()), false, 'タスクの会話');
+  assert.equal(isChatRun('r5', 'x', context({ running: { kind: 'review', taskId: null, runId: 'r5' } })), false, '実行中の振り返り・タスク');
+});
+
+test('conversationCountLabel: 一覧は 100 件までなので、100 件に届いたら「100+」と出す', () => {
+  assert.equal(CONVERSATION_LIST_LIMIT, 100);
+  assert.equal(conversationCountLabel(0), '0');
+  assert.equal(conversationCountLabel(99), '99');
+  assert.equal(conversationCountLabel(100), '100+');
 });
 
 test('loadTabs / saveTabs: ハッシュの一覧として保存し、読めない保存先や壊れた値でも落ちない', () => {

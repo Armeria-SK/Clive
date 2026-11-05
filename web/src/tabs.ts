@@ -48,10 +48,26 @@ export function closeTab(tabs: Tab[], key: string, activeKey: string | null): { 
   return { tabs: rest, go: rest[Math.min(at, rest.length - 1)]!.hash };
 }
 
-export function pruneMissingChats(tabs: Tab[], existingIds: ReadonlySet<string>, keepKey: string | null): Tab[] {
+// 会話の一覧は 100 件までなので、一覧に無い = 消えた、とは言えない。一覧に無い会話のタブだけを、1 つずつ確かめる対象にする。
+export function unlistedChatIds(tabs: readonly Tab[], listedIds: ReadonlySet<string>, keepKey: string | null): string[] {
+  return tabs.flatMap(t => {
+    const id = chatIdOf(t);
+    return id !== null && !listedIds.has(id) && t.key !== keepKey ? [id] : [];
+  });
+}
+
+export type ChatProbe = 'exists' | 'gone' | 'unknown';
+
+// サーバーが「無い」（404）と答えた会話だけを返す。読めなかったとき（通信の失敗など）は消えたと見なさない。
+export async function findGoneChats(ids: readonly string[], probe: (id: string) => Promise<ChatProbe>): Promise<Set<string>> {
+  const results = await Promise.all(ids.map(async id => [id, await probe(id).catch((): ChatProbe => 'unknown')] as const));
+  return new Set(results.filter(([, verdict]) => verdict === 'gone').map(([id]) => id));
+}
+
+export function dropChats(tabs: Tab[], goneIds: ReadonlySet<string>, keepKey: string | null): Tab[] {
   const kept = tabs.filter(t => {
     const id = chatIdOf(t);
-    return id === null || existingIds.has(id) || t.key === keepKey;
+    return id === null || !goneIds.has(id) || t.key === keepKey;
   });
   return kept.length === tabs.length ? tabs : kept;
 }

@@ -6,6 +6,7 @@ import { Chat, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
 import { useEscapeLayer } from './hooks.ts';
 import { useT, type DictKey } from './i18n/index.ts';
+import { approvalTargetHash, isChatRun, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
@@ -24,6 +25,7 @@ import { CuriosityPage, ReviewPage, SkillsPage } from './Review.tsx';
 import { TasksPage } from './Tasks.tsx';
 import { useTabs } from './useTabs.ts';
 
+const RUN_LOOKUP_RETRY_MS = 1500;
 const BROWSER_NOTIFY = new Set(['approval_needed', 'task_waiting']);
 const MEMORY_NOTICE = { create: 'notice.memoryCreate', update: 'notice.memoryUpdate', forget: 'notice.memoryForget' } as const satisfies Record<'create' | 'update' | 'forget', DictKey>;
 const MEMORY_TOAST = { create: 'toast.memoryCreate', update: 'toast.memoryUpdate', forget: 'toast.memoryForget' } as const satisfies Record<'create' | 'update' | 'forget', DictKey>;
@@ -54,6 +56,7 @@ export function App() {
   const rootRef = useRef<HTMLDivElement>(null);
   const taskStatus = useRef(new Map<string, string>());
   const lastChatHash = useRef('#/');
+  const taskConversations = useRef(new Map<string, string>());
 
   const refreshList = useCallback(() => {
     void api.conversations().then(r => { setConversations(r.conversations); setConversationsLoaded(true); }).catch(() => undefined);
@@ -63,7 +66,10 @@ export function App() {
   const refreshTasks = useCallback(() => {
     void api.tasks().then(r => {
       setWaiting(new Set(r.active.filter(x => x.status === 'waiting').map(x => x.id)));
-      for (const task of r.active) taskStatus.current.set(task.id, task.status);
+      for (const task of r.active) {
+        taskStatus.current.set(task.id, task.status);
+        if (task.conversation_id) taskConversations.current.set(task.conversation_id, task.id);
+      }
     }).catch(() => undefined);
     void api.notifications().then(r => setUnread(r.unread)).catch(() => undefined);
   }, []);
@@ -135,6 +141,8 @@ export function App() {
   const draftsRef = useRef(drafts); draftsRef.current = drafts;
   const currentRef = useRef(current); currentRef.current = current;
   const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
+  const workerRef = useRef(worker); workerRef.current = worker;
+  const runContext = (): RunContext => ({ taskConversations: taskConversations.current, running: workerRef.current?.running ?? null });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const action = shortcutOf(e);
@@ -153,14 +161,14 @@ export function App() {
   const addNotice = (conversationId: string, notice: RunNotice) =>
     setNotices(state => ({ ...state, [conversationId]: [...(state[conversationId] ?? []), notice].slice(-8) }));
   const bump = (conversationId: string) => setRevisions(state => ({ ...state, [conversationId]: (state[conversationId] ?? 0) + 1 }));
-  const approvalTarget = useCallback((a: Pick<Approval, 'conversationId'>) =>
-    (conversationsRef.current.some(c => c.id === a.conversationId) ? chatHash(a.conversationId) : '#/tasks'), []);
+  const approvalTarget = useCallback((a: Pick<Approval, 'conversationId' | 'runId'>) => approvalTargetHash(a, runContext()), []);
 
   const onEvent = useCallback((e: RunEvent) => {
     switch (e.type) {
       case 'run.start':
         setDrafts(ds => [...ds.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '' }]);
         setRunStarts(starts => ({ ...starts, [e.runId]: Date.now() }));
+        refreshWorker();
         break;
       case 'model.switch':
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, modelId: e.to, text: '' } : d));
@@ -186,10 +194,13 @@ export function App() {
         break;
       case 'approval.requested':
         setApprovals(list => [...list.filter(a => a.id !== e.approval.id), { ...e.approval, runId: e.runId, conversationId: e.conversationId }]);
-        toast({
-          kind: 'approval', title: t('toast.approvalNeeded'), body: e.approval.title,
-          action: { label: t('toast.open'), run: () => { location.hash = approvalTarget({ conversationId: e.conversationId }); } },
-        });
+        // 今見ている会話なら、承認の札がそこにあるので知らせない
+        if (!(currentRef.current === e.conversationId && !document.hidden)) {
+          toast({
+            kind: 'approval', title: t('toast.approvalNeeded'), body: e.approval.title,
+            action: { label: t('toast.open'), run: () => { location.hash = approvalTarget({ conversationId: e.conversationId, runId: e.runId }); } },
+          });
+        }
         if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification(t('browser.approvalNeeded'), { body: e.approval.title });
         break;
       case 'approval.resolved':
@@ -201,17 +212,18 @@ export function App() {
         break;
       case 'run.end': {
         setDrafts(ds => ds.filter(d => d.runId !== e.runId));
+        setRunStarts(({ [e.runId]: _ended, ...rest }) => rest);
         bump(e.conversationId);
         refreshList();
         refreshWorker();
         if (!e.ok && e.errorKind !== 'cancelled') {
           addNotice(e.conversationId, { runId: e.runId, kind: 'error', message: t('notice.runFailed', e.errorMessage ?? e.errorKind ?? ''), hint: e.detail?.hint });
         }
-        const chat = conversationsRef.current.find(c => c.id === e.conversationId);
-        if (e.ok && chat && (document.hidden || currentRef.current !== e.conversationId)) {
+        if (e.ok && isChatRun(e.runId, e.conversationId, runContext()) && (document.hidden || currentRef.current !== e.conversationId)) {
+          const title = conversationsRef.current.find(c => c.id === e.conversationId)?.title ?? t('conversation.untitled');
           toast({
-            kind: 'done', icon: 'msg', title: t('toast.replyReady'), body: chat.title ?? t('conversation.untitled'),
-            action: { label: t('toast.open'), run: () => { location.hash = chatHash(chat.id); } },
+            kind: 'done', icon: 'msg', title: t('toast.replyReady'), body: title,
+            action: { label: t('toast.open'), run: () => { location.hash = chatHash(e.conversationId); } },
           });
         }
         break;
@@ -223,6 +235,7 @@ export function App() {
           if (e.task.status === 'waiting') next.add(e.task.id); else next.delete(e.task.id);
           return next;
         });
+        if (e.task.conversation_id) taskConversations.current.set(e.task.conversation_id, e.task.id);
         const before = taskStatus.current.get(e.task.id);
         taskStatus.current.set(e.task.id, e.task.status);
         if (e.task.status === 'done') {
@@ -263,12 +276,22 @@ export function App() {
 
   // 実行中の経過時間: 見ている間に始まったものは run.start を受けた時刻、読み直したときは実行の記録の started_at
   const runningId = worker?.running?.runId;
+  // 実行の記録がまだ無い・読めなかったときは、1 度だけ少し待ってやり直す
   useEffect(() => {
-    if (!runningId) return;
-    void api.runs().then(r => {
-      const run = r.runs.find(x => x.id === runningId);
-      if (run) setRunStarts(starts => (starts[runningId] === undefined ? { ...starts, [runningId]: run.started_at } : starts));
-    }).catch(() => undefined);
+    if (!runningId) return undefined;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const lookup = (retriesLeft: number) => {
+      const retry = () => { if (!cancelled && retriesLeft > 0) timer = setTimeout(() => lookup(retriesLeft - 1), RUN_LOOKUP_RETRY_MS); };
+      void api.runs().then(r => {
+        if (cancelled) return;
+        const run = r.runs.find(x => x.id === runningId);
+        if (run) setRunStarts(starts => (starts[runningId] === undefined ? { ...starts, [runningId]: run.started_at } : starts));
+        else retry();
+      }).catch(retry);
+    };
+    lookup(1);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [runningId]);
 
   const { connected, reconnect } = useRunEvents(onEvent, onResync);

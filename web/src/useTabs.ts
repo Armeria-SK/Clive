@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { Conversation } from './api.ts';
+import { api, ApiError, type Conversation } from './api.ts';
 import { routeHash, type Route } from './routes.ts';
-import { closeTab, loadTabs, openTab, pruneMissingChats, saveTabs, toTab, type Tab } from './tabs.ts';
+import { closeTab, dropChats, findGoneChats, loadTabs, openTab, saveTabs, toTab, unlistedChatIds, type ChatProbe, type Tab } from './tabs.ts';
+
+async function probeChat(id: string): Promise<ChatProbe> {
+  try { await api.messages(id); return 'exists'; } catch (error) { return error instanceof ApiError && error.status === 404 ? 'gone' : 'unknown'; }
+}
 
 // タブは「開いた経路の一覧」だけを持つ。今どれを開いているかは URL のハッシュが唯一の正で、タブはそれに従う。
 export function useTabs(route: Route, conversations: Conversation[], conversationsLoaded: boolean) {
@@ -20,13 +24,17 @@ export function useTabs(route: Route, conversations: Conversation[], conversatio
 
   useEffect(() => { saveTabs(tabs); }, [tabs]);
 
+  // 起動後、一覧に無い会話のタブは、サーバーに 1 つずつ尋ねて、404 だったものだけを閉じる
   const pruned = useRef(false);
+  const tabsNow = useRef(tabs);
+  tabsNow.current = tabs;
   useEffect(() => {
     if (!conversationsLoaded || pruned.current) return;
     pruned.current = true;
-    const ids = new Set(conversations.map(c => c.id));
     const keep = activeKey.current;
-    setTabs(prev => pruneMissingChats(prev, ids, keep));
+    const candidates = unlistedChatIds(tabsNow.current, new Set(conversations.map(c => c.id)), keep);
+    if (!candidates.length) return;
+    void findGoneChats(candidates, probeChat).then(gone => { if (gone.size) setTabs(prev => dropChats(prev, gone, keep)); });
   }, [conversations, conversationsLoaded]);
 
   const close = useCallback((key: string) => {
