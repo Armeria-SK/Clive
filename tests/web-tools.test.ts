@@ -117,11 +117,16 @@ test('SearXNG の JSON を読む。JSON が無効なら直し方を返す', asyn
   await assert.rejects(searchSearxng('http://127.0.0.1:8888', 'x', { limit: 5, language: '', fetch: fetch403 }), /search\.formats/u);
 });
 
-test('SearXNG に渡す言語: 地域コードを言語のコードに直す（jp→ja・kr→ko・cn/tw/hk→zh・uk/us→en）。2 文字の言語のコードならそのまま、そうでなければ渡さない', () => {
+test('SearXNG に渡す言語: 地域「国-言語」の後ろ（言語）を先に読む。jp→ja・kr→ko・tzh→zh・wt→渡さない、ほかは 2 文字の言語のコードならそのまま、読めなければ前（国）から探す', () => {
   const table: Array<[string, string | undefined]> = [
-    ['jp-jp', 'ja'], ['kr-kr', 'ko'], ['cn-zh', 'zh'], ['tw-tzh', 'zh'], ['hk-tzh', 'zh'], ['uk-en', 'en'], ['us-en', 'en'],
-    ['de-de', 'de'], ['fr-fr', 'fr'], ['ru-ru', 'ru'], ['DE-de', 'de'], ['en', 'en'],
-    ['wt-wt', undefined], ['xl-es', undefined], ['in-en', undefined], ['', undefined], ['-', undefined], ['zzz-en', undefined], ['j-jp', undefined],
+    // 後ろ（言語）を読む
+    ['br-pt', 'pt'], ['ca-fr', 'fr'], ['ch-de', 'de'], ['be-fr', 'fr'], ['in-en', 'en'], ['xa-ar', 'ar'], ['jp-jp', 'ja'], ['wt-wt', undefined],
+    ['kr-kr', 'ko'], ['tw-tzh', 'zh'], ['hk-tzh', 'zh'], ['cn-zh', 'zh'], ['uk-en', 'en'], ['us-en', 'en'], ['us-es', 'es'], ['xl-es', 'es'], ['ua-uk', 'uk'], ['ct-ca', 'ca'],
+    ['de-de', 'de'], ['fr-fr', 'fr'], ['ru-ru', 'ru'], ['DE-De', 'de'], ['zzz-en', 'en'],
+    // 後ろが無い・読めないときは、前（国）から探す（jp→ja・kr→ko・cn/tw/hk→zh・uk/us→en・2 文字の言語のコード）
+    ['jp', 'ja'], ['kr', 'ko'], ['uk', 'en'], ['us', 'en'], ['en', 'en'], ['de-xx', 'de'], ['jp-', 'ja'], ['uk-zzz', 'en'],
+    // どちらからも言語にならない
+    ['', undefined], ['-', undefined], ['wt', undefined], ['xl', undefined], ['xl-xx', undefined], ['__proto__', undefined], ['constructor-x', undefined],
   ];
   for (const [region, expected] of table) assert.equal(searxngLanguage(region), expected, region);
 });

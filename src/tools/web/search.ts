@@ -93,12 +93,18 @@ export async function searchDuckDuckGo(query: string, options: { limit: number; 
 }
 
 const ISO_639_1 = new Set('aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik io is it iu ja jv ka kg ki kj kk kl km kn ko kr ks ku kv kw ky la lb lg li ln lo lt lu lv mg mh mi mk ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu'.split(' '));
-const REGION_LANGUAGE: Readonly<Record<string, string>> = { jp: 'ja', kr: 'ko', cn: 'zh', tw: 'zh', hk: 'zh', uk: 'en', us: 'en' };
+// DuckDuckGo の地域は「国-言語」。言語の部分が ISO 639-1 と違う書き方（null は言語を決めない）
+const DDG_LANGUAGE = new Map<string, string | null>([['jp', 'ja'], ['kr', 'ko'], ['tzh', 'zh'], ['wt', null]]);
+// 言語の部分が無い・読めないときに、国の部分から言語を決める
+const COUNTRY_LANGUAGE = new Map<string, string>([['jp', 'ja'], ['kr', 'ko'], ['cn', 'zh'], ['tw', 'zh'], ['hk', 'zh'], ['uk', 'en'], ['us', 'en']]);
 
-// 設定の地域（DuckDuckGo の書き方: jp-jp・us-en など）の前半を、SearXNG が受け取る言語のコード（ISO 639-1 の 2 文字）にする。直せないものは undefined（渡さない）
+// 設定の地域（DuckDuckGo の書き方: jp-jp・us-en・br-pt など）を、SearXNG が受け取る言語のコード（ISO 639-1 の 2 文字）にする。
+// 言語の部分（後ろ）を先に読み、読めなければ国の部分（前）から探す。直せないものは undefined（渡さない）
 export function searxngLanguage(region: string): string | undefined {
-  const code = (region.split('-')[0] ?? '').toLowerCase();
-  return REGION_LANGUAGE[code] ?? (ISO_639_1.has(code) ? code : undefined);
+  const [country = '', language = ''] = region.toLowerCase().split('-');
+  if (DDG_LANGUAGE.has(language)) return DDG_LANGUAGE.get(language) ?? undefined;
+  if (ISO_639_1.has(language)) return language;
+  return COUNTRY_LANGUAGE.get(country) ?? (ISO_639_1.has(country) ? country : undefined);
 }
 
 type FetchLike = (url: string | URL, init?: RequestInit) => Promise<Response>;
