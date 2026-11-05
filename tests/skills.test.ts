@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
+import { defaultConfig } from '../src/config/store.ts';
 import { renderSkillFile } from '../src/tools/skills/store.ts';
 import type { SkillDraft, SkillSummary } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
 import { parseRoute, routeHash } from '../web/src/routes.ts';
 import {
-  addDeny, addRoot, applyFolders, cloneFolders, EFFECT_LABEL, findDraft, foldersEqual, foldersFromConfig, removeDeny, removeRoot, setRootMode,
-  skillDraftLink, skillFileText, skillRows, TOOL_CATALOG,
+  addDeny, addRoot, applyFolders, broadKind, cloneFolders, DEFAULT_DENY, EFFECT_LABEL, findDraft, foldersEqual, foldersFromConfig, removeDeny, removeRoot, setRootMode,
+  skillDraftLink, skillFileText, skillRows, TOOL_CATALOG, wideningChanges,
 } from '../web/src/skills-meta.ts';
 import { toTab } from '../web/src/tabs.ts';
 import { startScreenServer } from './screen-server.ts';
@@ -92,6 +93,38 @@ test('フォルダ: 追加は前後の空白を除き重ねず、外す・読み
   assert.ok(foldersEqual(start, cloneFolders(start)));
   assert.ok(!foldersEqual(start, added));
   assert.ok(!foldersEqual(start, setRootMode(start, 'workspace', 'read')));
+});
+
+test('広がる変更: 触れないパスを外す・フォルダを足す・読むだけを読み書きにする、だけを数える。狭くなる変更は数えない', () => {
+  const base = { roots: [{ path: 'workspace', mode: 'write' as const }, { path: '~/ref', mode: 'read' as const }], deny: ['~/.ssh', '~/.aws', 'mine'] };
+  assert.deepEqual(wideningChanges(base, cloneFolders(base)), [], '何も変えなければ無し');
+  assert.deepEqual(wideningChanges(base, removeDeny(base, '~/.ssh')), [{ kind: 'deny-removed', path: '~/.ssh', builtin: true }], '初めから入っている触れないパスを外す');
+  assert.deepEqual(wideningChanges(base, removeDeny(base, 'mine')), [{ kind: 'deny-removed', path: 'mine', builtin: false }], '自分で足したものを外す');
+  assert.deepEqual(wideningChanges(base, addRoot(base, '~/Documents/notes', 'write')), [{ kind: 'root-added', path: '~/Documents/notes', mode: 'write', broad: null }]);
+  assert.deepEqual(wideningChanges(base, addRoot(base, '~/Documents/notes', 'read')), [{ kind: 'root-added', path: '~/Documents/notes', mode: 'read', broad: null }], '読むだけでも、新しい場所に触れられる');
+  assert.deepEqual(wideningChanges(base, setRootMode(base, '~/ref', 'write')), [{ kind: 'root-write', path: '~/ref', broad: null }], '読むだけ → 読み書き');
+  assert.deepEqual(wideningChanges(base, addRoot(base, 'C:\\', 'read')), [{ kind: 'root-added', path: 'C:\\', mode: 'read', broad: 'filesystem' }]);
+  assert.deepEqual(wideningChanges(base, setRootMode(addRoot(base, '~', 'read'), '~', 'write')), [{ kind: 'root-added', path: '~', mode: 'write', broad: 'home' }], '足してから読み書きにしても、足したことだけを 1 件で数える');
+  // 狭くなる変更
+  assert.deepEqual(wideningChanges(base, removeRoot(base, 'workspace')), []);
+  assert.deepEqual(wideningChanges(base, setRootMode(base, 'workspace', 'read')), []);
+  assert.deepEqual(wideningChanges(base, addDeny(base, '~/.kube')), []);
+  // 外してから同じものを戻せば、差は無い
+  assert.deepEqual(wideningChanges(base, addDeny(removeDeny(base, '~/.ssh'), '~/.ssh')), []);
+  assert.deepEqual(wideningChanges(base, addRoot(removeRoot(base, 'workspace'), 'workspace', 'write')), [], '外して戻した読み書きは、元と同じ');
+  // 複数は、触れないパス → フォルダの順で全部並べる
+  const many = addRoot(setRootMode(removeDeny(removeDeny(base, '~/.aws'), '~/.ssh'), '~/ref', 'write'), '/', 'read');
+  assert.deepEqual(wideningChanges(base, many).map(w => `${w.kind}:${w.path}`), ['deny-removed:~/.ssh', 'deny-removed:~/.aws', 'root-write:~/ref', 'root-added:/']);
+});
+
+test('広すぎる場所: ディスク全体・ドライブの直下・ホームフォルダの全体を見分け、ふつうのフォルダは見分けない', () => {
+  for (const path of ['/', '//', '\\', 'C:', 'c:\\', 'D:/', 'C:\\\\']) assert.equal(broadKind(path), 'filesystem', path);
+  for (const path of ['~', '~/', '~\\', '/home/alice', '/home/alice/', '/Users/bob', 'C:\\Users\\carol', 'c:/users/carol/']) assert.equal(broadKind(path), 'home', path);
+  for (const path of ['workspace', '~/Documents', '/home/alice/notes', '/var/log', 'C:\\Users\\carol\\Documents', 'C:\\Windows', '/home', '', '   ']) assert.equal(broadKind(path), null, path);
+});
+
+test('既定の触れないパス: 画面の DEFAULT_DENY は、サーバーの既定値と同じ', () => {
+  assert.deepEqual([...DEFAULT_DENY], defaultConfig().tools.deny);
 });
 
 test('applyFolders: 設定の tools.roots / tools.deny だけを差し替え、ほかの項目はそのまま', () => {

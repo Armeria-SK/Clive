@@ -75,11 +75,22 @@ export function SkillsPage({ target, revision }: Props) {
     }).catch(() => undefined).finally(() => { checking.current = null; });
   }, [skills, t]);
 
+  const foldersDirty = folders !== null && !foldersEqual(folders.draft, folders.saved);
+  // 保存していないフォルダの変更があるまま、再読み込みや閉じる操作をしようとしたら、ブラウザに確かめさせる
+  useEffect(() => {
+    if (!foldersDirty) return undefined;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [foldersDirty]);
+
+  // 保存の直前に最新の設定を取り直す。開いてから別の場所で変わっていたら、上書きせずに止める
   const saveFolders = async () => {
     if (!folders) return;
     setFoldersBusy(true); setProblems([]);
     try {
       const latest = await api.settings();
+      if (!foldersEqual(foldersFromConfig(latest.config), folders.saved)) { setProblems([t('folders.changedElsewhere')]); return; }
       const result = await api.saveSettings(applyFolders(latest.config, folders.draft));
       const saved = foldersFromConfig(result.config);
       setFolders({ saved, draft: cloneFolders(saved), outside: outsideOf(result.config) });
@@ -88,6 +99,15 @@ export function SkillsPage({ target, revision }: Props) {
       if (error instanceof ApiError) setProblems(error.body?.problems?.length ? error.body.problems : [error.message]);
       else setProblems([t('folders.saveFailed')]);
     } finally { setFoldersBusy(false); }
+  };
+
+  // 「元に戻す」は、サーバーの最新の設定を読み直す（別の場所で変わっていた分も、ここで取り込む）
+  const revertFolders = () => {
+    setProblems([]);
+    api.settings().then(s => {
+      const saved = foldersFromConfig(s.config);
+      setFolders({ saved, draft: cloneFolders(saved), outside: outsideOf(s.config) });
+    }, () => setFolders(current => (current ? { ...current, draft: cloneFolders(current.saved) } : current)));
   };
 
   const counts: Record<Segment, number | null> = { skills: skills || drafts ? rows.length : null, tools: TOOL_CATALOG.length, folders: folders ? folders.draft.roots.length : null };
@@ -162,10 +182,10 @@ export function SkillsPage({ target, revision }: Props) {
           folders
             ? (
               <FoldersPanel
-                draft={folders.draft} outside={folders.outside} dirty={!foldersEqual(folders.draft, folders.saved)} busy={foldersBusy} problems={problems}
+                draft={folders.draft} saved={folders.saved} outside={folders.outside} dirty={foldersDirty} busy={foldersBusy} problems={problems}
                 onChange={draft => { setFolders({ ...folders, draft }); setProblems([]); }}
                 onSave={() => void saveFolders()}
-                onRevert={() => { setFolders({ ...folders, draft: cloneFolders(folders.saved) }); setProblems([]); }}
+                onRevert={revertFolders}
               />
             )
             : <p className="view-note">{t('skills.loading')}</p>

@@ -1,6 +1,6 @@
 import type { ReviewJob, RunRow, ToolCallRow } from './api.ts';
 import type { IconName } from './icon-paths.ts';
-import { formatNumber, t, type PlainKey } from './i18n/index.ts';
+import { formatList, formatNumber, t, type PlainKey } from './i18n/index.ts';
 
 export type LogView = 'runs' | 'tools' | 'reviews';
 export const LOG_VIEWS: readonly LogView[] = ['runs', 'tools', 'reviews'];
@@ -60,7 +60,7 @@ export function runDetail(run: RunRow): string {
     if (run.attempts > 1) parts.push(t('runs.detail.attempts', run.attempts));
   }
   if (run.est_prompt_tokens !== null) parts.push(t('runs.detail.est', formatTokens(run.est_prompt_tokens)));
-  if (run.flags.length) parts.push(run.flags.join('・'));
+  if (run.flags.length) parts.push(formatList(run.flags));
   return parts.filter(Boolean).join(' · ');
 }
 

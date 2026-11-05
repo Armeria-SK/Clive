@@ -40,7 +40,7 @@ function RunsTable({ runs }: { runs: RunRow[] }) {
       </div>
       {runs.map(run => (
         <div role="row" className="lg-row" key={run.id}>
-          <span role="cell" className="lg-cell">{formatDateTime(run.started_at)}</span>
+          <span role="cell" className="lg-cell">{formatDateTime(run.started_at, 'precise')}</span>
           <span role="cell" className="lg-cell">{runKindLabel(run.kind)}</span>
           <span role="cell" className="lg-cell lg-mono" title={run.model_id ?? undefined}>{run.model_id ?? '—'}</span>
           <span role="cell" className="lg-cell"><StatusCell status={runStatus(run)} /></span>
@@ -61,7 +61,7 @@ function ToolsTable({ calls }: { calls: ToolCallRow[] }) {
       </div>
       {calls.map(call => (
         <div role="row" className="lg-row" key={call.id}>
-          <span role="cell" className="lg-cell">{formatDateTime(call.created_at)}</span>
+          <span role="cell" className="lg-cell">{formatDateTime(call.created_at, 'precise')}</span>
           <span role="cell" className="lg-cell lg-mono" title={call.tool}>{call.tool}</span>
           <span role="cell" className="lg-cell"><span className={`tag ${decisionTag(call.decision)}`}>{decisionLabel(call.decision)}</span></span>
           <span role="cell" className="lg-cell">{decidedByLabel(call.decided_by)}</span>

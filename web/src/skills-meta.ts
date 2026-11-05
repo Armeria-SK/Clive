@@ -117,3 +117,35 @@ export function addDeny(folders: FolderDraft, path: string): FolderDraft {
 }
 
 export const removeDeny = (folders: FolderDraft, path: string): FolderDraft => ({ ...folders, deny: folders.deny.filter(p => p !== path) });
+
+// サーバーの既定の「触れないパス」（src/config/schema.ts の tools.deny の既定値。tests/skills.test.ts が突き合わせる）。
+export const DEFAULT_DENY: readonly string[] = ['~/.ssh', '~/.aws', '~/.gnupg'];
+
+export type BroadKind = 'filesystem' | 'home';
+
+// ディスク全体（/ やドライブの直下）とホームフォルダの全体は、範囲として広すぎる。ホームの実際の場所は画面からは分からないので、~ と、/home/<名前>・/Users/<名前>（ドライブ付きも）の形で見分ける。
+export function broadKind(path: string): BroadKind | null {
+  const trimmed = path.trim();
+  if (!trimmed) return null;
+  const stripped = trimmed.replace(/[\\/]+$/u, '');
+  if (stripped === '' || /^[A-Za-z]:$/u.test(stripped)) return 'filesystem';
+  if (stripped === '~' || /^(?:[A-Za-z]:)?[\\/](?:home|Users)[\\/][^\\/]+$/iu.test(stripped)) return 'home';
+  return null;
+}
+
+export type Widening =
+  | { kind: 'deny-removed'; path: string; builtin: boolean }
+  | { kind: 'root-added'; path: string; mode: RootMode; broad: BroadKind | null }
+  | { kind: 'root-write'; path: string; broad: BroadKind | null };
+
+// 保存で、Clive が触れられる範囲が広がるもの（触れないパスを外す・フォルダを足す・読むだけを読み書きにする）を、そのまま並べる。狭くなる変更は含めない。
+export function wideningChanges(before: FolderDraft, after: FolderDraft): Widening[] {
+  const out: Widening[] = [];
+  for (const path of before.deny) if (!after.deny.includes(path)) out.push({ kind: 'deny-removed', path, builtin: DEFAULT_DENY.includes(path) });
+  for (const root of after.roots) {
+    const old = before.roots.find(r => r.path === root.path);
+    if (!old) out.push({ kind: 'root-added', path: root.path, mode: root.mode, broad: broadKind(root.path) });
+    else if (old.mode === 'read' && root.mode === 'write') out.push({ kind: 'root-write', path: root.path, broad: broadKind(root.path) });
+  }
+  return out;
+}

@@ -16,9 +16,13 @@ const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textare
 
 // 画面の上に重ねる窓。Esc・背景を押す・Tab の巡回・閉じたあとの元の場所へのフォーカスを受け持つ。
 function DialogFrame({ open, label, dirty, wide, onClose, children }: { open: boolean; label: string; dirty: boolean; wide: boolean; onClose: () => void; children: ReactNode }) {
+  const t = useT();
   const { mounted, leaving } = useExit(open, EXIT_MS);
   const box = useRef<HTMLDivElement>(null);
-  useEscapeLayer('dialog', open, onClose);
+  const [asking, setAsking] = useState(false);
+  // 編集中の Esc は、捨てる前に確かめる（もう一度 Esc で編集に戻る）。編集していなければ、そのまま閉じる
+  useEscapeLayer('dialog', open, () => { if (dirty) setAsking(a => !a); else onClose(); });
+  useEffect(() => { if (!open || !dirty) setAsking(false); }, [open, dirty]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -47,6 +51,15 @@ function DialogFrame({ open, label, dirty, wide, onClose, children }: { open: bo
       <div className="sk-wrap">
         <div ref={box} className={`dialog sk-dialog${wide ? ' wide' : ''}${leaving ? ' leaving' : ''}`} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} onKeyDown={trap}>
           {children}
+          {asking && (
+            <div className="sk-discard" role="alertdialog" aria-label={t('skills.discard.text')}>
+              <span className="sk-confirm-text">{t('skills.discard.text')}</span>
+              <div className="dialog-actions">
+                <button className="btn btn-ghost sk-plain" onClick={() => setAsking(false)} autoFocus>{t('skills.discard.keep')}</button>
+                <button className="btn sk-danger" onClick={onClose}>{t('skills.discard.do')}</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>,

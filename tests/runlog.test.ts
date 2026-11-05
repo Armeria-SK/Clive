@@ -53,13 +53,14 @@ test('トークンの短い書き方と、秒数・実行の種類', () => {
 test('実行の詳細: 成功は入出力とキャッシュ、失敗は理由と試行。見積もりと印はどちらにも付く', () => {
   ja();
   assert.equal(runDetail(run()), '入 3.2k · 出 412 · キャッシュ 1.1k · 見積もり 3.3k');
-  assert.equal(runDetail(run({ attempts: 3, flags: ['text_tool_calls', 'x'], cache_read_tokens: 0 })), '入 3.2k · 出 412 · 試行 3 · 見積もり 3.3k · text_tool_calls・x');
+  assert.equal(runDetail(run({ attempts: 3, flags: ['text_tool_calls', 'x'], cache_read_tokens: 0 })), '入 3.2k · 出 412 · 試行 3 · 見積もり 3.3k · text_tool_calls、x', '付いた印の区切りは、言語の並べ方（Intl.ListFormat）');
   assert.equal(runDetail(run({ ok: 0, error_message: '429 Too Many Requests', attempts: 3, input_tokens: null, output_tokens: null, cache_read_tokens: null, est_prompt_tokens: 4100 })), '429 Too Many Requests · 試行 3 · 見積もり 4.1k');
   assert.equal(runDetail(run({ ok: 0, error_message: '中止しました', attempts: 0, est_prompt_tokens: null })), '中止しました');
   assert.equal(runDetail(run({ ok: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, est_prompt_tokens: null })), '', '実行中で何も無ければ空');
   en();
   assert.equal(runDetail(run({ attempts: 2 })), 'in 3.2k · out 412 · cache 1.1k · 2 attempts · est. 3.3k');
   assert.equal(runDetail(run({ ok: 0, error_message: 'boom', attempts: 1, est_prompt_tokens: null })), 'boom · 1 attempt');
+  assert.equal(runDetail(run({ flags: ['a', 'b', 'c'] })), 'in 3.2k · out 412 · cache 1.1k · est. 3.3k · a, b, and c');
   ja();
 });
 
