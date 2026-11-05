@@ -291,14 +291,16 @@ for (const shell of ['powershell', 'bash'] as const) {
     await pending;
     assert.equal(existsSync(marker), false, '同じコマンドで書き換えた設定のコードが動いた');
     // git が読む洗い出した設定の置き場所は、実行のたびに違い、終わると消える
-    const origin = async () => /file:(\S*gitconfig)/u.exec((await s.call('git config --list --show-origin')).output.content)?.[1];
+    const origin = async () => /^(\S*git-run\S*hooks)$/mu.exec((await s.call('git config --get core.hooksPath')).output.content)?.[1];
     const first = await origin();
     const second = await origin();
-    assert.ok(first && second, '洗い出した設定の置き場所が git config --list --show-origin に出ない');
+    assert.ok(first && second, '実行ごとの置き場所が core.hooksPath に出ない');
     assert.notEqual(first, second, '2 回の実行が同じ置き場所を使う');
     assert.equal(first.includes('git-global'), false, 'これまでの決まった置き場所を使っている');
     for (const place of [first, second]) assert.equal(existsSync(place), false, `終わったのに残っている: ${place}`);
     const left = join(s.paths.data, 'git-run');
     assert.deepEqual(existsSync(left) ? readdirSync(left) : [], [], '置き場所が残っている');
+    // コマンドレベルの上書き（リポジトリの設定より優先）が、実際の実行に渡っている
+    assert.match((await s.call('git config --get core.fsmonitor')).output.content, /^false$/mu);
   });
 }

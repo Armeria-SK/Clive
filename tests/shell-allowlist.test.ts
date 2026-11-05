@@ -233,6 +233,27 @@ test('git: ホーム・システムの設定を洗い出せない git（2.32 よ
   assert.equal(classify('git status', 'bash', { gitIsolated: false }).results[0]!.reasons.every(r => r.exempt === false), true);
 });
 
+// コマンドレベルの上書き（GIT_CONFIG_COUNT）は、コマンドから書き換えられない。環境変数 GIT_CONFIG_*・git -c・--config-env は、どの書き方でも今回だけ
+test('git: GIT_CONFIG_COUNT・KEY・VALUE・PARAMETERS を環境に置く書き方、-c、--config-env は、どれも今回だけ', () => {
+  const bash = [
+    'GIT_CONFIG_COUNT=0 git status', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=x git status', 'GIT_CONFIG_KEY_0=core.fsmonitor git status', 'GIT_CONFIG_VALUE_0=x git status',
+    'GIT_CONFIG_PARAMETERS="x" git status', 'env GIT_CONFIG_COUNT=0 git status', 'export GIT_CONFIG_COUNT=0', 'export GIT_CONFIG_KEY_0=x', 'GIT_CONFIG_COUNT=0; git status', 'declare -x GIT_CONFIG_COUNT=0',
+    'git -c core.fsmonitor=x status', 'git -c core.fsmonitor=false status', 'git -ccore.fsmonitor=x status', 'git --config-env=core.fsmonitor=V status', 'git --config-env core.fsmonitor=V status', 'git -C . -c core.pager=x log',
+    'git --no-pager -c core.pager=x log', 'git -c core.hooksPath=/evil commit -m x',
+  ];
+  const ps = [
+    '$env:GIT_CONFIG_COUNT = "0"; git status', '$env:GIT_CONFIG_KEY_0 = "x"', 'Set-Item Env:GIT_CONFIG_COUNT 0', 'Set-Content Env:GIT_CONFIG_COUNT 0', 'New-Item Env:GIT_CONFIG_COUNT -Value 0',
+    '[Environment]::SetEnvironmentVariable("GIT_CONFIG_COUNT","0")', 'git -c core.fsmonitor=x status', 'git --config-env=core.fsmonitor=V status', 'git -ccore.fsmonitor=x status',
+  ];
+  const wrong = [
+    ...bash.filter(c => levelOf(c, 'bash') !== 'once').map(c => `bash: ${c} → ${levelOf(c, 'bash')}`),
+    ...ps.filter(c => levelOf(c, 'powershell') !== 'once').map(c => `powershell: ${c} → ${levelOf(c, 'powershell')}`),
+  ];
+  assert.deepEqual(wrong, []);
+  // 環境変数に置く書き方は、tools.shell.allow（持ち主が書いた許可）でも消せない
+  assert.equal(classify('GIT_CONFIG_COUNT=0 git status', 'bash').results.every(r => r.reasons.every(x => x.exempt === false)), true);
+});
+
 test('git: 前に置ける引数・サブコマンドごとの扱い', () => {
   const rows: Array<[string, Level]> = [
     ['git --no-pager log', 'allow'], ['git -C sub status', 'allow'], ['git -P diff', 'allow'], ['git --version', 'allow'], ['git version', 'allow'],

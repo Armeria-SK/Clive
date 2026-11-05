@@ -94,6 +94,28 @@ export function gitConfigSources(env: Env, gitExe?: string): string[] {
 }
 
 const RUN_FOLDER = 'git-run';
+
+// コマンドレベルの設定（GIT_CONFIG_COUNT）は、リポジトリの設定・ホームの設定より優先される（git -c だけがこれより優先される。-c は許可の一覧で今回だけ）。
+// プログラムを動かす決まった名前の項目を、リポジトリの見つけ方（git-repo.ts）が git とずれても動かないように、先に打ち消す。
+// 打ち消せないもの: diff.external（どんな値でもプログラムとして動かされ、空にすると git diff が動かなくなる）と、名前が決まっていない項目
+// （filter.<名前>.clean・smudge、diff.<名前>.textconv・command、merge.<名前>.driver、alias.<名前>、pager.<コマンド>、url.<先>.insteadOf、credential.<URL>.helper、
+// remote.<名前>.uploadpack・receivepack・vcs、submodule.<名前>.update、trailer.<名前>.command）。これらは git-repo.ts がリポジトリの設定を調べて今回だけにする
+function overrides(hooksDir: string, helpers: readonly string[]): Array<[string, string]> {
+  return [
+    ['core.fsmonitor', 'false'], ['core.hooksPath', hooksDir], ['core.pager', 'cat'], ['core.editor', 'true'], ['sequence.editor', 'true'],
+    ['core.sshCommand', 'ssh'], ['core.askPass', ''], ['core.gitProxy', 'none'],
+    ['gpg.program', 'gpg'], ['gpg.openpgp.program', 'gpg'], ['gpg.x509.program', 'gpgsm'], ['gpg.ssh.program', 'ssh-keygen'], ['gpg.ssh.defaultKeyCommand', 'ssh-add -L'],
+    ['protocol.ext.allow', 'never'],
+    // 認証の補助は足し算なので、先に空にして（リポジトリの設定の補助を捨てる）、洗い出した設定にある安全な補助だけを足し直す
+    ['credential.helper', ''], ...helpers.map((helper): [string, string] => ['credential.helper', helper]),
+  ];
+}
+
+function countEnv(entries: ReadonlyArray<readonly [string, string]>): Record<string, string> {
+  const env: Record<string, string> = { GIT_CONFIG_COUNT: String(entries.length) };
+  entries.forEach(([key, value], i) => { env[`GIT_CONFIG_KEY_${i}`] = key; env[`GIT_CONFIG_VALUE_${i}`] = value; });
+  return env;
+}
 // 途中で止まった実行の残りを消す目安（実行は最長でも1時間）
 const STALE_MS = 6 * 60 * 60 * 1000;
 
@@ -120,14 +142,18 @@ export function prepareGitRun(options: { dataDir: string; env: Env; gitExe?: str
   const root = join(options.dataDir, RUN_FOLDER);
   const dir = join(root, randomUUID());
   const file = join(dir, 'gitconfig');
+  const hooks = join(dir, 'hooks');
+  let helpers: string[] = [];
   try {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(hooks, { recursive: true });
     sweepStale(root);
     const texts = gitConfigSources(options.env, options.gitExe).flatMap(source => readSmall(source) ?? []);
-    writeFileSync(file, sanitizeGitConfig(texts), { encoding: 'utf8', mode: 0o600 });
-  } catch { /* 上のとおり */ }
+    const sanitized = sanitizeGitConfig(texts);
+    writeFileSync(file, sanitized, { encoding: 'utf8', mode: 0o600 });
+    helpers = (parseGitConfig(sanitized) ?? []).filter(e => e.key === 'credential.helper' && e.value !== '').map(e => e.value);
+  } catch { /* 上のとおり。フックの置き場所が無くても、フックは動かない */ }
   return {
-    env: { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1' },
+    env: { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1', ...countEnv(overrides(hooks, helpers)) },
     cleanup: () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* 残っても、次の実行が古いものを消す */ } },
   };
 }
