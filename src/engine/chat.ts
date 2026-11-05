@@ -448,7 +448,8 @@ export class ChatEngine {
 
   // 会話の実行が終わるとき、会話で進んだ分をタスクの経過（メモ）に書く。書く先は次のとおりで、普通の終わりで何にも触っていなければ何も書かない:
   // - この実行で作った・task_update で触ったタスク（作る以外の道具を使った実行だけ。作っただけの確認の返事はメモにしない）
-  // - 道具の上限で止まったときは、さらに、この実行が止めたタスクと、この会話で作った実行待ち・返事待ちのタスク。まとめに次の一手があれば、次の一手も書く
+  // - 道具の上限で止まったときは、さらに、この会話で作った実行待ち・返事待ちのタスク。まとめに次の一手があれば、次の一手も書く
+  // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触った・この会話で作ったときだけ書き、そのとき実行中のままの状態（running）も許す
   // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
   #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, run: { wrapUp: boolean; workCalls: number; touched: ReadonlySet<string>; tainted: boolean }): void {
     const d = this.#d;
@@ -457,10 +458,7 @@ export class ChatEngine {
     const preempted = new Set(this.#preemptedTasks.get(runId) ?? []);
     const targets = new Set<string>();
     if (run.wrapUp || run.workCalls > 0) for (const id of run.touched) targets.add(id);
-    if (run.wrapUp) {
-      for (const id of preempted) targets.add(id);
-      for (const id of d.tasks.createdByConversation(conversationId)) targets.add(id);
-    }
+    if (run.wrapUp) for (const id of d.tasks.createdByConversation(conversationId)) targets.add(id);
     if (!targets.size) return;
     const language = languageOf(d.config());
     for (const id of targets) {
