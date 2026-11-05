@@ -19,9 +19,11 @@ export const notificationIcon = (kind: string): IconName => ICONS[kind] ?? 'info
 export const notificationKindLabel = (kind: string): PlainKey | null => KIND_LABELS[kind] ?? null;
 
 // 通知のリンクはデータベースに文字列で残っている（古い経路を含む）。画面の経路として読めるものだけを開く。
+// #/curiosity はタスクの節に移ったが、古い通知のために今も通す。
 export function notificationLink(link: string | null): string | null {
   if (!link) return null;
-  const canonical = routeHash(parseRoute(link));
+  const route = parseRoute(link);
+  const canonical = route.page === 'tasks' && route.section ? `#/${route.section}` : routeHash(route);
   if (canonical === '#/') return link === '#/' ? link : null;
   return link === canonical || link.startsWith(`${canonical}/`) ? link : null;
 }

@@ -16,6 +16,7 @@ import './styles/components.css';
 import './styles/shell.css';
 import './styles/skills.css';
 import './styles/logs.css';
+import './styles/tasks.css';
 import { initTheme } from './theme.ts';
 
 async function start(): Promise<void> {

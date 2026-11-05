@@ -3,10 +3,10 @@ export type RunsTab = 'tools' | 'reviews';
 
 export type Route =
   | { page: 'chat'; conversationId: string | null }
-  | { page: 'tasks'; taskId: string | null }
+  | { page: 'tasks'; taskId: string | null; section?: 'curiosity' }
   | { page: 'today' } | { page: 'notifications' } | { page: 'settings' } | { page: 'memory' }
   | { page: 'runs'; tab?: RunsTab }
-  | { page: 'review' } | { page: 'skills'; target?: SkillTarget } | { page: 'curiosity' };
+  | { page: 'review' } | { page: 'skills'; target?: SkillTarget };
 
 export type Page = Route['page'];
 
@@ -20,7 +20,7 @@ export function parseRoute(hash: string): Route {
   if (hash.startsWith('#/notifications')) return { page: 'notifications' };
   if (hash.startsWith('#/review')) return { page: 'review' };
   if (hash.startsWith('#/skills')) return skillsRoute(hash);
-  if (hash.startsWith('#/curiosity')) return { page: 'curiosity' };
+  if (hash.startsWith('#/curiosity')) return { page: 'tasks', taskId: null, section: 'curiosity' };
   const task = /^#\/tasks(?:\/([^/]+))?$/u.exec(hash);
   if (task) return { page: 'tasks', taskId: task[1] ? safeDecode(task[1]) : null };
   const m = /^#\/c\/([^/]+)$/u.exec(hash);
