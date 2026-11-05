@@ -60,6 +60,10 @@ export const AVATAR_SHAPES = [
 
 export const RESTART_KEYS = ['server'] as const;
 
+export const LANGUAGES = ['ja', 'en'] as const;
+export type Language = (typeof LANGUAGES)[number];
+export const DEFAULT_LANGUAGE: Language = 'ja';
+
 export const RootConfig = Type.Object({
   path: Type.String({ minLength: 1, maxLength: 1024 }),
   mode: Type.Union([Type.Literal('read'), Type.Literal('write')]),
@@ -109,6 +113,7 @@ export const AppConfig = Type.Object({
   $schema: Type.Optional(Type.String()),
   version: Type.Literal(1),
   timezone: Type.String({ default: 'Asia/Tokyo' }),
+  language: Type.Optional(Type.Union(LANGUAGES.map(l => Type.Literal(l)))),
   server: ServerConfig,
   providers: Type.Array(ProviderConfig, { default: [] }),
   models: Type.Array(ModelConfig, { default: [] }),

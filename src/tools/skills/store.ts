@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { atomicWriteFile } from '../../config/store.ts';
+
+const INDEX_TEXT: Record<Language, { heading: string; instruction: string }> = {
+  ja: { heading: '# スキル（手順書）', instruction: '次の作業をするときは、先に skill_view で手順を読んでから従う。' },
+  en: { heading: '# Skills (procedures)', instruction: 'Before doing any of the work below, first read the procedure with skill_view and then follow it.' },
+};
 
 export interface Skill { name: string; description: string; body: string; uses: number; lastUsedAt: number | null; updatedAt: number }
 export interface SkillDraft {
@@ -80,12 +86,13 @@ export class SkillStore {
     };
   }
 
-  index(): string {
+  index(language: Language = DEFAULT_LANGUAGE): string {
     const skills = this.list();
     if (!skills.length) return '';
+    const text = INDEX_TEXT[language];
     return [
-      '# スキル（手順書）',
-      '次の作業をするときは、先に skill_view で手順を読んでから従う。',
+      text.heading,
+      text.instruction,
       ...skills.map(s => `- ${s.name}: ${s.description}`),
     ].join('\n');
   }

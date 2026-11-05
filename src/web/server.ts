@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
-import { AppConfig } from '../config/schema.ts';
+import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
+import { defaultTexts } from '../engine/workspace.ts';
 import type { ApprovalView } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
 import { MemoryError } from '../memory/store.ts';
@@ -35,6 +36,10 @@ function settingsView(app: App) {
     restartRequired: app.restartRequired(),
     configPath: app.configStore.path,
   };
+}
+
+function isLanguage(value: string): value is Language {
+  return (LANGUAGES as readonly string[]).includes(value);
 }
 
 function approvalView(a: ApprovalView) {
@@ -239,6 +244,11 @@ export function createWebServer(app: App): WebServer {
     }
     await app.applyConfig(next);
     sendJson(res, 200, { ...settingsView(app), ...modelsView(app) });
+  });
+  router.add('GET', '/api/templates/:language', ({ res, params }) => {
+    const language = params[0]!;
+    if (!isLanguage(language)) throw new HttpProblem(404, { error: 'not_found', message: `言語「${language}」の初期値はありません（${LANGUAGES.join(' / ')}）` });
+    sendJson(res, 200, { language, ...defaultTexts(app.paths, language) });
   });
   router.add('GET', '/api/models', ({ res }) => sendJson(res, 200, modelsView(app)));
   router.add('POST', '/api/models/probe', async ({ res }) => {

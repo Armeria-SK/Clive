@@ -22,6 +22,8 @@ import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
 import { estimateTextTokens } from './tokens.ts';
+import { languageOf } from '../shared/language.ts';
+import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
@@ -347,11 +349,13 @@ export class ChatEngine {
         const conversation = d.conversations.get(p.conversationId);
         const upto = conversation?.summary_upto ?? 0;
         const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
-        const summary = conversation?.summary ? `# これまでの会話の要約（古い部分。原文は history_read で読めます）\n${conversation.summary}` : '';
-        const dynamic = [buildDynamic(d.config().timezone, d.now?.() ?? new Date()), summary, fallbackMode ? jsonFallbackInstructions(specs) : ''].filter(Boolean).join('\n\n');
+        const config = d.config();
+        const language = languageOf(config);
+        const summary = summarySection(conversation?.summary ?? '', language);
+        const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date()), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
         const system = { frozen: p.snapshot, dynamic };
         let history = stored.map(m => m.message);
-        if (fallbackMode) history = toJsonFallbackHistory(history);
+        if (fallbackMode) history = toJsonFallbackHistory(history, language);
         const apiTools = fallbackMode ? [] : specs;
         const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
         let fitted;
@@ -435,15 +439,9 @@ export class ChatEngine {
 
   async #compact(c: { route: Route; adapter: ProviderAdapter; runId: string; conversationId: string; removed: StoredMessage[]; previous: string | null; capacity: number; signal: AbortSignal }): Promise<boolean> {
     const d = this.#d;
-    const who = (m: StoredMessage) => (m.message.role === 'user' ? 'ユーザー' : m.message.role === 'assistant' ? 'Clive' : `道具（${m.message.name}）の結果`);
-    const transcript = c.removed.map(m => `${who(m)}: ${m.text.slice(0, 1500)}`).join('\n').slice(-COMPACT_TRANSCRIPT_CHARS);
-    const prompt = [
-      'これは会話の古い部分です。これからの会話を続けるのに必要なことを、日本語の箇条書きで簡潔にまとめてください。',
-      '残すもの: ユーザーの目的・頼まれていること・決まったこと・分かった事実・まだ終わっていないこと・大事な固有名詞や数値。',
-      '残さないもの: あいさつ・言い回し・試行錯誤の細部。',
-      c.previous ? `\n# これまでの要約（これに足して、まとめ直してください）\n${c.previous}` : '',
-      `\n# 会話の古い部分\n${transcript}`,
-    ].join('\n');
+    const language = languageOf(d.config());
+    const transcript = c.removed.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, 1500)}`).join('\n').slice(-COMPACT_TRANSCRIPT_CHARS);
+    const prompt = compactPrompt({ previous: c.previous, transcript }, language);
     const maxOutputTokens = Math.min(2000, c.route.model.maxOutputTokens);
     if (estimateTextTokens(prompt) * 1.15 + maxOutputTokens > c.capacity * CONTEXT_FILL_RATIO) return false;
     let release: (() => void) | undefined;
@@ -451,7 +449,7 @@ export class ChatEngine {
       release = await d.limiter.acquire(c.route.provider.id, () => c.route.provider.maxParallel, c.signal);
       let text = '';
       for await (const event of c.adapter.stream({
-        model: c.route.model, system: { frozen: 'あなたは会話の要約係です。指示されたとおりに要約だけを書きます。', dynamic: '' },
+        model: c.route.model, system: { frozen: compactSystem(language), dynamic: '' },
         messages: [{ role: 'user', content: prompt }], tools: [], maxOutputTokens, signal: c.signal,
       })) if (event.type === 'text') text += event.delta;
       if (!text.trim()) return false;
@@ -471,10 +469,11 @@ export class ChatEngine {
     const existing = d.conversations.get(conversationId)?.snapshot;
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
+    const language = languageOf(d.config());
     const snapshot = buildSnapshot(d.paths, {
-      ...(d.memory ? { memories: renderBooks(d.memory.list()) } : {}),
-      ...(d.skills ? { skills: d.skills.index() } : {}),
-    });
+      ...(d.memory ? { memories: renderBooks(d.memory.list(), language) } : {}),
+      ...(d.skills ? { skills: d.skills.index(language) } : {}),
+    }, language);
     d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
