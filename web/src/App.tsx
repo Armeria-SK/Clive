@@ -20,7 +20,7 @@ import { Palette } from './Palette.tsx';
 import { PAGE_META, pickChatModel } from './pages.ts';
 import { chatHash, pageBehind, parseRoute, type Route } from './routes.ts';
 import { Runs } from './Runs.tsx';
-import { serverText, warningText } from './server-text.ts';
+import { failureText, warningText } from './server-text.ts';
 import { InertContext } from './inert.ts';
 import { Onboarding } from './Onboarding.tsx';
 import { markSetupShown, OPEN_SETUP_EVENT, resumeStep, wasSetupShown, type OnboardingState, type StepId } from './onboarding.ts';
@@ -324,8 +324,9 @@ export function App() {
         refreshList();
         refreshWorker();
         if (!e.ok && e.errorKind !== 'cancelled') {
+          const failure = failureText(e.errorCode, e.errorParams, getLanguage());
           addNotice(e.conversationId, {
-            runId: e.runId, kind: 'error', message: serverText(e.errorCode, e.errorParams, getLanguage()) ?? e.errorMessage ?? e.errorKind ?? '', hint: e.detail?.hint,
+            runId: e.runId, kind: 'error', message: failure?.message ?? e.errorMessage ?? e.errorKind ?? '', detail: failure?.detail ?? undefined, hint: e.detail?.hint,
             errorKind: e.errorKind, measured: e.detail?.measured, required: e.detail?.required,
           });
         }

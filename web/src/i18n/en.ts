@@ -109,6 +109,8 @@ export const en: Dict = {
   'chat.memory.undoFailed': 'Could not undo',
   'chat.fail.title': 'Could not write a reply',
   'chat.fail.retry': 'Send again',
+  'chat.fail.moreDetail': 'Details',
+  'chat.fail.lessDetail': 'Hide',
   'chat.fail.fix': 'How to fix',
   'chat.send.failed': 'Could not send. Check that the server is running.',
   'chat.send.failedTitle': 'Could not send',

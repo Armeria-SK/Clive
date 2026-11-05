@@ -9,7 +9,8 @@ import { storeText } from '../src/shared/messages/stores.ts';
 import { taskText } from '../src/shared/messages/tasks.ts';
 import { ApiError } from '../web/src/api.ts';
 import { setLanguagePreference } from '../web/src/i18n/index.ts';
-import { errorBodyText, probeMessage, serverText, warningText } from '../web/src/server-text.ts';
+import { classifyHttpFailure } from '../src/providers/http.ts';
+import { errorBodyText, FAILURE_DETAIL_MAX, failureText, probeMessage, serverText, warningText } from '../web/src/server-text.ts';
 import { startScreenServer } from './screen-server.ts';
 
 afterEach(() => setLanguagePreference('auto'));
@@ -40,6 +41,32 @@ test('コードの訳: 表に無い・コードの形でない・差し込みの
   assert.equal(serverText('http.required', { field: 'x', extra: 1 }, 'en'), httpText('en', 'required', { field: 'x' }), '余分な値は無視');
   assert.equal(serverText('engine.no_usable', {}, 'en'), null, '{lines} が足りない（コードに値の無いもの）は、サーバーの文のまま');
   assert.equal(serverText('http.required', { field: { nested: true } } as never, 'en'), null, '入れ子の値は差し込まない');
+});
+
+const TRACEBACK = 'Traceback (most recent call last):\n  File "/app/server.py", line 88, in handle\n    raise ValueError("bad request " + payload)\nValueError: bad request ' + 'x'.repeat(400);
+
+test('返事の失敗の札: 相手のサーバーが返した本文（Python の traceback など）は文に入れず、短く切って別に返す。実行ログ用の全文は変わらない', () => {
+  const failure = classifyHttpFailure(400, TRACEBACK);
+  assert.match(failure.message, /Traceback/u, '実行ログ・エラーの全文には、これまでどおり本文が入る');
+  for (const language of ['ja', 'en'] as const) {
+    const shown = failureText(`provider.${failure.code}`, failure.params, language)!;
+    assert.equal(shown.message, providerText(language, 'http.rejected', { status: 400, suffix: '' }), `${language}: 「リクエストが拒否されました」だけ`);
+    assert.doesNotMatch(shown.message, /Traceback|server\.py|ValueError/u);
+    assert.ok(shown.detail !== null && shown.detail.startsWith('Traceback (most recent call last): File'), '本文は detail に短く');
+    assert.ok(shown.detail.length <= FAILURE_DETAIL_MAX + 1 && shown.detail.endsWith('…'), `切ってある: ${shown.detail.length}`);
+    assert.doesNotMatch(shown.detail, /\n/u, '改行は 1 つの空白にする');
+  }
+  assert.equal(failureText('provider.http.rejected', { status: 400, suffix: '' }, 'ja')!.detail, null, '本文が無ければ detail も無い');
+  assert.equal(failureText('provider.http.rejected', { status: 400, suffix: ': 短い本文' }, 'ja')!.detail, '短い本文', '短ければ切らない');
+  for (const [status, code] of [[401, 'http.auth'], [404, 'http.not_found'], [429, 'http.rate_limit'], [500, 'http.server'], [400, 'http.rejected']] as const) {
+    const error = classifyHttpFailure(status, TRACEBACK);
+    assert.equal(error.code, code);
+    const shown = failureText(`provider.${error.code}`, error.params, 'ja')!;
+    assert.doesNotMatch(shown.message, /Traceback|ValueError/u, code);
+    assert.ok(shown.message.includes('HTTP') || code === 'http.rate_limit', `${code}: 状態の番号は残る`);
+  }
+  assert.deepEqual(failureText('provider.timeout', {}, 'ja'), { message: providerText('ja', 'timeout'), detail: null }, '本文の無い失敗は今までどおり');
+  assert.equal(failureText('provider.mystery', {}, 'ja'), null, '知らないコードは null（呼ぶ側がサーバーの文を使う）');
 });
 
 test('API のエラーの本文: code / params と、返事の 409 の errorCode / errorParams を読む。コードが無ければ null', () => {
@@ -115,6 +142,9 @@ test('警告: コードから画面の言語の文にする。再試行は理由
     }
   }
   const error = providerError('rate_limit', 'http.rate_limit', { status: 429, suffix: '' });
+  const secret = warningText({ code: 'retrying', message: 'サーバーの文', params: { seconds: 8, attempt: 2, retries: 3, errorCode: 'provider.http.server', errorParams: { status: 500, suffix: ': Traceback (most recent call last): boom' } } }, 'ja');
+  assert.doesNotMatch(secret, /Traceback|boom/u, '再試行の知らせにも、相手の本文は出さない');
+  assert.match(secret, /プロバイダ側のエラーです（HTTP 500）/u);
   const retryParams = { seconds: 8, attempt: 2, retries: 3, errorCode: 'provider.http.rate_limit', errorParams: error.params };
   for (const language of ['ja', 'en'] as const) {
     assert.equal(

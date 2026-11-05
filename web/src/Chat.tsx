@@ -23,6 +23,8 @@ export interface RunNotice {
   runId: string;
   kind: 'warning' | 'error' | 'switch' | 'memory' | 'compaction' | 'stopped';
   message: string;
+  // 相手のサーバーが返した本文を短く切ったもの。「詳しく」を開いたときだけ出す
+  detail?: string | undefined;
   hint?: string | undefined;
   retryable?: boolean;
   eventId?: number;
@@ -275,7 +277,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   });
   if (errorNotice) {
     push(`err-${errorNotice.runId}`, 'fail', (
-      <FailureCard message={errorNotice.message} hint={errorNotice.hint} numbers={runOverflowOf(errorNotice)} onRetry={lastIsUser && !draft ? () => void retry() : undefined} />
+      <FailureCard message={errorNotice.message} detail={errorNotice.detail} hint={errorNotice.hint} numbers={runOverflowOf(errorNotice)} onRetry={lastIsUser && !draft ? () => void retry() : undefined} />
     ));
   }
   if (failure) {

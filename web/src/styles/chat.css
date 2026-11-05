@@ -98,6 +98,8 @@
 .chat-card-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .chat-card-title { font-weight: 600; font-size: 14px; }
 .chat-card-reason { font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-card-more { align-self: flex-start; }
+.chat-card-detail { font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .chat-card-hint { font-size: 13px; color: var(--color-text-muted); overflow-wrap: anywhere; }
 .chat-card-hint strong { margin-right: 8px; color: var(--color-text); font-weight: 600; }
 .chat-pre { flex-direction: column; gap: 12px; padding: 14px 16px; }
