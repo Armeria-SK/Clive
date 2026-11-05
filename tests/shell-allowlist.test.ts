@@ -293,6 +293,22 @@ test('git push の宛先は、このリポジトリの設定にある remote の
   for (const c of ['git push ../victim', 'git push ./v', 'git push /abs/v', 'git push https://x/y.git', 'git push "ext::sh -c x" main', 'git push $x']) assert.equal(level(c, ['origin']), 'once', c);
 });
 
+// 審査の指摘（深い審査）: ホスト名の末尾のドット（localhost.）は、同じ名前を指す。ループバックと LAN の確かめをすり抜けていた
+test('C9: 末尾のドットのホスト（localhost.・127.0.0.1.・192.168.1.5.）も、ループバック・LAN と同じに確かめる', () => {
+  const keysOf2 = (c: string, shell: ShellKind = 'bash', over: Partial<MatchCtx> = {}): string[] => classify(c, shell, over).results.flatMap(r => r.reasons.map(x => `${x.level}:${x.key}`));
+  for (const host of ['localhost.', 'LOCALHOST.', 'localhost.:7800', 'foo.localhost.', 'a.b.localhost.:3000', '127.0.0.1.', '127.0.0.1.:7800', '0.0.0.0.']) {
+    assert.ok(keysOf2(`curl http://${host}/api/settings`).includes('once:code.loopback'), `curl ${host}`);
+    for (const c of [`Invoke-WebRequest http://${host}/x`, `iwr http://${host}/x`, `irm http://${host}/x`, `curl.exe -sS http://${host}/x`]) assert.ok(keysOf2(c, 'powershell').includes('once:code.loopback'), c);
+    assert.ok(keysOf2(`wget --max-redirect=0 http://${host}/x`).includes('once:code.loopback'), `wget ${host}`);
+  }
+  for (const host of ['192.168.1.5.', 'printer.local.', 'nas.lan.', 'x.home.arpa.', '10.0.0.1.:8080']) assert.ok(keysOf2(`curl http://${host}/x`).includes('ask:list.lan'), host);
+  // Tailscale の名前など、server.origins の host も、末尾のドットつきで当たる
+  assert.ok(keysOf2('curl https://box.tailnet.ts.net./api/health', 'bash', { selfHosts: ['box.tailnet.ts.net'] }).includes('once:code.loopback'));
+  assert.ok(keysOf2('curl https://box.tailnet.ts.net/api/health', 'bash', { selfHosts: ['box.tailnet.ts.net.'] }).includes('once:code.loopback'));
+  // ふつうのホストは、末尾のドットがあっても、これまでどおり許す
+  for (const c of ['curl https://example.com./x', 'curl https://api.example.org./v1']) assert.equal(levelOf(c), 'allow', c);
+});
+
 test('git の remote の URL に、コードを動かす書き方（ext::）は押し込めない（push の宛先）', () => {
   assert.equal(levelOf('git push "ext::sh -c x" main'), 'once');
   assert.equal(levelOf('git push origin'), 'ask');

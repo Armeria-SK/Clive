@@ -122,12 +122,13 @@ export function checkValue(type: ValueType, word: Word, acc: Acc, cmd: string, f
 const LOOPBACK_HOST = /^(?:127\.\d{1,3}(?:\.\d{1,3}){0,2}|localhost|0\.0\.0\.0|2130706433|0x7f[0-9a-f]*|::1)$/iu;
 const LAN_HOST = /^(?:10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|f[cd][0-9a-f]{2}:.*|fe[89ab][0-9a-f]:.*)$/iu;
 
+// 末尾のドット（localhost.）は同じ名前を指すので落とす
 export function hostOf(url: string): string | null {
-  try { return new URL(url).hostname.toLowerCase().replace(/^\[|\]$/gu, ''); } catch { return null; }
+  try { return new URL(url).hostname.toLowerCase().replace(/^\[|\]$/gu, '').replace(/\.+$/u, ''); } catch { return null; }
 }
 
 export const isLoopbackHost = (host: string, selfHosts: readonly string[]): boolean =>
-  LOOPBACK_HOST.test(host) || host.endsWith('.localhost') || selfHosts.some(h => h && h.toLowerCase() === host);
+  LOOPBACK_HOST.test(host) || host.endsWith('.localhost') || selfHosts.some(h => h && h.toLowerCase().replace(/\.+$/u, '') === host.replace(/\.+$/u, ''));
 
 export function checkUrl(word: Word, acc: Acc, ctx: MatchCtx, cmd: string): void {
   acc.fetch = true;
