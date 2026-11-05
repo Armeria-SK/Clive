@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { findGitDir, inspectRepo, parseGitConfig, unusualKey } from '../src/tools/hooks/git-repo.ts';
+import { findGitDir, inspectRepo, insideGitDir, isGitDir, isLocalRemoteUrl, parseGitConfig, unusualKey } from '../src/tools/hooks/git-repo.ts';
 import { tempDir } from './helpers.ts';
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
@@ -27,7 +27,7 @@ function repoWith(t: { after: (fn: () => void) => void }, config: string): strin
 test('ふつうの設定のリポジトリは「ふつう」と読む', t => {
   const root = repoWith(t, PLAIN);
   const info = inspectRepo(root);
-  assert.deepEqual(info, { found: true, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: join(root, '.git', 'hooks'), remotes: ['origin'] });
+  assert.deepEqual(info, { found: true, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: join(root, '.git', 'hooks'), remotes: ['origin'], localRemotes: [] });
 });
 
 test('コードを動かせる項目がひとつでもあれば、ふつうでないと読む（項目の名前を返す）', t => {
@@ -469,6 +469,37 @@ test('コードを動かさない表示・動作の項目は、リポジトリ�
   for (const [config, key] of [['[core]\n\teditor = vim\n', 'core.editor'], ['[core]\n\taskPass = x\n', 'core.askpass'], ['[diff]\n\texternal = x\n', 'diff.external'], ['[diff]\n\ttool = x\n', 'diff.tool'], ['[merge]\n\ttool = x\n', 'merge.tool'],
     ['[commit]\n\tgpgsign = true\n', 'commit.gpgsign'], ['[core]\n\tgitProxy = x\n', 'core.gitproxy'],
     ['[help]\n\tautocorrect = 1\n', 'help.autocorrect'], ['[push]\n\trecurseSubmodules = on-demand\n', 'push.recursesubmodules'], ['[core]\n\tprotectNTFS = false\n', 'core.protectntfs']] as const) assert.equal(unusualKey(parseGitConfig(config)!), key, config);
+});
+
+// 再審査の指摘: remote の url が この PC のフォルダ・file:// なら、git push はそのフォルダの git を起こし、そのフックを動かす（フックの上書きは届かない）
+test('remote の url: この PC のフォルダ・file:// はローカル。scheme:// の file 以外と host:path はローカルでない', () => {
+  for (const url of ['../up', './up', 'up', '/srv/git/up.git', 'C:\\git\\up', 'C:/git/up', 'c:up', '\\\\server\\share\\up', 'file:///srv/up', 'file://localhost/srv/up', 'FILE:///x', ' ../up ', '..\\up', '~/up']) assert.equal(isLocalRemoteUrl(url), true, url);
+  for (const url of ['https://example.com/a.git', 'http://h/a', 'ssh://git@h/a.git', 'git://h/a', 'git@github.com:user/repo.git', 'user@host:path/a', 'host:path/a', 'ext::sh -c x', 'fd::3', 'git+ssh://h/a']) assert.equal(isLocalRemoteUrl(url), false, url);
+});
+
+test('remote の url: 設定の url・pushurl がローカルの remote の名前を返す（ほかの remote は含めない）', t => {
+  const root = repoWith(t, `${PLAIN}[remote "up"]\n\turl = ../up\n[remote "mirror.git"]\n\turl = https://h/m.git\n\tpushurl = file:///srv/mirror\n[remote "ro"]\n\turl = git@h:a/b.git\n`);
+  const info = inspectRepo(root);
+  assert.deepEqual(info.remotes, ['origin', 'up', 'mirror.git', 'ro']);
+  assert.deepEqual(info.localRemotes, ['up', 'mirror.git']);
+  assert.deepEqual(inspectRepo(repoWith(t, PLAIN)).localRemotes, []);
+});
+
+// 再審査の指摘: .git でない名前の裏のリポジトリ（git init --bare up）の hooks/ への書き込みが、ただの許可フォルダの中の書き込みとして通った
+test('git のフォルダの判定: HEAD があり objects/ と refs/ がある。名前は問わない。HEAD だけ・objects/ だけは違う', t => {
+  const base = tempDir(t);
+  const bare = makeGitDir(join(base, 'up'), '[core]\n\tbare = true\n');
+  mkdirSync(join(bare, 'hooks'));
+  assert.equal(isGitDir(bare), true);
+  assert.equal(insideGitDir(join(bare, 'hooks', 'pre-receive')), true);
+  assert.equal(insideGitDir(join(bare, 'refs', 'heads', 'main')), true);
+  assert.equal(insideGitDir(bare), true, 'そのフォルダ自身');
+  mkdirSync(join(base, 'lonely'));
+  writeFileSync(join(base, 'lonely', 'HEAD'), 'ref: refs/heads/main\n');
+  assert.equal(isGitDir(join(base, 'lonely')), false);
+  mkdirSync(join(base, 'half', 'objects'), { recursive: true });
+  assert.equal(insideGitDir(join(base, 'half', 'objects', 'x')), false);
+  assert.equal(insideGitDir(join(base, 'nothing', 'a.txt')), false);
 });
 
 // 審査の指摘（深い審査）: [gc] の項目をすべてふつうとしていたが、gc.recentObjectsHook は gc のときにコマンドを動かす（本物の git 2.54 の `git gc --prune=now` で動くことを確かめた）

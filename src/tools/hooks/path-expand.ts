@@ -2,6 +2,7 @@
 
 import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
+import { isGitDir } from './git-repo.ts';
 import { isInside, writeApprovalKind, type ProtectedKind, type ScopePolicy } from './scope.ts';
 
 export const GLOB_CAP = 2000;
@@ -118,11 +119,12 @@ export function listTree(dir: string, deep: boolean, cap = LIST_CAP): { entries:
   return { entries, complete };
 }
 
-// フォルダの下に .git という名前のものがあるか（深さと件数に上限。超えたら「ある」とみなす）
-export function containsDotGit(dir: string): boolean {
+// フォルダの下（そのフォルダ自身も）に、.git という名前のものか、git のフォルダ（HEAD・objects/・refs/ がある。.git でない名前の裏のリポジトリ）があるか（深さと件数に上限。超えたら「ある」とみなす）
+export function containsGitDir(dir: string): boolean {
   let seen = 0;
   const fold = (s: string): string => (WINDOWS ? s.toLowerCase() : s);
   const walk = (current: string, depth: number): boolean => {
+    if (isGitDir(current)) return true;
     let entries: import('node:fs').Dirent[];
     try { entries = readdirSync(current, { withFileTypes: true }); } catch { return false; }
     for (const entry of entries) {
@@ -144,5 +146,5 @@ export function protectedInside(dir: string, policy: ScopePolicy): ProtectedKind
   for (const place of [...(policy.askOnWrite ?? []), ...(policy.skillsDir ? [policy.skillsDir] : [])]) {
     if (isInside(root, place)) return writeApprovalKind(place, policy) ?? 'persona';
   }
-  return isDirectory(root) && containsDotGit(root) ? 'git' : undefined;
+  return isDirectory(root) && containsGitDir(root) ? 'git' : undefined;
 }

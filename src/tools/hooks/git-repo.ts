@@ -215,6 +215,23 @@ function viaGitFile(file: string): Found {
   } catch { return { gitDir: dirname(file), commonDir: dirname(file), broken: true }; }
 }
 
+// フォルダが git のフォルダ（HEAD があり、objects/ と refs/ がある。.git でない名前の裏のリポジトリも）か。読めない・形が怪しいものも「そうかもしれない」で true
+export function isGitDir(path: string): boolean {
+  return examine(path).state !== 'no';
+}
+
+// パスが、git のフォルダの中（そのフォルダ自身も）か。名前は問わない
+export function insideGitDir(abs: string): boolean {
+  let dir = resolve(abs);
+  for (let depth = 0; depth < 64; depth++) {
+    if (isGitDir(dir)) return true;
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+  return false;
+}
+
 export function findGitDir(start: string): Found | null {
   let dir = resolve(start);
   for (let depth = 0; depth < 64; depth++) {
@@ -234,6 +251,29 @@ export function findGitDir(start: string): Found | null {
   }
   // 深さの上限に着いた: 上にあるかもしれないリポジトリを見ていないので、「なし」ではなく broken（今回だけ）
   return { gitDir: dir, commonDir: dir, broken: true };
+}
+
+// remote の url が、この PC のフォルダ・file:// を指すか。git が「ssh のようなリモート」と読む形（scheme:// の file 以外、host:path）でなければ、フォルダとみなす
+export function isLocalRemoteUrl(url: string): boolean {
+  const v = url.trim();
+  if (/^file:/iu.test(v)) return true;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*::/u.test(v) || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//u.test(v)) return false;
+  const colon = v.indexOf(':');
+  const slash = v.search(/[\\/]/u);
+  if (colon > 0 && (slash === -1 || colon < slash)) return colon === 1 && /^[A-Za-z]/u.test(v);
+  return true;
+}
+
+function localRemoteNames(entries: readonly ConfigEntry[]): string[] {
+  const names: string[] = [];
+  for (const { key, value } of entries) {
+    const parts = key.split('.');
+    if (parts[0] === 'remote' && parts.length >= 3 && (parts.at(-1) === 'url' || parts.at(-1) === 'pushurl') && isLocalRemoteUrl(value)) {
+      const name = parts.slice(1, -1).join('.');
+      if (!names.includes(name)) names.push(name);
+    }
+  }
+  return names;
 }
 
 // push の宛先に使える名前: 設定に remote.<名前>.url があるもの（名前にドットがあってもよい）。無い名前は、git がフォルダ・URL として扱い、そのフォルダのフックを動かす
@@ -259,7 +299,7 @@ function danglingRemote(entries: readonly ConfigEntry[], remotes: readonly strin
 }
 
 export function inspectRepo(start: string): RepoInfo {
-  const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [] };
+  const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [], localRemotes: [] };
   const found = findGitDir(start);
   if (!found) return none;
   if (found.broken) return { ...none, found: true, unreadable: true };
@@ -281,7 +321,7 @@ export function inspectRepo(start: string): RepoInfo {
   let hooksFiles = false;
   try { hooksFiles = readdirSync(join(commonDir, 'hooks')).some(name => !name.endsWith('.sample')); } catch { /* hooks フォルダが無い */ }
   return {
-    found: true, configOk: bad === null, badKey: bad ?? '', unreadable: false, remotes,
+    found: true, configOk: bad === null, badKey: bad ?? '', unreadable: false, remotes, localRemotes: localRemoteNames(entries),
     hooksPath: entries.some(e => e.key === 'core.hookspath'), hooksFiles, hooksDir: join(commonDir, 'hooks'),
   };
 }

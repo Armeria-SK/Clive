@@ -18,8 +18,9 @@ export interface PathRef { word: Word; mode: 'read' | 'write'; recursive: boolea
 // 書き込み先を組み立てて調べるもの（11.4）。copy: cp・mv・Copy-Item・Move-Item（先がフォルダなら 先/元の名前）、join: New-Item -Path p -Name n（p/n）、rename: Rename-Item（親/n）
 export interface CopyUse { kind: 'copy' | 'join' | 'rename'; sources: Word[]; dest: Word | null; name: Word | null; recursive: boolean; dirFlag: boolean; noTargetDir: boolean }
 // remotes: push の宛先に使える remote の名前（設定に remote.<名前>.url があるもの）。無い名前は、git がフォルダ・URL として扱う
+// localRemotes: そのうち、url が この PC のフォルダ・file:// を指すもの（git はそのフォルダの git を起こし、そのフックも動く。フックの上書きは、ローカルの転送の子には届かない）
 // hooksDir: そのリポジトリ自身のフックの置き場所（共通の git フォルダの hooks/）。見つからなければ空
-export interface RepoInfo { found: boolean; configOk: boolean; badKey: string; unreadable: boolean; hooksPath: boolean; hooksFiles: boolean; hooksDir: string; remotes: readonly string[] }
+export interface RepoInfo { found: boolean; configOk: boolean; badKey: string; unreadable: boolean; hooksPath: boolean; hooksFiles: boolean; hooksDir: string; remotes: readonly string[]; localRemotes: readonly string[] }
 
 export interface MatchCtx {
   shell: ShellKind;

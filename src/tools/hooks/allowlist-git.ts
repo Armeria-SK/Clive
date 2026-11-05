@@ -170,6 +170,9 @@ function push(rest: Word[], acc: Acc, ctx: MatchCtx, repo: ReturnType<MatchCtx['
   if (remote && (remote.dynamic || !REMOTE_NAME.test(remote.text))) acc.add('once', 'list.form', { cmd: 'git push', detail: remote.text }, true);
   // 設定に無い名前は、git がフォルダとして扱い、そのフォルダのフックを動かす（リポジトリが見つからないときは、git が先に失敗する）
   else if (remote && repo.found && !repo.remotes.includes(remote.text)) acc.add('once', 'list.git_remote', { remote: remote.text }, false);
+  // この PC のフォルダ（file:// を含む）を指す宛先は、git がそのフォルダの git を起こし、そのフックを動かす。そのフォルダへのフックの上書きは届かない
+  else if (remote && repo.localRemotes.includes(remote.text)) acc.add('once', 'list.git_remote_local', { remote: remote.text }, false);
+  else if (!remote && repo.localRemotes.length > 0) acc.add('once', 'list.git_remote_local', { remote: repo.localRemotes.join(', ') }, false);
   for (const r of refs) if (r.dynamic || !/^[A-Za-z0-9_./:+@{}~^-]+$/u.test(r.text)) acc.add('once', 'list.form', { cmd: 'git push', detail: r.text }, true);
   if (!hooksCheck('push', acc, repo)) return;
   acc.add('ask', 'list.git_push', {}, false);

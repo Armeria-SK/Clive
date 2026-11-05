@@ -571,13 +571,14 @@ for (const shell of ['powershell', 'bash'] as const) {
     spawnSync('git', ['push', '-q', '../victim', 'HEAD:refs/heads/probe'], { cwd: gr });
     assert.equal(existsSync(marker), true, '前提: 本物の git は、宛先のフォルダのフックを動かす');
     rmSync(marker);
-    spawnSync('git', ['remote', 'add', 'origin', fwd(victim)], { cwd: gr });
+    spawnSync('git', ['remote', 'add', 'origin', 'https://example.invalid/r.git'], { cwd: gr });
+    spawnSync('git', ['remote', 'add', 'up', fwd(victim)], { cwd: gr });
     const ps = shell === 'powershell';
     for (const command of ps ? ['cd gr; git push ../victim HEAD:refs/heads/x', 'cd gr; git push victim HEAD:refs/heads/x'] : ['cd gr && git push ../victim HEAD:refs/heads/x', 'cd gr && git push victim HEAD:refs/heads/x']) {
       await expectAsk(s, command);
       assert.equal(existsSync(marker), false, `${command}: 断ったのに、宛先のフォルダのフックが動いた`);
     }
-    // 設定にある名前は、ふつうの確かめ（会話の許可で通る。今回だけにはならない）
+    // 設定にある名前で、url がこの PC の外を指すものは、ふつうの確かめ（会話の許可で通る。今回だけにはならない）
     const pending = s.call(ps ? 'cd gr; git push origin HEAD:refs/heads/x' : 'cd gr && git push origin HEAD:refs/heads/x');
     for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
     const request = s.approvals.pending()[0];
@@ -585,5 +586,26 @@ for (const shell of ['powershell', 'bash'] as const) {
     assert.equal(request.onceOnly, false, '設定にある名前が今回だけの確かめになった');
     s.approvals.decide(request.id, 'deny');
     await pending;
+    // 再審査の指摘: url が この PC のフォルダを指す remote への push は、そのフォルダのフックを動かす（フックの上書きは届かない）。ふつうの確かめでなく今回だけ
+    const toUp = ps ? 'cd gr; git push up HEAD:refs/heads/x' : 'cd gr && git push up HEAD:refs/heads/x';
+    await expectAsk(s, toUp);
+    assert.equal(existsSync(marker), false, '断ったのに、url が指すフォルダのフックが動いた');
+    // 裏のリポジトリ（名前が .git でない）のフックや設定への書き込みも、今回だけ
+    const hookFile = join(victim, 'hooks', 'pre-receive');
+    const before = readFileSync(hookFile, 'utf8');
+    for (const command of ps ? ["Set-Content victim/hooks/pre-receive 'x'", "'x' > victim/hooks/pre-receive", "Copy-Item notes.md victim/hooks/pre-receive"] : ['echo x > victim/hooks/pre-receive', 'cp notes.md victim/hooks/pre-receive', 'tee victim/hooks/update < notes.md']) await expectAsk(s, command);
+    assert.equal(readFileSync(hookFile, 'utf8'), before, '裏のリポジトリのフックが書き換わった');
+    assert.equal(existsSync(join(victim, 'hooks', 'update')), false);
+    // 許せば、フックは動く（許可が関所になっている）
+    const pushing = s.call(toUp);
+    for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+    const second = s.approvals.pending()[0];
+    assert.ok(second, '承認の依頼が来ていない');
+    assert.equal(second.onceOnly, true);
+    assert.match(second.reasons.join('\n'), /この PC のフォルダ/u);
+    s.approvals.decide(second.id, 'once');
+    const pushed = await pushing;
+    assert.equal(pushed.output.isError, false, pushed.output.content);
+    assert.equal(existsSync(marker), true, '許したのに、フォルダのフックが動かない');
   });
 }

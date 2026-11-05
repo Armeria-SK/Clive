@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText } from '../../shared/messages/guard.ts';
+import { insideGitDir } from './git-repo.ts';
 
 export type RootMode = 'read' | 'write';
 export interface ResolvedRoot { path: string; mode: RootMode }
@@ -103,7 +104,7 @@ const hasGitSegment = (p: string): boolean => p.split(/[\\/]/u).some(part => fol
 
 export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKind | undefined {
   const real = realish(abs);
-  if (hasGitSegment(abs) || hasGitSegment(real)) return 'git';
+  if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || insideGitDir(real)) return 'git';
   if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';
   return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
 }

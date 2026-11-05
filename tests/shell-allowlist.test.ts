@@ -296,6 +296,21 @@ test('git push の宛先は、このリポジトリの設定にある remote の
   for (const c of ['git push ../victim', 'git push ./v', 'git push /abs/v', 'git push https://x/y.git', 'git push "ext::sh -c x" main', 'git push $x']) assert.equal(level(c, ['origin']), 'once', c);
 });
 
+// 再審査の指摘: remote の url が この PC のフォルダ・file:// のとき、git push はそのフォルダのフックを動かす（ローカルの転送の子には、フックの上書きが届かない）。ふつうの確かめでなく今回だけ
+test('git push の宛先が、この PC のフォルダ・file:// を指す remote なら今回だけ。宛先なしの push も、そういう remote があれば今回だけ', () => {
+  const local = (remotes: string[], localRemotes: string[]) => ({ repo: repo({ remotes, localRemotes }) });
+  const level = (c: string, remotes: string[], localRemotes: string[]) => levelOf(c, 'bash', local(remotes, localRemotes));
+  for (const c of ['git push up', 'git push up main', 'git push -u up HEAD:main', 'git push --force up']) assert.equal(level(c, ['origin', 'up'], ['up']), 'once', c);
+  assert.equal(level('git push origin main', ['origin', 'up'], ['up']), 'ask', '別の remote はふつうの確かめ');
+  assert.equal(level('git push', ['origin', 'up'], ['up']), 'once', '宛先なしは、どの remote に行くか分からない');
+  assert.equal(level('git push --all', ['up'], ['up']), 'once');
+  assert.equal(level('git push', ['origin'], []), 'ask');
+  assert.equal(level('git push up', ['up'], []), 'ask', 'ローカルでない remote');
+  assert.ok(classify('git push up', 'bash', local(['up'], ['up'])).results.flatMap(r => r.reasons.map(x => `${x.level}:${x.key}:${x.exempt}`)).includes('once:list.git_remote_local:false'));
+  assert.equal(level('git status', ['up'], ['up']), 'allow', '読むだけはこれまでどおり');
+  assert.equal(level('git fetch up', ['up'], ['up']), 'once', 'fetch は もともと今回だけ');
+});
+
 // 審査の指摘（深い審査）: ホスト名の末尾のドット（localhost.）は、同じ名前を指す。ループバックと LAN の確かめをすり抜けていた
 test('C9: 末尾のドットのホスト（localhost.・127.0.0.1.・192.168.1.5.）も、ループバック・LAN と同じに確かめる', () => {
   const keysOf2 = (c: string, shell: ShellKind = 'bash', over: Partial<MatchCtx> = {}): string[] => classify(c, shell, over).results.flatMap(r => r.reasons.map(x => `${x.level}:${x.key}`));

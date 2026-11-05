@@ -7,7 +7,7 @@ import { classifyStatements, type CopyUse, type MatchCtx, type PathRef, type Rea
 import { codeFindings } from './code-guard.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
-import { containsDotGit, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
+import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
 import { containsToolConfig, curlConfigFile, isToolConfigPath, wgetConfigFile, type Env } from './tool-config.ts';
 import { expandPath, isInside, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
@@ -211,10 +211,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     track.cwd = e.path;
     track.cwds.push(e.path);
   };
-  const unresolvedRepo = (badKey: string): RepoInfo => { repoLog.unsafe = true; return { found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [] }; };
+  const unresolvedRepo = (badKey: string): RepoInfo => { repoLog.unsafe = true; return { found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [], localRemotes: [] }; };
   const inspect = (path: string): RepoInfo => { const info = inspectRepo(path); repoLog.repos.push(info); return info; };
   const mergeRepos = (infos: readonly RepoInfo[]): RepoInfo => infos.find(i => i.unreadable) ?? infos.find(i => !i.configOk) ?? {
-    found: infos.some(i => i.found), configOk: true, badKey: '', unreadable: false, hooksPath: infos.some(i => i.hooksPath), hooksFiles: infos.some(i => i.hooksFiles), hooksDir: infos.find(i => i.found)?.hooksDir ?? '',
+    found: infos.some(i => i.found), configOk: true, badKey: '', unreadable: false, hooksPath: infos.some(i => i.hooksPath), hooksFiles: infos.some(i => i.hooksFiles), hooksDir: infos.find(i => i.found)?.hooksDir ?? '', localRemotes: [...new Set(infos.flatMap(i => i.localRemotes))],
     // 宛先の名前は、見つかったすべてのリポジトリにあるものだけ（どれか 1 つでも無ければ、そこでは git がフォルダとして扱う）
     remotes: infos.filter(i => i.found).reduce<readonly string[] | null>((common, i) => (common === null ? i.remotes : common.filter(n => i.remotes.includes(n))), null) ?? [],
   };
@@ -255,6 +255,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', text('guard.irreversible', { path: abs })); return; }
     // ツールの設定ファイルは、許可フォルダの外（ホームが許可フォルダの外なのが既定）でも、ふつうの確かめではなく今回だけ。外の確かめで戻る前に調べる
     if (write && isToolConfigPath(abs, env)) addCode(text('list.tool_config', { path: abs }));
+    // 許可フォルダの外でも、git のフォルダへの書き込みはフックや設定でコードが動くので、外のふつうの確かめでなく今回だけ
+    if (write && placement.kind === 'outside' && writeApprovalKind(abs, opts.policy) === 'git') addCode(text(WRITE_KEYS.git, { path: abs }));
     if (placement.kind === 'outside') { add(opts.outsideRoots, text('guard.touches_outside', { path: abs })); return; }
     if (write && placement.mode === 'read') { add('deny', text('guard.write_readonly', { path: abs })); return; }
     if (!write) return;
@@ -351,18 +353,18 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if ('unresolved' in r || source.dynamic) { unknownNames = true; continue; }
         if (/(?:^|[\\/])\.\.?$/u.test(source.text) || source.text === '~') {
           unknownNames = true;
-          if (use.recursive && containsDotGit(r.path)) addCode(text('list.write_ancestor', { path: r.path }));
+          if (use.recursive && containsGitDir(r.path)) addCode(text('list.write_ancestor', { path: r.path }));
           continue;
         }
         if (source.glob) {
           const globbed = expandGlob(patternOf(source, base, windows), dotfiles);
           if (!globbed.complete) { unknownNames = true; continue; }
           names.push(...globbed.matches.map(m => basename(m)));
-          if (use.recursive) for (const m of globbed.matches) if (isDirectory(m) && containsDotGit(m)) addCode(text('list.write_ancestor', { path: m }));
+          if (use.recursive) for (const m of globbed.matches) if (isDirectory(m) && containsGitDir(m)) addCode(text('list.write_ancestor', { path: m }));
           continue;
         }
         names.push(basename(r.path));
-        if (use.recursive && isDirectory(r.path) && containsDotGit(r.path)) addCode(text('list.write_ancestor', { path: r.path }));
+        if (use.recursive && isDirectory(r.path) && containsGitDir(r.path)) addCode(text('list.write_ancestor', { path: r.path }));
       }
       if (destIsDir) {
         for (const name of names) {
