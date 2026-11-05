@@ -1,0 +1,35 @@
+/* 実行ログ: 実行・道具の表と、振り返りの記録。寸法と動きはデザインに合わせる。 */
+.view-inner.lg-inner { max-width: 980px; }
+.lg-seg .seg-opt { padding: 5px 12px; font-size: 12.5px; }
+.lg-scroll { overflow-x: auto; }
+.lg-table { display: grid; font-size: 13px; }
+.lg-runs { grid-template-columns: 104px 76px minmax(140px, 1.2fr) 112px 64px minmax(180px, 2fr); min-width: 720px; }
+.lg-tools { grid-template-columns: 104px minmax(120px, 1fr) 128px minmax(90px, 1fr) 84px; min-width: 560px; }
+.lg-row { display: contents; }
+.lg-head { padding: 8px; border-bottom: 1px solid var(--color-divider); font-size: 11px; letter-spacing: .08em; color: var(--color-text-muted); }
+.lg-cell { min-width: 0; padding: 9px 8px; border-bottom: 1px solid var(--color-divider); font-variant-numeric: tabular-nums; }
+.lg-row:hover > .lg-cell { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+.lg-num { text-align: right; }
+.lg-mono { font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lg-detail { font-size: 12px; color: var(--color-text-muted); overflow-wrap: anywhere; }
+.lg-result { display: flex; align-items: center; gap: 5px; }
+.lg-result.bad { color: var(--color-accent-text); }
+.lg-result.wait { color: var(--color-text-muted); }
+.lg-icon, .lg-spin { display: inline-flex; flex: none; width: 12px; height: 12px; }
+.lg-cell .tag { margin-left: 0; padding: 1px 8px; }
+.lg-cell .tag-neutral { border-color: transparent; }
+
+.lg-jobs { display: flex; flex-direction: column; border-top: 1px solid var(--color-divider); }
+.lg-job { display: flex; flex-direction: column; gap: 6px; padding: 14px 4px; border-bottom: 1px solid var(--color-divider); }
+.lg-job-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.lg-job-time { font-size: 12px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.lg-job-trigger { font-size: 14px; font-weight: 600; }
+.lg-job-head .tag { margin-left: 0; gap: 4px; }
+.lg-job-head .tag-neutral { border-color: transparent; }
+.lg-job-note { margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lg-changes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.lg-changes li { display: flex; align-items: baseline; gap: 10px; padding-left: 10px; border-left: 2px solid var(--color-divider); font-size: 13px; }
+.lg-changes li.undone .lg-change-text { text-decoration: line-through; color: var(--color-text-muted); }
+.lg-change-kind { flex: none; min-width: 3.5em; font-size: 11.5px; letter-spacing: .06em; color: var(--color-accent-text); }
+.lg-change-text { min-width: 0; overflow-wrap: anywhere; }
+.lg-change-undone { flex: none; font-size: 11.5px; color: var(--color-text-muted); }

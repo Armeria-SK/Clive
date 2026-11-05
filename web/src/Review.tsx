@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, ApiError, type CuriosityItem, type ReviewJob, type Task } from './api.ts';
+import { api, ApiError, type CuriosityItem, type Task } from './api.ts';
 import { formatDateTime } from './i18n/index.ts';
 import { ZoneNote } from './ZoneNote.tsx';
 
@@ -7,13 +7,11 @@ const errorText = (error: unknown) => (error instanceof ApiError ? error.message
 
 export function ReviewPage({ revision }: { revision: number }) {
   const [data, setData] = useState<{ taskProposals: Task[] } | null>(null);
-  const [jobs, setJobs] = useState<{ jobs: ReviewJob[]; pending: number } | null>(null);
   const [error, setError] = useState('');
   const [tick, setTick] = useState(0);
   const reload = () => setTick(n => n + 1);
   useEffect(() => {
     void api.review().then(setData).catch(() => undefined);
-    void api.reviews().then(setJobs).catch(() => undefined);
   }, [revision, tick]);
   const act = (p: Promise<unknown>) => { setError(''); void p.then(reload, e => setError(errorText(e))); };
 
@@ -32,20 +30,6 @@ export function ReviewPage({ revision }: { revision: number }) {
               <button onClick={() => act(api.taskAction(t.id, 'approve'))}>承認</button>
               <button className="secondary" onClick={() => act(api.taskAction(t.id, 'cancel'))}>断る</button>
             </div>
-          </li>
-        ))}</ul>
-      )}
-
-      <h2>振り返りの記録{jobs?.pending ? <span className="muted small">（待ち {jobs.pending} 件）</span> : null}</h2>
-      <p className="muted small">会話やタスクの後に、Clive が記憶を整理した記録です。変更は「記憶」の画面から取り消せます。</p>
-      {!jobs ? null : !jobs.jobs.length ? <p className="muted small">まだありません</p> : (
-        <ul className="task-events">{jobs.jobs.map(j => (
-          <li key={j.id}>
-            <span className="muted small">{formatDateTime(j.created_at)} {j.triggerLabel} ・ {j.status === 'done' ? '済み' : j.status === 'failed' ? '失敗' : j.status === 'running' ? '実行中' : '待ち'}</span>
-            {j.note && <span className="pre"> {j.note}</span>}
-            {j.changes.length > 0 && <ul className="small">{j.changes.map(c => (
-              <li key={c.id}>{c.action === 'create' ? '足した' : c.action === 'update' ? '直した' : c.action === 'forget' ? '消した' : c.action === 'restore' ? '戻した' : c.action}: {c.after ?? c.before}{c.undone_at ? '（取り消し済み）' : ''}</li>
-            ))}</ul>}
           </li>
         ))}</ul>
       )}

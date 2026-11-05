@@ -24,7 +24,7 @@ import { StatusBar } from './StatusBar.tsx';
 import { TabBar } from './TabBar.tsx';
 import { toast, ToastHost } from './toast.tsx';
 import { Tooltip } from './Tooltip.tsx';
-import { CuriosityPage, ReviewPage } from './Review.tsx';
+import { CuriosityPage } from './Review.tsx';
 import { skillDraftLink } from './skills-meta.ts';
 import { SkillsPage } from './SkillsPage.tsx';
 import { TasksPage } from './Tasks.tsx';
@@ -135,6 +135,8 @@ export function App() {
     history.replaceState(null, '', lastChatHash.current);
     setRoute(parseRoute(lastChatHash.current));
   }, [route.page, mode]);
+  // 古い #/review（スキルの下書きの通知など）は、スキル・ツールへ移した。履歴は置き換えて、戻るで同じリンクに戻らないようにする
+  useEffect(() => { if (route.page === 'review') location.replace('#/skills'); }, [route.page]);
   useEffect(() => { setDrawerOpen(false); setNotifOpen(false); }, [route]);
   useEscapeLayer('drawer', drawerOpen, () => setDrawerOpen(false));
 
@@ -349,7 +351,7 @@ export function App() {
   const openApproval = () => { if (firstApproval) location.hash = approvalTarget(firstApproval); };
   const openRunning = () => {
     const running = worker?.running;
-    if (running) location.hash = running.kind === 'task' && running.taskId ? `#/tasks/${encodeURIComponent(running.taskId)}` : '#/review';
+    if (running) location.hash = running.kind === 'task' && running.taskId ? `#/tasks/${encodeURIComponent(running.taskId)}` : '#/runs/reviews';
   };
   const title = route.page === 'chat'
     ? (current ? conversations.find(c => c.id === current)?.title ?? t('conversation.untitled') : t('tab.newChat'))
@@ -401,9 +403,8 @@ export function App() {
               <NotificationsPage items={notifications} failed={notificationsFailed} unread={unread} onReadAll={readAllNotifications} onOpenItem={openNotification} />
             )}
             {route.page === 'settings' && <Settings onProfile={setProfile} />}
-            {route.page === 'runs' && <Runs />}
+            {route.page === 'runs' && <Runs tab={route.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
             {route.page === 'memory' && <Memory />}
-            {route.page === 'review' && <ReviewPage revision={taskRevision + notificationRevision} />}
             {route.page === 'skills' && <SkillsPage target={route.target} revision={notificationRevision} />}
             {route.page === 'curiosity' && <CuriosityPage revision={taskRevision} />}
           </div>

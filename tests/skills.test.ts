@@ -1,12 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
-import { App, builtinTools } from '../src/app.ts';
-import { defaultConfig } from '../src/config/store.ts';
-import { resolvePaths } from '../src/paths.ts';
+import { builtinTools } from '../src/app.ts';
 import { renderSkillFile } from '../src/tools/skills/store.ts';
-import { createWebServer } from '../src/web/server.ts';
 import type { SkillDraft, SkillSummary } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
@@ -16,7 +11,7 @@ import {
   skillDraftLink, skillFileText, skillRows, TOOL_CATALOG,
 } from '../web/src/skills-meta.ts';
 import { toTab } from '../web/src/tabs.ts';
-import { tempDir } from './helpers.ts';
+import { startScreenServer } from './screen-server.ts';
 
 const draft = (over: Partial<SkillDraft>): SkillDraft => ({
   id: 1, name: 'a', description: 'd', body: 'b', reason: null, status: 'pending', created_at: 100, current: null, ...over,
@@ -109,26 +104,8 @@ test('applyFolders: 設定の tools.roots / tools.deny だけを差し替え、�
   assert.deepEqual(foldersFromConfig({ tools: { roots: [{ path: 'a', mode: 'read' }, { path: 1, mode: 'read' }, { path: 'b', mode: 'bad' }], deny: ['x', 2] } }), { roots: [{ path: 'a', mode: 'read' }], deny: ['x'] });
 });
 
-async function startServer(t: Parameters<typeof tempDir>[0]) {
-  const paths = resolvePaths(tempDir(t));
-  mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
-  config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
-  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
-  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
-  writeFileSync(paths.config, JSON.stringify(config));
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, adapterOverride: provider => ({ provider, stream: async function* () { }, probe: async () => ({ status: 'ok', server: 'fake', effective: 65536, required: 0, message: '' }) as never }) });
-  const web = createWebServer(app);
-  await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
-  const origin = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;
-  web.setOrigins([origin]);
-  t.after(async () => { web.server.closeAllConnections(); await new Promise(r => web.server.close(r)); app.close(); });
-  const api = (path: string, init: RequestInit = {}) => fetch(`${origin}${path}`, { ...init, headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), Origin: origin, ...init.headers } });
-  return { app, api };
-}
-
 test('画面が使う API: フォルダを保存すると config に残り、画面の読み取りで同じ値に戻る', async t => {
-  const s = await startServer(t);
+  const s = await startScreenServer(t);
   const view = await (await s.api('/api/settings')).json() as any;
   const before = foldersFromConfig(view.config);
   assert.ok(before.roots.length >= 1, '既定のフォルダがある');
@@ -144,7 +121,7 @@ test('画面が使う API: フォルダを保存すると config に残り、画
 });
 
 test('画面が使う API: 不正なフォルダの設定は 400 で理由を返し、保存しない', async t => {
-  const s = await startServer(t);
+  const s = await startScreenServer(t);
   const view = await (await s.api('/api/settings')).json() as any;
   const bad = applyFolders(view.config, { roots: [{ path: '', mode: 'read' }], deny: [] });
   const res = await s.api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: bad }) });
@@ -154,7 +131,7 @@ test('画面が使う API: 不正なフォルダの設定は 400 で理由を返
 });
 
 test('画面が使う API: スキルの下書きは current つきで返り、承認するとスキルになって一覧から消える', async t => {
-  const s = await startServer(t);
+  const s = await startScreenServer(t);
   s.app.skills.write({ name: 'weekly-report', description: '古い説明', body: '古い手順' });
   s.app.skills.draft({ name: 'weekly-report', description: '新しい説明', body: '新しい手順', reason: '手順が変わった' });
   s.app.skills.draft({ name: 'csv-import', description: '取り込む', body: '1. 読む' });
@@ -177,7 +154,7 @@ test('画面が使う API: スキルの下書きは current つきで返り、�
 });
 
 test('画面が使う API: スキルの新規・保存・削除と、名前の不正は 400', async t => {
-  const s = await startServer(t);
+  const s = await startScreenServer(t);
   const put = (name: string, description: string, body: string) => s.api(`/api/skills/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ description, body }) });
   assert.equal((await put('new-skill', 'いつ使うか', '手順').then(r => r.status)), 200);
   assert.equal((await put('Bad Name', 'x', 'y')).status, 400, '名前の形はサーバーが断る（画面はメッセージを出す）');

@@ -34,7 +34,7 @@ export function WorkerBar({ worker, onChange }: { worker: WorkerStatus | null; o
       <span>
         {!worker.enabled ? 'ワーカーは止めてあります（worker.enabled）'
           : worker.paused ? '一時停止中'
-          : worker.running ? <>実行中: {worker.running.kind === 'task' && worker.running.taskId ? <a href={`#/tasks/${worker.running.taskId}`}>{worker.running.title}</a> : <a href="#/review">{worker.running.title}</a>}</>
+          : worker.running ? <>実行中: {worker.running.kind === 'task' && worker.running.taskId ? <a href={`#/tasks/${worker.running.taskId}`}>{worker.running.title}</a> : <a href="#/runs/reviews">{worker.running.title}</a>}</>
           : worker.quiet ? '静かにする時間帯' : '待機中'}
       </span>
       <span className="muted small">この1時間 {worker.runsLastHour}/{worker.maxRunsPerHour} 回{worker.nextWakeAt ? ` ・次に確かめる ${formatDateTime(worker.nextWakeAt)}` : ''}</span>

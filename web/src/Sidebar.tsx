@@ -109,7 +109,6 @@ export function Sidebar(props: Props) {
       </nav>
 
       <div className="side-more" aria-label={t('nav.moreLabel')}>
-        <a href="#/review" className={route.page === 'review' ? 'active' : ''} onClick={props.onNavigate}>{t('nav.review')}</a>
         <a href="#/curiosity" className={route.page === 'curiosity' ? 'active' : ''} onClick={props.onNavigate}>{t('nav.curiosity')}</a>
       </div>
 
