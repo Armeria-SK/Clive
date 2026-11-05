@@ -2,21 +2,21 @@ import type { App } from '../app.ts';
 import { CuriosityError, type CuriosityStatus } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
 import { languageOf } from '../shared/language.ts';
-import { TRIGGER_LABEL } from '../memory/review.ts';
+import { TRIGGER_TEXT } from '../memory/review.ts';
 import { SkillError } from '../tools/skills/store.ts';
 import { taskView } from '../tasks/store.ts';
-import { HttpProblem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
+import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
 const STATUSES: readonly CuriosityStatus[] = ['open', 'researching', 'done', 'dropped'];
 
-function problem(error: unknown): never {
-  if (error instanceof SkillError || error instanceof CuriosityError) throw new HttpProblem(400, { error: 'invalid', message: error.message });
+function domainFailure(error: unknown): never {
+  if (error instanceof SkillError || error instanceof CuriosityError) throw domainProblem(400, 'invalid', error);
   throw error;
 }
 
 function idOf(raw: string): number {
   const id = Number(raw);
-  if (!Number.isSafeInteger(id) || id < 1) throw new HttpProblem(400, { error: 'invalid_id', message: 'ID が正しくありません' });
+  if (!Number.isSafeInteger(id) || id < 1) throw problem(400, 'invalid_id', 'invalid_id');
   return id;
 }
 
@@ -28,17 +28,17 @@ export function registerReviewRoutes(router: Router, app: App): void {
   }));
   router.add('GET', '/api/skills/:name', ({ res, params }) => {
     const skill = app.skills.get(params[0]!);
-    if (!skill) throw new HttpProblem(404, { error: 'not_found', message: 'スキルがありません' });
+    if (!skill) throw problem(404, 'not_found', 'skill_missing');
     sendJson(res, 200, { skill });
   });
   router.add('PUT', '/api/skills/:name', async ({ req, res, params }) => {
     const body = requireObject(await readJson(req));
     const description = requireString(body, 'description', { max: 300 })!;
     const text = requireString(body, 'body', { max: 20_000 })!;
-    try { sendJson(res, 200, { skill: app.skills.write({ name: params[0]!, description, body: text }) }); } catch (error) { problem(error); }
+    try { sendJson(res, 200, { skill: app.skills.write({ name: params[0]!, description, body: text }) }); } catch (error) { domainFailure(error); }
   });
   router.add('DELETE', '/api/skills/:name', ({ res, params }) => {
-    try { app.skills.remove(params[0]!); sendJson(res, 200, { ok: true }); } catch (error) { problem(error); }
+    try { app.skills.remove(params[0]!); sendJson(res, 200, { ok: true }); } catch (error) { domainFailure(error); }
   });
 
   // ── レビュー（承認が要るものをまとめて扱う） ──
@@ -53,10 +53,10 @@ export function registerReviewRoutes(router: Router, app: App): void {
     });
   });
   router.add('POST', '/api/skill-drafts/:id/approve', ({ res, params }) => {
-    try { sendJson(res, 200, { skill: app.skills.approve(idOf(params[0]!)) }); } catch (error) { problem(error); }
+    try { sendJson(res, 200, { skill: app.skills.approve(idOf(params[0]!)) }); } catch (error) { domainFailure(error); }
   });
   router.add('POST', '/api/skill-drafts/:id/reject', ({ res, params }) => {
-    try { app.skills.reject(idOf(params[0]!)); sendJson(res, 200, { ok: true }); } catch (error) { problem(error); }
+    try { app.skills.reject(idOf(params[0]!)); sendJson(res, 200, { ok: true }); } catch (error) { domainFailure(error); }
   });
 
   // ── 好奇心リスト ──
@@ -67,12 +67,12 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const body = requireObject(await readJson(req));
     const topic = requireString(body, 'topic', { max: 200 })!;
     const why = requireString(body, 'why', { optional: true, max: 500 });
-    try { sendJson(res, 201, { item: app.curiosity.add({ topic, why, source: 'user' }) }); } catch (error) { problem(error); }
+    try { sendJson(res, 201, { item: app.curiosity.add({ topic, why, source: 'user' }) }); } catch (error) { domainFailure(error); }
   });
   router.add('PATCH', '/api/curiosity/:id', async ({ req, res, params }) => {
     const body = requireObject(await readJson(req));
     if (body.status !== undefined && !(STATUSES as readonly unknown[]).includes(body.status)) {
-      throw new HttpProblem(400, { error: 'invalid_field', field: 'status', message: `status は ${STATUSES.join(' / ')} のどれかにしてください` });
+      throw problem(400, 'invalid_field', 'bad_enum', { field: 'status', params: { field: 'status', values: STATUSES.join(' / ') } });
     }
     const topic = requireString(body, 'topic', { optional: true, max: 200 });
     const why = requireString(body, 'why', { optional: true, max: 500 });
@@ -82,12 +82,12 @@ export function registerReviewRoutes(router: Router, app: App): void {
         ...(topic !== undefined ? { topic } : {}), ...(why !== undefined ? { why } : {}), ...(result !== undefined ? { result } : {}),
         ...(body.status !== undefined ? { status: body.status as CuriosityStatus } : {}),
       }) });
-    } catch (error) { problem(error); }
+    } catch (error) { domainFailure(error); }
   });
   router.add('POST', '/api/curiosity/:id/task', ({ res, params }) => {
     const item = app.curiosity.get(idOf(params[0]!));
-    if (!item) throw new HttpProblem(404, { error: 'not_found', message: '項目がありません' });
-    if (item.status === 'researching') throw new HttpProblem(409, { error: 'busy', message: '既に調べています' });
+    if (!item) throw problem(404, 'not_found', 'item_missing');
+    if (item.status === 'researching') throw problem(409, 'busy', 'already_researching');
     const text = curiosityText(languageOf(app.config()));
     const task = app.tasks.create({
       title: text.title(item.topic).slice(0, 200), body: item.why ? text.why(item.why) : '',
@@ -101,7 +101,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
   // ── 振り返りの記録 ──
   router.add('GET', '/api/reviews', ({ res }) => {
     const jobs = app.reviews.list(50).map(job => ({
-      ...job, triggerLabel: TRIGGER_LABEL[job.trigger],
+      ...job, triggerLabel: TRIGGER_TEXT[languageOf(app.config())][job.trigger],
       changes: job.run_id ? app.db.prepare('SELECT * FROM memory_events WHERE run_id = ? ORDER BY id').all(job.run_id) : [],
     }));
     sendJson(res, 200, { jobs, pending: app.reviews.pendingCount() });
@@ -109,7 +109,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
   router.add('POST', '/api/reviews', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     const conversationId = requireString(body, 'conversationId', { max: 100 })!;
-    if (!app.conversations.get(conversationId)) throw new HttpProblem(404, { error: 'not_found', message: '会話がありません' });
+    if (!app.conversations.get(conversationId)) throw problem(404, 'not_found', 'conversation_missing');
     const last = app.conversations.messages(conversationId, 1).at(-1);
     const job = app.reviews.enqueue('manual', `manual:${conversationId}:${last?.id ?? 0}`, { conversationId });
     app.worker.poke();

@@ -325,7 +325,7 @@ test('モデルの確認（英語）: 接続先ごとの message / hint / code',
   assert.equal(tabbyResult.status, 'not_found');
   assert.equal(tabbyResult.message, 'TabbyAPI has "other-model" loaded, not "test-model"');
   assert.equal(tabbyResult.hint, 'Load the model you want in TabbyAPI, or make models[].model match');
-  assert.equal(tabbyResult.messageCode, 'probe.tabby_other');
+  assert.equal(tabbyResult.messageCode, 'provider.probe.tabby_other');
   assert.deepEqual(tabbyResult.messageParams, { current: 'other-model', model: 'test-model' });
   const tabbyJa = await new OpenAiCompatibleAdapter(compatProvider(`${tabby.url}/v1`, { server: 'tabbyapi' }), {}).probe(probeModel(), 65536);
   assert.equal(tabbyJa.message, 'TabbyAPI が読み込んでいるのは「other-model」で、「test-model」ではありません');
@@ -337,7 +337,7 @@ test('モデルの確認（英語）: 接続先ごとの message / hint / code',
   const tooSmall = await new OpenAiCompatibleAdapter(compatProvider(`${small.url}/v1`, { server: 'llamacpp' }), {}).probe(probeModel(), 65536, 'en');
   assert.equal(tooSmall.status, 'too_small');
   assert.equal(tooSmall.message, 'The context length is too small: measured 2,048 < required 65,536 (measured 2,048)');
-  assert.equal(tooSmall.messageCode, 'probe.too_small');
+  assert.equal(tooSmall.messageCode, 'provider.probe.too_small');
   assert.equal(tooSmall.hint, 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
 
   const missing = await new OllamaAdapter({ id: 'p', kind: 'ollama', baseUrl: gone.url, maxParallel: 1, timeoutMs: 10_000 }, {}).probe(probeModel(), 65536, 'en');
@@ -349,7 +349,7 @@ test('モデルの確認（英語）: 接続先ごとの message / hint / code',
   const noKey = await new OpenAiCompatibleAdapter(compatProvider('http://127.0.0.1:9/v1', { apiKeyEnv: 'NOPE_KEY' }), {}).probe(probeModel(), 65536, 'en');
   assert.equal(noKey.status, 'no_api_key');
   assert.equal(noKey.message, 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)');
-  assert.equal(noKey.messageCode, 'key.missing');
+  assert.equal(noKey.messageCode, 'provider.key.missing');
   for (const r of [tabbyResult, vllmResult, tooSmall, missing, unreachable, noKey]) { noJapanese('probe message', r.message); noJapanese('probe hint', r.hint); }
 });
 
@@ -464,4 +464,107 @@ test('エンジンの失敗（英語）: 使えるモデルが無い・ツール
   }
   const toolResults = events.filter(e => e.type === 'tool.result');
   assert.ok(toolResults.length >= 1);
+});
+
+// ── API のエラー ──
+
+async function serve(t: { after: (fn: () => void | Promise<void>) => void }, language: Language) {
+  const s = await startApp(t, { language });
+  const web = createWebServer(s.app);
+  await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { web.server.closeAllConnections(); await new Promise(r => web.server.close(r)); });
+  const origin = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;
+  web.setOrigins([origin]);
+  const api = (path: string, init: RequestInit = {}) => fetch(`${origin}${path}`, { ...init, headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), Origin: origin, ...init.headers } });
+  const post = (path: string, body: unknown) => api(path, { method: 'POST', body: JSON.stringify(body) });
+  return { ...s, api, post, origin };
+}
+
+const SHAPES = 'pebble / triangle / diamond / bean / cloud / droplet / heart / star / crescent / capsule / square / puddle / ghost / bunny / cat / bear / mushroom / bell / peanut / comet';
+
+for (const language of ['ja', 'en'] as const) {
+  test(`API のエラー（${language}）: 今までの error / field に code と params を添え、message は language で書く`, async t => {
+    const s = await serve(t, language);
+    const pick = <T>(ja: T, en: T): T => (language === 'ja' ? ja : en);
+    const expectProblem = async (res: Response, status: number, expected: { error: string; code: string; message: [string, string]; field?: string; params?: Record<string, unknown> }) => {
+      assert.equal(res.status, status);
+      const body = await res.json() as any;
+      assert.equal(body.error, expected.error);
+      assert.equal(body.code, expected.code);
+      assert.equal(body.message, pick(...expected.message));
+      assert.equal(body.field, expected.field);
+      assert.deepEqual(body.params, expected.params);
+    };
+
+    await expectProblem(await s.post('/api/conversations/c1/messages', {}), 400, { error: 'invalid_field', code: 'http.required', field: 'text', params: { field: 'text' }, message: ['text を入力してください', 'Enter text'] });
+    await expectProblem(await s.post('/api/conversations/c1/messages', { text: 'x'.repeat(100_001) }), 400, { error: 'invalid_field', code: 'http.too_long', field: 'text', params: { field: 'text', max: 100000 }, message: ['text が長すぎます（上限 100000 文字）', 'text is too long (limit 100000 characters)'] });
+    await expectProblem(await s.api('/api/conversations/c1/messages', { method: 'POST', body: 'not json', headers: { 'Content-Type': 'application/json' } }), 400, { error: 'invalid_json', code: 'http.invalid_json', message: ['JSON として読めません', 'This could not be read as JSON'] });
+    await expectProblem(await s.api('/api/conversations/c1/messages', { method: 'POST', body: '{}', headers: { 'Content-Type': 'text/plain' } }), 415, { error: 'unsupported_media_type', code: 'http.unsupported_media_type', message: ['Content-Type は application/json にしてください', 'Set Content-Type to application/json'] });
+    await expectProblem(await s.api('/api/conversations/nope/messages'), 404, { error: 'not_found', code: 'http.conversation_missing', message: ['会話がありません', 'The conversation was not found'] });
+    await expectProblem(await s.api('/api/tasks/nope'), 404, { error: 'not_found', code: 'http.task_missing', message: ['タスクがありません', 'The task was not found'] });
+    await expectProblem(await s.post('/api/tasks', { title: 'x', priority: 9 }), 400, { error: 'invalid_field', code: 'http.bad_priority', field: 'priority', message: ['priority は 1（高）・2・3（低）のどれかにしてください', 'priority must be 1 (high), 2 or 3 (low)'] });
+    await expectProblem(await s.post('/api/tasks', { title: 'x', when: 'tomorrow' }), 400, { error: 'invalid_field', code: 'http.bad_when', field: 'when', message: ['when は日時（例: 2026-11-06T09:00:00+09:00）にしてください', '"when" must be a date and time (example: 2026-11-06T09:00:00+09:00)'] });
+    await expectProblem(await s.api('/api/profile', { method: 'PATCH', body: JSON.stringify({ shape: 'nope' }) }), 400, { error: 'invalid_field', code: 'http.bad_enum', field: 'shape', params: { field: 'shape', values: SHAPES }, message: [`shape は ${SHAPES} のどれかにしてください`, `shape must be one of ${SHAPES}`] });
+    await expectProblem(await s.post('/api/memories', { book: 'x', content: 'a' }), 400, { error: 'invalid_field', code: 'http.bad_book', field: 'book', message: ['book は user か notes にしてください', 'book must be user or notes'] });
+    await expectProblem(await s.post('/api/approvals/none', { decision: 'maybe' }), 400, { error: 'invalid_field', code: 'http.bad_enum', field: 'decision', params: { field: 'decision', values: 'once / conversation / deny' }, message: ['decision は once / conversation / deny のどれかにしてください', 'decision must be one of once / conversation / deny'] });
+    await expectProblem(await s.post('/api/approvals/none', { decision: 'once' }), 404, { error: 'not_found', code: 'http.approval_gone', message: ['この承認は既に終わっています（時間切れか、中止された可能性があります）', 'This approval has already ended (it may have timed out or been cancelled)'] });
+    await expectProblem(await s.api('/api/templates/fr'), 404, { error: 'not_found', code: 'http.unknown_language', params: { language: 'fr', values: 'ja / en' }, message: ['言語「fr」の初期値はありません（ja / en）', 'There are no defaults for the language "fr" (ja / en)'] });
+    await expectProblem(await s.post('/api/worker', { paused: 'yes' }), 400, { error: 'invalid_field', code: 'http.bad_bool', field: 'paused', params: { field: 'paused' }, message: ['paused は true / false にしてください', 'paused must be true or false'] });
+
+    await expectProblem(await s.post('/api/memories', { book: 'user', content: 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' }), 400, { error: 'memory', code: 'store.memory.secret', message: ['API キーやトークンらしい文字列を含む内容は記憶しません', 'Content that contains what looks like an API key or token is not remembered'] });
+    await expectProblem(await s.api('/api/memories/999', { method: 'PATCH', body: JSON.stringify({ content: 'x' }) }), 400, { error: 'memory', code: 'store.memory.not_found', params: { id: 999 }, message: ['記憶 999 がありません', 'Memory 999 was not found'] });
+    assert.equal((await s.post('/api/curiosity', { topic: 'Tea' })).status, 201);
+    await expectProblem(await s.post('/api/curiosity', { topic: 'Tea' }), 400, { error: 'invalid', code: 'store.curiosity.duplicate', params: { id: 1 }, message: ['同じものが既にあります（#1）', 'The same item already exists (#1)'] });
+    await expectProblem(await s.api('/api/uploads?name=a.txt', { method: 'POST', body: Buffer.alloc(0), headers: { 'Content-Type': 'text/plain' } }), 400, { error: 'upload', code: 'store.upload.empty', message: ['空のファイルです', 'The file is empty'] });
+
+    s.app.reviews.enqueue('manual', 'manual:x', {});
+    const reviews = await (await s.api('/api/reviews')).json() as any;
+    assert.equal(reviews.jobs[0].trigger, 'manual');
+    assert.equal(reviews.jobs[0].triggerLabel, pick('手動', 'Manual'));
+  });
+}
+
+test('API: 添付だけの発言の目印と、記憶の削除の理由は設定の言語で書く', async t => {
+  for (const language of ['ja', 'en'] as const) {
+    const s = await serve(t, language);
+    const pick = <T>(ja: T, en: T): T => (language === 'ja' ? ja : en);
+    const uploaded = await (await s.api('/api/uploads?name=a.txt', { method: 'POST', body: 'file body', headers: { 'Content-Type': 'text/plain' } })).json() as any;
+    s.adapter().scripts.push(reply('ok'));
+    const sent = await s.post('/api/conversations/c1/messages', { text: '', attachments: [uploaded.upload.id] });
+    assert.equal(sent.status, 202);
+    await s.app.engine.wait(((await sent.json()) as any).runId);
+    const stored = s.app.conversations.messages('c1')[0]!.message;
+    assert.equal(stored.role, 'user');
+    if (stored.role === 'user') {
+      assert.ok(stored.content.startsWith(pick('（ファイルを添付しました）\n\n<<<添付ファイル: a.txt（テキスト）>>>', '(A file was attached)\n\n<<<Attachment: a.txt（text）>>>')), stored.content);
+      assert.ok(stored.content.endsWith(pick('<<<添付ファイルここまで>>>', '<<<End of attachment>>>')));
+    }
+    assert.equal(s.app.conversations.get('c1')!.title, 'a.txt', '添付の目印は題にしない');
+    const history = await (await s.api('/api/conversations/c1/messages')).json() as any;
+    assert.equal(history.messages[0].text, pick('（ファイルを添付しました）', '(A file was attached)'), '画面には囲みの中身を出さない');
+
+    const memory = await (await s.post('/api/memories', { book: 'user', content: 'tea' })).json() as any;
+    const removed = await (await s.api(`/api/memories/${memory.memory.id}`, { method: 'DELETE' })).json() as any;
+    const events = s.app.memory.events(memory.memory.id);
+    assert.equal(events.find(e => e.id === removed.eventId)!.reason, pick('画面から削除', 'Deleted from the screen'));
+  }
+});
+
+test('再起動で中断した実行の記録は、設定の言語で書く', async t => {
+  for (const language of ['ja', 'en'] as const) {
+    const dir = tempDir(t);
+    const paths = resolvePaths(dir);
+    mkdirSync(paths.data, { recursive: true });
+    const config = defaultConfig();
+    config.language = language;
+    writeFileSync(paths.config, JSON.stringify(config));
+    const first = new App({ paths, log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+    first.runs.start('r1', 'chat', 'c1');
+    first.close();
+    const second = new App({ paths, log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+    const row = second.runs.get('r1')!;
+    assert.equal(row.error_kind, 'cancelled');
+    assert.equal(row.error_message, language === 'ja' ? 'アプリの再起動で中断しました' : 'Interrupted by an app restart');
+    second.close();
+  }
 });

@@ -5,7 +5,7 @@ import { parseCron } from '../tasks/schedule.ts';
 import { TaskError, taskView, type Task } from '../tasks/store.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
-import { domainProblem, HttpProblem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
+import { domainProblem, HttpProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
 const MOTIONS = ['auto', 'none', 'float', 'sway', 'pulse'] as const;
 
@@ -17,7 +17,7 @@ function taskProblem(error: unknown): never {
 function priorityOf(body: Record<string, unknown>): number | undefined {
   if (body.priority === undefined) return undefined;
   if (body.priority !== 1 && body.priority !== 2 && body.priority !== 3) {
-    throw new HttpProblem(400, { error: 'invalid_field', field: 'priority', message: 'priority は 1（高）・2・3（低）のどれかにしてください' });
+    throw problem(400, 'invalid_field', 'bad_priority', { field: 'priority' });
   }
   return body.priority;
 }
@@ -26,7 +26,7 @@ function whenOf(body: Record<string, unknown>): number | null | undefined {
   if (body.when === undefined) return undefined;
   if (body.when === null || body.when === '') return null;
   const ms = typeof body.when === 'string' ? Date.parse(body.when) : Number.NaN;
-  if (!Number.isFinite(ms)) throw new HttpProblem(400, { error: 'invalid_field', field: 'when', message: 'when は日時（例: 2026-11-06T09:00:00+09:00）にしてください' });
+  if (!Number.isFinite(ms)) throw problem(400, 'invalid_field', 'bad_when', { field: 'when' });
   return ms;
 }
 
@@ -36,7 +36,7 @@ function cronOf(body: Record<string, unknown>): string | undefined {
   const freq = typeof repeat.freq === 'string' ? repeat.freq : '';
   const values = repeat.values && typeof repeat.values === 'object' ? Object.fromEntries(Object.entries(repeat.values).map(([k, v]) => [k, String(v)])) : {};
   const cron = parseCron(freq, values);
-  if (!cron) throw new HttpProblem(400, { error: 'invalid_field', field: 'repeat', message: '繰り返しの指定が正しくありません（freq は daily / weekday / weekly / hourly / interval。時刻は HH:MM）' });
+  if (!cron) throw problem(400, 'invalid_field', 'bad_repeat', { field: 'repeat' });
   return cron;
 }
 
@@ -44,7 +44,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   const view = (task: Task) => taskView(task, languageOf(app.config()));
   const getTask = (id: string): Task => {
     const task = app.tasks.get(id);
-    if (!task) throw new HttpProblem(404, { error: 'not_found', message: 'タスクがありません' });
+    if (!task) throw problem(404, 'not_found', 'task_missing');
     return task;
   };
 
@@ -104,7 +104,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   router.add('POST', '/api/tasks/:id/answer', async ({ req, res, params }) => {
     const task = getTask(params[0]!);
     const text = requireString(requireObject(await readJson(req)), 'text', { max: 20_000 })!;
-    if (task.status !== 'waiting') throw new HttpProblem(409, { error: 'task', message: '返事を待っているタスクではありません' });
+    if (task.status !== 'waiting') throw problem(409, 'task', 'not_waiting');
     app.tasks.event(task.id, 'answer', 'user', taskText(languageOf(app.config()), 'event.answer', { question: task.waiting_text ?? '', text }));
     const updated = app.tasks.setReady(task.id, { actor: 'user' });
     app.worker.requestRun(task.id);
@@ -139,7 +139,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
   const close = (status: 'cancelled' | 'done') => ({ res, params }: { res: Parameters<typeof sendJson>[0]; params: string[] }) => {
     const task = getTask(params[0]!);
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
-      throw new HttpProblem(409, { error: 'task', message: 'このタスクは既に終わっています' });
+      throw problem(409, 'task', 'already_finished');
     }
     const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user');
     app.worker.stopTask(task.id);
@@ -153,11 +153,11 @@ export function registerTaskRoutes(router: Router, app: App): void {
   router.add('POST', '/api/worker', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     if (body.paused !== undefined) {
-      if (typeof body.paused !== 'boolean') throw new HttpProblem(400, { error: 'invalid_field', field: 'paused', message: 'paused は true / false にしてください' });
+      if (typeof body.paused !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'paused', params: { field: 'paused' } });
       app.worker.setPaused(body.paused);
     }
     if (body.autonomy !== undefined) {
-      if (typeof body.autonomy !== 'boolean') throw new HttpProblem(400, { error: 'invalid_field', field: 'autonomy', message: 'autonomy は true / false にしてください' });
+      if (typeof body.autonomy !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'autonomy', params: { field: 'autonomy' } });
       const config = app.config();
       if (config.worker.autonomy !== body.autonomy) await app.applyConfig({ ...config, worker: { ...config.worker, autonomy: body.autonomy } });
     }
@@ -171,7 +171,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     let ids: number[] | undefined;
     if (body.ids !== undefined) {
       if (!Array.isArray(body.ids) || !body.ids.every(id => Number.isSafeInteger(id))) {
-        throw new HttpProblem(400, { error: 'invalid_field', field: 'ids', message: 'ids は通知 ID の配列にしてください' });
+        throw problem(400, 'invalid_field', 'bad_ids', { field: 'ids' });
       }
       ids = body.ids as number[];
     }
@@ -187,19 +187,19 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const profile = { ...config.profile };
     const name = requireString(body, 'name', { optional: true, max: 40 });
     if (name !== undefined) {
-      if (!name.trim()) throw new HttpProblem(400, { error: 'invalid_field', field: 'name', message: '名前が空です' });
+      if (!name.trim()) throw problem(400, 'invalid_field', 'empty_name', { field: 'name' });
       profile.name = name.trim();
     }
     if (body.shape !== undefined) {
-      if (!(AVATAR_SHAPES as readonly unknown[]).includes(body.shape)) throw new HttpProblem(400, { error: 'invalid_field', field: 'shape', message: `shape は ${AVATAR_SHAPES.join(' / ')} のどれかにしてください` });
+      if (!(AVATAR_SHAPES as readonly unknown[]).includes(body.shape)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'shape', params: { field: 'shape', values: AVATAR_SHAPES.join(' / ') } });
       profile.shape = body.shape as typeof profile.shape;
     }
     if (body.color !== undefined) {
-      if (typeof body.color !== 'string' || !/^#[0-9a-fA-F]{6}$/u.test(body.color)) throw new HttpProblem(400, { error: 'invalid_field', field: 'color', message: 'color は #RRGGBB の形にしてください' });
+      if (typeof body.color !== 'string' || !/^#[0-9a-fA-F]{6}$/u.test(body.color)) throw problem(400, 'invalid_field', 'bad_color', { field: 'color' });
       profile.color = body.color;
     }
     if (body.motion !== undefined) {
-      if (!(MOTIONS as readonly unknown[]).includes(body.motion)) throw new HttpProblem(400, { error: 'invalid_field', field: 'motion', message: `motion は ${MOTIONS.join(' / ')} のどれかにしてください` });
+      if (!(MOTIONS as readonly unknown[]).includes(body.motion)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'motion', params: { field: 'motion', values: MOTIONS.join(' / ') } });
       profile.motion = body.motion as typeof profile.motion;
     }
     try {

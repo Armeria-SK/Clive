@@ -20,7 +20,7 @@ export interface ContextFacts {
 const fmt = (n: number) => n.toLocaleString('en-US');
 
 export function probeText(language: Language, key: ProviderMessageKey, params: MessageParams = {}): Pick<ProbeResult, 'message' | 'messageCode' | 'messageParams'> {
-  return { message: providerText(language, key, params), messageCode: key, messageParams: params };
+  return { message: providerText(language, key, params), messageCode: `provider.${key}`, messageParams: params };
 }
 
 export function evaluateContext(f: ContextFacts): ProbeResult {
@@ -79,5 +79,5 @@ export const CONTEXT_HINTS = {
 } as const;
 
 export function errorProbeText(error: ProviderError, language: Language): Pick<ProbeResult, 'message' | 'messageCode' | 'messageParams'> {
-  return { message: error.text(language), ...(error.code ? { messageCode: error.code, messageParams: error.params } : {}) };
+  return { message: error.text(language), ...(error.code ? { messageCode: `provider.${error.code}`, messageParams: error.params } : {}) };
 }

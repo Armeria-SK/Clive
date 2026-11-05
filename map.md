@@ -99,7 +99,7 @@
 
 ### 共通の小道具 — `src/shared`
 - `url.ts`（ループバックの判定、`baseUrl` の検査）、`redaction.ts`（秘密の伏せ字）、`pdf-text.ts`（PDF から本文を取り出す）、`http-json.ts`（JSON を取る小さな関数。今はどこからも使われていない）、`language.ts`（設定から Clive の言語を決める `languageOf`）。
-- `messages/`: サーバーが作る文の、日本語と英語の対応表。`define.ts`（表の作り方と、コードと差し込みの値を持つ `LocalizedError`）、領域ごとの表（`tasks.ts`：タスクの経過・理由・通知・繰り返しの説明、`providers.ts`：モデルの確認の文・直し方・プロバイダのエラー、`engine.ts`：返事の失敗・警告・添付の目印、`guard.ts`：道具の実行前の判定の理由（フォルダの範囲・シェルのコマンド・フック）、`tools.ts`：道具の結果・承認の題・Web の取得と検索の失敗、`stores.ts`：記憶・スキル・好奇心・添付ファイルのエラーと添付の目印）、`index.ts`（全部の表）。文は `{名前}` で値を差し込み、キーは画面が訳すときのコードにもなる。日本語の文を変えると `tests/fixtures/messages-ja.json` との照合が落ちる。
+- `messages/`: サーバーが作る文の、日本語と英語の対応表。`define.ts`（表の作り方と、コードと差し込みの値を持つ `LocalizedError`）、領域ごとの表（`tasks.ts`：タスクの経過・理由・通知・繰り返しの説明、`providers.ts`：モデルの確認の文・直し方・プロバイダのエラー、`engine.ts`：返事の失敗・警告・添付の目印、`guard.ts`：道具の実行前の判定の理由（フォルダの範囲・シェルのコマンド・フック）、`tools.ts`：道具の結果・承認の題・Web の取得と検索の失敗、`stores.ts`：記憶・スキル・好奇心・添付ファイルのエラーと添付の目印、`http.ts`：API のエラーの文）、`index.ts`（全部の表）。文は `{名前}` で値を差し込み、キーは画面が訳すときのコードにもなる。日本語の文を変えると `tests/fixtures/messages-ja.json` との照合が落ちる。画面が使うコードの一覧は、下の「サーバーが作る文の言語と、画面が使うコード」。
 - 入口: 部品ごとに別（まとまった入口はない）
 - 使うもの: Node の標準だけ
 
@@ -157,6 +157,21 @@
 - `clive.service`: Linux の systemd の設定。Clive が書ける場所をデータのフォルダ（`/var/lib/clive`）だけに絞り、シェルの道具に対する OS 側の閉じ込めにもなる。
 - 入口: `deploy/clive.service`
 - 使うもの: `node src/main.ts`、環境変数 `CLIVE_DATA_DIR`、`/etc/clive/env`
+
+### サーバーが作る文の言語と、画面が使うコード — `src/shared/messages`
+- 考え方: サーバーが作る文は、作るときの `language` で書く（未選択は日本語）。画面に出すだけの文には、文のほかに**変わらないコード（`code`）と差し込みの値（`params`）**を添える。画面は自分の辞書でコードを引いて訳し、辞書に無いコードは `message` をそのまま出す。今ある項目（`error`・`field`・`message`・`errorKind`・`warning` の `code`）は変えていない。言語を変える前に作られた通知・経過・実行の記録は、作ったときの言語のまま残る。
+- コードは `<領域>.<キー>` の形で、キーは `src/shared/messages/<領域>.ts` の表のキーそのもの。`{名前}` が `params` の名前になる。領域は `http`（`http.ts`）、`task`（`tasks.ts`）、`store`（`stores.ts`）、`provider`（`providers.ts`）、`engine`（`engine.ts`）。
+- **API のエラー（HTTP 4xx/5xx の JSON）**: `{ error, field?, message, code?, params? }`。
+  - `code` が `http.*`: 入力の誤り・見つからない・形式。`http.required{field}` `http.too_long{field,max}` `http.bad_enum{field,values}` `http.bad_bool{field}` `http.bad_attachments{max}` `http.too_large_body{kb}` `http.too_large_file{mb}` `http.unknown_language{language,values}`。値の無いもの: `unsupported_media_type` `invalid_json` `invalid_body` `invalid_id` `skill_missing` `item_missing` `already_researching` `conversation_missing` `bad_priority` `bad_when` `bad_repeat` `task_missing` `not_waiting` `already_finished` `bad_ids` `empty_name` `bad_color` `attachment_missing` `no_vision` `approval_gone` `bad_book` `internal`（500）。
+  - `code` が `task.error.*`（`error` は `task`）: `empty_title` `bad_cron{cron}` `not_found{id}` `not_proposal` `not_schedule` `running` `schedule_cannot_run` `waiting_answer` `previous_unfinished` `bad_when{when}` `bad_repeat{repeat}`。
+  - `code` が `store.*`: 記憶（`error` は `memory`）`store.memory.{empty,too_long{length,max},secret,over_cap.user{cap,used},over_cap.notes{cap,used},duplicate{ref},not_found{id},unchanged,no_event,already_undone,gone,cannot_undo}`、スキルとその下書き・好奇心（`error` は `invalid`）`store.skill.{bad_name,empty_description,long_description{max},empty_body,long_body{max},not_found{name},too_many_drafts,not_pending}` `store.curiosity.{empty_topic,too_long,duplicate{id},too_many{max},not_found{id}}`、添付ファイル（`error` は `upload`）`store.upload.{empty,too_large{mb},image_too_large{mb},unsupported,pdf_not_pdf,pdf_encrypted,pdf_no_text,pdf_damaged}`。
+- **返事の失敗**: SSE の `run.end` と、会話への送信の 409（`SendOutcome`）に `errorCode?`・`errorParams?` を添える（`errorKind`・`errorMessage` は今のまま。`errorMessage` は詳しい説明として小さく添える）。
+  - プロバイダ由来は `provider.*`: `key.missing{env}` `http.{context_overflow,auth,rate_limit,not_found,server,rejected}`（`{status,suffix}`）`cancelled` `timeout` `connect` `connect.code{code}` `anthropic.{timeout,connect,busy}` `unexpected{detail}` `ollama.context_unset`。
+  - エンジン由来は `engine.*`: `send.{busy_chat,busy,nothing_to_retry}` `no_usable` `run.{internal{detail},no_model,no_provider{id}}` `tool.invalid_streak{count}` `fit.overflow{required,available}`。
+- **警告**: SSE の `warning` は今までの `code` に `params?` を足した。`max_iterations{max}` `context_trimmed{count}` `partial_discarded` `retrying{message,seconds,attempt,retries,errorCode?}` `compacted{count}` `compaction_failed` `server_truncation_suspected{actual,estimate}`。
+- **モデルの確認**（`/api/models` と設定の `probe`）: `message` と `hint` は language で書く。`messageCode`（`provider.probe.*` と、プロバイダのエラーと同じ `provider.*`）と `messageParams` を添える。`probe.{exceeds_model{declared,modelMax},unknown,too_small{effective,required,source},ok{effective},ollama_not_found{model},ollama_unset,ollama_unreachable{base},tabby_other{current,model},vllm_missing{model},openrouter_missing{model},check_failed{detail},no_provider{id}}`。数字は `Probe` の `declared` `measured` `modelMax` `effective` `required` にも入っているので、画面は `status` と数字から自分で組み立ててもよい。`hint`（直し方）はサーバーの種類ごとの手順なので、画面は訳さずそのまま出す。
+- **コードを添えず、language で書くだけのもの**（画面は訳さない）: 通知の題と本文、タスクの経過の文とタスクの題・本文（好奇心から作るもの）、`cron_text`、実行や振り返りの会話の題、`triggerLabel`（`trigger` のコードも今までどおり付く）、道具の結果（`tool.result` の `preview`）と承認の依頼の題・理由・細目、再起動で中断した実行の記録、添付だけの発言の目印、記憶を画面から消したときの理由。
+- **まだ日本語のまま**（段階 12b の残り）: 道具の説明と引数の説明（モデルに渡す仕様）、設定の問題の一覧（`config/store.ts`・`shared/url.ts`。画面が文の先頭の場所を読み取る）、起動時のエラーとログの行（`[INFO]` など）、設定が壊れたときの文、アダプタが空の発言に入れる穴埋め（`（空のメッセージ）`）、画面がまだビルドされていないときの案内ページ。
 
 ### テスト — `tests/`
 - `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値）。`language` はサーバーの言語（設定の既定値、テンプレートの読み分けと写し、返事の言語の指示、決まり文の英語に日本語が混ざらないこと）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `language` `language-server` `language-tools` `memory` `messages` `providers` `review` `schedule` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。

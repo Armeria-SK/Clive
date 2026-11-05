@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Language } from '../config/schema.ts';
-import type { LocalizedError } from '../shared/messages/define.ts';
+import type { LocalizedError, MessageParams } from '../shared/messages/define.ts';
+import { httpText, type HttpMessageKey } from '../shared/messages/http.ts';
 
 export class HttpProblem extends Error {
   readonly status: number;
@@ -16,6 +17,12 @@ export class HttpProblem extends Error {
   render(language: Language): Record<string, unknown> {
     return this.localize ? { ...this.body, message: this.localize(language) } : this.body;
   }
+}
+
+export function problem(status: number, error: string, key: HttpMessageKey, options: { field?: string; params?: MessageParams } = {}): HttpProblem {
+  const params = options.params ?? {};
+  const body = { error, ...(options.field ? { field: options.field } : {}), message: httpText('ja', key, params), code: `http.${key}`, ...(Object.keys(params).length ? { params } : {}) };
+  return new HttpProblem(status, body, language => httpText(language, key, params));
 }
 
 export function domainProblem<K extends string>(status: number, kind: string, error: LocalizedError<K>): HttpProblem {
@@ -36,42 +43,42 @@ export function sendJson(res: ServerResponse, status: number, data: unknown): vo
 
 export async function readJson(req: IncomingMessage, maxBytes = 256 * 1024): Promise<unknown> {
   const type = req.headers['content-type'] ?? '';
-  if (!/^application\/json\b/i.test(type)) throw new HttpProblem(415, { error: 'unsupported_media_type', message: 'Content-Type は application/json にしてください' });
+  if (!/^application\/json\b/i.test(type)) throw problem(415, 'unsupported_media_type', 'unsupported_media_type');
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
     total += (chunk as Buffer).length;
-    if (total > maxBytes) throw new HttpProblem(413, { error: 'too_large', message: `本文が大きすぎます（上限 ${Math.round(maxBytes / 1024)}KB）` });
+    if (total > maxBytes) throw problem(413, 'too_large', 'too_large_body', { params: { kb: Math.round(maxBytes / 1024) } });
     chunks.push(chunk as Buffer);
   }
   if (!total) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw new HttpProblem(400, { error: 'invalid_json', message: 'JSON として読めません' }); }
+  catch { throw problem(400, 'invalid_json', 'invalid_json'); }
 }
 
 export async function readBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const declared = Number(req.headers['content-length']);
-  if (declared > maxBytes) throw new HttpProblem(413, { error: 'too_large', message: `ファイルが大きすぎます（上限 ${Math.round(maxBytes / 1024 / 1024)}MB）` });
+  if (declared > maxBytes) throw problem(413, 'too_large', 'too_large_file', { params: { mb: Math.round(maxBytes / 1024 / 1024) } });
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
     total += (chunk as Buffer).length;
-    if (total > maxBytes) throw new HttpProblem(413, { error: 'too_large', message: `ファイルが大きすぎます（上限 ${Math.round(maxBytes / 1024 / 1024)}MB）` });
+    if (total > maxBytes) throw problem(413, 'too_large', 'too_large_file', { params: { mb: Math.round(maxBytes / 1024 / 1024) } });
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks);
 }
 
 export function requireObject(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpProblem(400, { error: 'invalid_body', message: '本文はオブジェクトにしてください' });
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw problem(400, 'invalid_body', 'invalid_body');
   return value as Record<string, unknown>;
 }
 
 export function requireString(body: Record<string, unknown>, key: string, options: { max?: number; optional?: boolean } = {}): string | undefined {
   const value = body[key];
   if (value === undefined && options.optional) return undefined;
-  if (typeof value !== 'string' || !value.trim()) throw new HttpProblem(400, { error: 'invalid_field', field: key, message: `${key} を入力してください` });
-  if (options.max && value.length > options.max) throw new HttpProblem(400, { error: 'invalid_field', field: key, message: `${key} が長すぎます（上限 ${options.max} 文字）` });
+  if (typeof value !== 'string' || !value.trim()) throw problem(400, 'invalid_field', 'required', { field: key, params: { field: key } });
+  if (options.max && value.length > options.max) throw problem(400, 'invalid_field', 'too_long', { field: key, params: { field: key, max: options.max } });
   return value;
 }
 

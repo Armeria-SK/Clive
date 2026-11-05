@@ -31,11 +31,11 @@ export class ModelStatus {
       const required = requiredContext(model, base);
       const adapter = this.#deps.registry.get(model.provider);
       if (!adapter) {
-        return { modelId: model.id, status: 'error', server: '?', required, message: providerText(language, 'probe.no_provider', { id: model.provider }), messageCode: 'probe.no_provider', messageParams: { id: model.provider }, checkedAt: Date.now() } satisfies ProbeResult;
+        return { modelId: model.id, status: 'error', server: '?', required, message: providerText(language, 'probe.no_provider', { id: model.provider }), messageCode: 'provider.probe.no_provider', messageParams: { id: model.provider }, checkedAt: Date.now() } satisfies ProbeResult;
       }
       try { return await adapter.probe(model, required, language); }
       catch (error) {
-        return { modelId: model.id, status: 'error', server: adapter.provider.kind, required, message: providerText(language, 'probe.check_failed', { detail: (error as Error).message }), messageCode: 'probe.check_failed', messageParams: { detail: (error as Error).message }, checkedAt: Date.now() } satisfies ProbeResult;
+        return { modelId: model.id, status: 'error', server: adapter.provider.kind, required, message: providerText(language, 'probe.check_failed', { detail: (error as Error).message }), messageCode: 'provider.probe.check_failed', messageParams: { detail: (error as Error).message }, checkedAt: Date.now() } satisfies ProbeResult;
       }
     }));
     this.#results = new Map(results.map(r => [r.modelId, r]));

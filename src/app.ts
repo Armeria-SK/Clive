@@ -16,6 +16,7 @@ import { estimateTextTokens, estimateToolTokens } from './engine/tokens.ts';
 import { buildDynamic, buildSnapshot, ensureWorkspace } from './engine/workspace.ts';
 import type { AppPaths } from './paths.ts';
 import { languageOf } from './shared/language.ts';
+import { engineText } from './shared/messages/engine.ts';
 import { taskText } from './shared/messages/tasks.ts';
 import { EndpointLimiter } from './providers/limiter.ts';
 import { ProviderRegistry } from './providers/registry.ts';
@@ -102,7 +103,7 @@ export class App {
     this.conversations = new Conversations(this.db, now);
     this.runs = new Runs(this.db, now);
     this.kv = new KV(this.db, now);
-    const dangling = this.runs.closeDangling();
+    const dangling = this.runs.closeDangling(engineText(languageOf(config), 'run.restart_interrupted'));
     if (dangling) this.log(`[INFO] 前回の終了時に途中だった実行 ${dangling} 件を中断扱いにしました`);
     this.registry = new ProviderRegistry({
       env: options.env ?? process.env,

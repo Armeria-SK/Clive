@@ -39,7 +39,7 @@ export interface ProbeResult {
   effective?: number | undefined;
   required: number;
   message: string;
-  messageCode?: ProviderMessageKey | undefined;
+  messageCode?: string | undefined;
   messageParams?: MessageParams | undefined;
   hint?: string | undefined;
   capabilities?: string[] | undefined;
