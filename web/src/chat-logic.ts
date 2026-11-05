@@ -114,6 +114,14 @@ export function resolveRunModels(rows: readonly ChatRunRow[], runIds: readonly s
   return { found, missing };
 }
 
+export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
+
+const TOOL_KINDS: ReadonlySet<ChatItemKind> = new Set<ChatItemKind>(['tool', 'run']);
+
+export function joinsToolRun(kinds: readonly ChatItemKind[]): boolean[] {
+  return kinds.map((kind, i) => i > 0 && TOOL_KINDS.has(kind) && TOOL_KINDS.has(kinds[i - 1]!));
+}
+
 export const SLASH_COMMANDS = [
   { name: 'new', desc: 'slash.new' },
   { name: 'task', desc: 'slash.task' },

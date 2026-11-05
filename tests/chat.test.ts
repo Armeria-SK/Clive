@@ -3,7 +3,7 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, modelNameOf, renameTitleOf, resolveRunModels,
   restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
@@ -303,4 +303,12 @@ test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の
   assert.equal(sendFailureOf(new ApiError(409, otherWithProblems), 'x', models).message, engineText('en', 'send.busy'), 'problems があっても、「使えるモデルがない」以外のコードは組み立て直さない');
   const unknown = { ...body, problems: [{ nope: true }] };
   assert.equal(sendFailureOf(new ApiError(409, unknown), 'x', models).message, new ApiError(409, unknown).message);
+});
+
+test('joinsToolRun: 続けて並ぶ道具の行（実行中の道具を含む）は前の行とくっつく。間に返事・発言・注記が入れば分かれる', () => {
+  assert.deepEqual(joinsToolRun(['user', 'tool', 'tool', 'run', 'assistant', 'tool']), [false, false, true, true, false, false]);
+  assert.deepEqual(joinsToolRun(['tool', 'tool', 'tool']), [false, true, true], '先頭の行は何ともくっつかない');
+  assert.deepEqual(joinsToolRun(['tool', 'note', 'tool']), [false, false, false], '注記を挟めば別のまとまり');
+  assert.deepEqual(joinsToolRun(['assistant', 'think', 'fail']), [false, false, false], '道具の行でないものはくっつかない');
+  assert.deepEqual(joinsToolRun([]), []);
 });

@@ -3,8 +3,8 @@ import { api, ApiError, type Approval, type Message, type ModelView, type Profil
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels, restartApprovalGate, runOverflowOf, sendFailureOf, toolInputSummary,
-  type ApprovalGate, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, joinsToolRun, modelNameOf, renameTitleOf, resolveRunModels, restartApprovalGate, runOverflowOf, sendFailureOf, toolInputSummary,
+  type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import {
@@ -80,8 +80,6 @@ function noteIcon(notice: RunNotice): IconName {
   if (notice.kind === 'compaction') return 'info';
   return notice.code === 'retrying' ? 'clock' : 'alert';
 }
-
-type ItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
 
 export function Chat({ conversationId, profile, modelName, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
   const t = useT();
@@ -275,8 +273,8 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
     return runModels.get(runId) ?? null;
   };
   const keys: string[] = [];
-  const items: Array<{ key: string; kind: ItemKind; node: ReactNode }> = [];
-  const push = (key: string, kind: ItemKind, node: ReactNode): void => { keys.push(key); items.push({ key, kind, node }); };
+  const items: Array<{ key: string; kind: ChatItemKind; node: ReactNode }> = [];
+  const push = (key: string, kind: ChatItemKind, node: ReactNode): void => { keys.push(key); items.push({ key, kind, node }); };
 
   for (const m of visible) {
     if (m.role === 'tool') push(`m-${m.id}`, 'tool', <ToolMessage message={m} />);
@@ -312,7 +310,8 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   });
 
   const empty = loaded && items.length === 0;
-  let previous: ItemKind | null = null;
+  const joined = joinsToolRun(items.map(item => item.kind));
+  let previous: ChatItemKind | null = null;
   return (
     <section className="chat">
       <div
@@ -321,12 +320,12 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
       >
         <div className="chat-col">
           {empty && <EmptyChat profile={profile} onPick={text => void send(text)} />}
-          {items.map(item => {
+          {items.map((item, index) => {
             const indent = item.kind === 'tool' || item.kind === 'run' || item.kind === 'note' || item.kind === 'fail';
             const gap = item.kind === 'user' && previous !== null && previous !== 'user';
             const enter = primed.current && !seen.current.has(item.key);
             previous = item.kind;
-            return <div key={item.key} className={`chat-item${indent ? ' indent' : ''}${gap ? ' gap' : ''}${enter ? ' enter' : ''}`}>{item.node}</div>;
+            return <div key={item.key} className={`chat-item${indent ? ' indent' : ''}${gap ? ' gap' : ''}${joined[index] ? ' joined' : ''}${enter ? ' enter' : ''}`}>{item.node}</div>;
           })}
         </div>
       </div>
