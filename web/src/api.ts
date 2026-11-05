@@ -1,3 +1,6 @@
+import { getLanguage } from './i18n/state.ts';
+import { errorBodyText } from './server-text.ts';
+
 export interface Conversation { id: string; title: string | null; created_at: number; last_message_at: number }
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
@@ -14,7 +17,7 @@ export interface ContextDetail { reason: string; measured?: number; required?: n
 
 export interface Probe {
   modelId: string; status: string; server: string; declared?: number; measured?: number; modelMax?: number; effective?: number;
-  required: number; message: string; hint?: string; capabilities?: string[]; checkedAt: number;
+  required: number; message: string; messageCode?: string; messageParams?: Record<string, string | number>; hint?: string; capabilities?: string[]; checkedAt: number;
 }
 export interface ModelView {
   id: string; label: string; provider: string; model: string; providerKind?: string;
@@ -31,6 +34,12 @@ export interface RunRow {
   id: string; kind: string; conversation_id: string | null; model_id: string | null; attempts: number;
   started_at: number; duration_ms: number | null; ok: number | null; error_kind: string | null; error_message: string | null;
   input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; est_prompt_tokens: number | null; flags: string[];
+}
+
+export interface ToolCallRow {
+  id: string; run_id: string; conversation_id: string | null; tool: string; input: string;
+  decision: 'allow' | 'ask' | 'deny'; decided_by: string; approval_id: string | null; ok: number | null;
+  duration_ms: number | null; output_preview: string | null; full_ref: string | null; created_at: number;
 }
 
 export type Book = 'user' | 'notes';
@@ -75,11 +84,14 @@ export interface ReviewJob {
   changes: MemoryEvent[];
 }
 
+export interface TemplatesView { language: string; rules: string; files: Array<{ name: string; content: string }> }
+
 export class ApiError extends Error {
   readonly status: number;
   readonly body: any;
   constructor(status: number, body: any) {
-    super(typeof body?.errorMessage === 'string' ? body.errorMessage : typeof body?.message === 'string' ? body.message : `HTTP ${status}`);
+    // コード（code / errorCode）が辞書にあれば画面の言語で、無ければサーバーの文のまま
+    super(errorBodyText(body, getLanguage()) ?? (typeof body?.errorMessage === 'string' ? body.errorMessage : typeof body?.message === 'string' ? body.message : `HTTP ${status}`));
     this.status = status;
     this.body = body;
   }
@@ -112,7 +124,8 @@ export const api = {
   },
   retry: (id: string) => call<{ runId: string }>(`/api/conversations/${id}/retry`, { method: 'POST', body: '{}' }),
   stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
-  runs: () => call<{ runs: RunRow[] }>('/api/runs?limit=200'),
+  runs: (limit = 200) => call<{ runs: RunRow[] }>(`/api/runs?limit=${limit}`),
+  toolCalls: () => call<{ toolCalls: ToolCallRow[] }>('/api/tool-calls?limit=200'),
   settings: () => call<SettingsView>('/api/settings'),
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
@@ -120,7 +133,7 @@ export const api = {
   memories: () => call<{ books: Record<Book, BookView> }>('/api/memories'),
   addMemory: (book: Book, content: string) => call('/api/memories', { method: 'POST', body: JSON.stringify({ book, content }) }),
   editMemory: (id: number, content: string) => call(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
-  forgetMemory: (id: number) => call(`/api/memories/${id}`, { method: 'DELETE' }),
+  forgetMemory: (id: number) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'DELETE' }),
   memoryEvents: (id: number) => call<{ events: MemoryEvent[] }>(`/api/memories/${id}/events`),
   undoMemory: (eventId: number) => call(`/api/memory-events/${eventId}/undo`, { method: 'POST', body: '{}' }),
   tasks: () => call<{ active: Task[]; finished: Task[] }>('/api/tasks'),
@@ -150,4 +163,5 @@ export const api = {
   updateCuriosity: (id: number, patch: { status?: CuriosityItem['status']; result?: string }) => call(`/api/curiosity/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   curiosityTask: (id: number) => call(`/api/curiosity/${id}/task`, { method: 'POST', body: '{}' }),
   history: (q: string, days?: number) => call<{ hits: HistoryHit[] }>(`/api/history?q=${encodeURIComponent(q)}${days ? `&days=${days}` : ''}`),
+  templates: (language: string) => call<TemplatesView>(`/api/templates/${encodeURIComponent(language)}`),
 };

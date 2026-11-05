@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { TSchema } from '@sinclair/typebox';
-import type { AppConfig } from '../config/schema.ts';
+import type { AppConfig, Language } from '../config/schema.ts';
 import type { RunEvent } from '../engine/types.ts';
 import type { MemoryStore } from '../memory/store.ts';
 import type { TaskStore } from '../tasks/store.ts';
@@ -60,6 +60,6 @@ export interface ToolDef<I = any> {
   effect: ToolEffect;
   allowedIn: readonly RunKind[];
   preCheck?: (input: I, ctx: ToolContext) => PreCheck | Promise<PreCheck>;
-  summarize?: (input: I) => { title: string; body: string; cwd?: string };
+  summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext) => Promise<ToolOutput>;
 }

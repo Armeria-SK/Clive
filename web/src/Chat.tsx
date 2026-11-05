@@ -1,222 +1,359 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { api, ApiError, type Approval, type Message, type UploadView } from './api.ts';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { api, ApiError, type Approval, type Message, type ModelView, type Profile, type UploadView } from './api.ts';
+import { ApprovalDock } from './ApprovalCard.tsx';
+import { decideApproval } from './approval-decide.ts';
+import {
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels, restartApprovalGate, runOverflowOf, sendFailureOf, toolInputSummary,
+  type ApprovalGate, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
+} from './chat-logic.ts';
+import { ChatDialog } from './ChatDialog.tsx';
+import {
+  AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
+} from './ChatMessages.tsx';
+import { Composer } from './Composer.tsx';
 import type { Draft } from './events.ts';
-import { Markdown } from './Markdown.tsx';
+import { useT } from './i18n/index.ts';
+import type { IconName } from './icons.tsx';
+import { toast } from './toast.tsx';
 
-export function ApprovalCard({ approval }: { approval: Approval }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
-  const left = Math.max(0, Math.round((approval.expiresAt - now) / 1000));
-  async function decide(decision: 'once' | 'conversation' | 'deny') {
-    setBusy(true); setError('');
-    try { await api.decide(approval.id, decision); }
-    catch (e) { setError(e instanceof ApiError ? e.message : '送れませんでした'); setBusy(false); }
-  }
-  return (
-    <div className="approval" role="group" aria-label="承認の依頼">
-      <p className="approval-title">承認が必要です: {approval.title}<span className="muted">（残り {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}。過ぎると拒否）</span></p>
-      <pre className="approval-body">{approval.body}</pre>
-      {approval.cwd && <p className="muted">作業フォルダ: <code>{approval.cwd}</code></p>}
-      {approval.reasons.length > 0 && <ul className="reasons">{approval.reasons.map(r => <li key={r}>{r}</li>)}</ul>}
-      {approval.details.length > 0 && (
-        <details><summary>見つけたパス</summary><ul className="details">{approval.details.map(d => <li key={d}><code>{d}</code></li>)}</ul></details>
-      )}
-      {error && <p className="error-text">{error}</p>}
-      <div className="row">
-        <button onClick={() => void decide('once')} disabled={busy}>今回だけ許可</button>
-        <button className="secondary" onClick={() => void decide('conversation')} disabled={busy}>この会話では許可</button>
-        <button className="stop" onClick={() => void decide('deny')} disabled={busy}>拒否</button>
-      </div>
-    </div>
-  );
+export { ApprovalCard } from './ApprovalCard.tsx';
+export { ToolMessage } from './ChatMessages.tsx';
+
+export interface RunNotice {
+  runId: string;
+  kind: 'warning' | 'error' | 'switch' | 'memory' | 'compaction' | 'stopped';
+  message: string;
+  hint?: string | undefined;
+  retryable?: boolean;
+  eventId?: number;
+  code?: string | undefined;
+  errorKind?: string | undefined;
+  measured?: number | undefined;
+  required?: number | undefined;
 }
 
-function MemoryUndo({ eventId }: { eventId: number }) {
-  const [state, setState] = useState<'idle' | 'done' | 'error'>('idle');
-  if (state === 'done') return <span className="muted">（取り消しました）</span>;
-  return <button className="link" onClick={() => void api.undoMemory(eventId).then(() => setState('done'), () => setState('error'))}>{state === 'error' ? '取り消せませんでした' : '取り消す'}</button>;
-}
-
-export function ToolMessage({ message }: { message: Message }) {
-  const lines = message.text.split('\n');
-  return (
-    <details className={`tool-result ${message.isError ? 'failed' : ''}`}>
-      <summary>
-        <span className="tool-name">{message.toolName}</span>
-        <span className={`badge ${message.isError ? 'bad' : 'ok'}`}>{message.isError ? '失敗・不実行' : '成功'}</span>
-        <span className="muted preview">{lines.find(l => l.trim())?.slice(0, 120)}</span>
-      </summary>
-      <pre>{message.text}</pre>
-    </details>
-  );
-}
-
-export interface RunNotice { runId: string; kind: 'warning' | 'error' | 'switch' | 'memory'; message: string; hint?: string | undefined; retryable?: boolean; eventId?: number }
+export type ConversationChange = { kind: 'renamed' | 'archived'; id: string };
 
 interface Props {
   conversationId: string | null;
+  profile: Profile | null;
+  modelName: string | null;
   drafts: Draft[];
+  runStarts: Record<string, number>;
   notices: RunNotice[];
   approvals: Approval[];
   revision: number;
   onCreated: (id: string) => void;
   onClearNotices: (conversationId: string) => void;
+  onNewChat: () => void;
+  onConversationChanged: (change: ConversationChange) => void;
 }
 
-export function Chat({ conversationId, drafts, notices, approvals, revision, onCreated, onClearNotices }: Props) {
+interface Failure extends SendFailure { card: ContextCardData | null }
+
+let runsRequest: Promise<ChatRunRow[]> | null = null;
+
+function fetchRecentRuns(): Promise<ChatRunRow[]> {
+  runsRequest ??= api.runs(500).then(result => result.runs).finally(() => { runsRequest = null; });
+  return runsRequest;
+}
+
+function useRunStart(draft: Draft | undefined, runStarts: Record<string, number>): number | null {
+  const [fetched, setFetched] = useState<Record<string, number>>({});
+  const runId = draft?.runId;
+  const known = runId === undefined ? undefined : runStarts[runId] ?? fetched[runId];
+  useEffect(() => {
+    if (runId === undefined || known !== undefined) return undefined;
+    let live = true;
+    void fetchRecentRuns().then(rows => {
+      const row = rows.find(r => r.id === runId);
+      if (live && row) setFetched(current => ({ ...current, [runId]: row.started_at }));
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [runId, known]);
+  return known ?? null;
+}
+
+function noteIcon(notice: RunNotice): IconName {
+  if (notice.kind === 'switch') return 'refresh';
+  if (notice.kind === 'stopped') return 'square';
+  if (notice.kind === 'compaction') return 'info';
+  return notice.code === 'retrying' ? 'clock' : 'alert';
+}
+
+type ItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
+
+export function Chat({ conversationId, profile, modelName, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
+  const t = useT();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [title, setTitle] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(!conversationId);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState<{ message: string; hint?: string } | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
   const [attached, setAttached] = useState<UploadView[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [models, setModels] = useState<ModelView[]>([]);
+  const [runModels, setRunModels] = useState<ReadonlyMap<string, string>>(new Map());
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const bottom = useRef<HTMLDivElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const thread = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const created = useRef<string | null>(null);
+  const frontGate = useRef<ApprovalGate>({ id: null, since: 0 });
+  const unresolved = useRef(new Set<string>());
+  const seen = useRef(new Set<string>());
+  const primed = useRef(false);
   const draft = drafts.find(d => d.conversationId === conversationId);
+  const startedAt = useRunStart(draft, runStarts);
+  const [liveSince] = useState(() => Date.now());
 
   const load = useCallback(async () => {
-    if (!conversationId) { setMessages([]); return; }
-    try { setMessages((await api.messages(conversationId)).messages); }
-    catch (error) { if (error instanceof ApiError && error.status === 404) setMessages([]); }
+    if (!conversationId) { setMessages([]); setLoaded(true); return; }
+    try {
+      const result = await api.messages(conversationId);
+      setMessages(result.messages);
+      setTitle(result.conversation.title);
+      setLoaded(true);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) { setMessages([]); setLoaded(true); }
+    }
   }, [conversationId]);
 
-  useEffect(() => { void load(); setSendError(null); }, [load]);
-  useEffect(() => { void load(); }, [revision, load]);
-  useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }); }, [messages.length, draft?.text.length]);
+  useEffect(() => { void load(); }, [load, revision]);
+  useEffect(() => { void api.models().then(r => setModels(r.models)).catch(() => undefined); }, []);
 
-  async function attach(files: FileList | null) {
+  const liveRunId = draft?.runId;
+  useEffect(() => {
+    const wanted = [...new Set(messages.flatMap(m => (m.role === 'assistant' && m.runId && m.runId !== liveRunId && !runModels.has(m.runId) && !unresolved.current.has(m.runId) ? [m.runId] : [])))];
+    if (!wanted.length) return undefined;
+    let live = true;
+    void fetchRecentRuns().then(rows => {
+      if (!live) return;
+      const { found, missing } = resolveRunModels(rows, wanted, models);
+      for (const id of missing) unresolved.current.add(id);
+      if (found.size) setRunModels(current => new Map([...current, ...found]));
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [messages, liveRunId, models, runModels]);
+
+  const lastIsUser = messages.at(-1)?.role === 'user';
+  const errorNotice = notices.find(n => n.kind === 'error');
+  const visible = messages.filter(m => !(m.role === 'assistant' && !m.text.trim() && m.toolCalls?.length));
+  const assistantName = profile?.name ?? 'Clive';
+  const frontApprovalId = approvals[0]?.id ?? null;
+  useLayoutEffect(() => { frontGate.current = advanceApprovalGate(frontGate.current, frontApprovalId, Date.now()); }, [frontApprovalId]);
+  useEffect(() => {
+    const restart = () => { frontGate.current = restartApprovalGate(frontGate.current, Date.now()); };
+    const onVisibility = () => { if (!document.hidden) restart(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', restart);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', restart);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = thread.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [messages.length, draft?.text.length, draft?.activeTool, notices.length, failure, loaded, approvals.length]);
+
+  async function fail(error: unknown, fallback: string): Promise<void> {
+    const base = sendFailureOf(error, fallback, models);
+    let card: ContextCardData | null = null;
+    if (base.context) {
+      let known = models;
+      try { known = (await api.models()).models; } catch { known = models; }
+      card = contextCardOf(base.body, known);
+    }
+    stick.current = true;
+    setFailure({ ...base, card });
+  }
+
+  async function attach(files: FileList | null): Promise<void> {
     if (!files?.length) return;
-    setUploading(true); setSendError(null);
+    setUploading(true); setFailure(null);
     try {
       for (const file of [...files].slice(0, 5 - attached.length)) {
         const upload = await api.upload(file);
         setAttached(list => [...list, upload]);
       }
     } catch (error) {
-      setSendError({ message: error instanceof ApiError ? error.message : '添付できませんでした' });
+      await fail(error, t('chat.attach.failed'));
     } finally {
       setUploading(false);
       if (fileInput.current) fileInput.current.value = '';
     }
   }
 
-  async function send() {
-    const text = input.trim();
-    if ((!text && !attached.length) || sending) return;
-    setSending(true); setSendError(null);
+  async function rename(next: string): Promise<void> {
+    if (!conversationId) { toast({ kind: 'info', icon: 'alert', title: t('chat.needsChat') }); return; }
     try {
-      let id = conversationId;
-      if (!id) { id = (await api.createConversation()).conversation.id; onCreated(id); }
-      onClearNotices(id);
-      await api.send(id, text, attached.map(a => a.id));
+      await api.renameConversation(conversationId, next);
       setInput('');
-      setAttached([]);
-      await load();
+      setTitle(next);
+      onConversationChanged({ kind: 'renamed', id: conversationId });
+      toast({ kind: 'info', icon: 'pencil', title: t('chat.rename.done'), body: next });
     } catch (error) {
-      if (error instanceof ApiError) setSendError({ message: error.message, hint: error.body?.detail?.hint });
-      else setSendError({ message: '送信できませんでした。サーバーが動いているか確認してください' });
-    } finally { setSending(false); }
-  }
-
-  async function retry() {
-    if (!conversationId) return;
-    onClearNotices(conversationId);
-    setSendError(null);
-    try { await api.retry(conversationId); }
-    catch (error) { setSendError({ message: error instanceof ApiError ? error.message : 'やり直せませんでした' }); }
-  }
-
-  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    // 日本語入力の変換確定の Enter では送らない
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-      e.preventDefault();
-      void send();
+      toast({ kind: 'info', icon: 'alert', title: t('chat.rename.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
     }
   }
 
-  const lastIsUser = messages.at(-1)?.role === 'user';
-  const errorNotice = notices.find(n => n.kind === 'error');
+  async function archive(): Promise<void> {
+    setConfirmArchive(false);
+    if (!conversationId) return;
+    try {
+      await api.archiveConversation(conversationId);
+      toast({ kind: 'info', icon: 'archive', title: t('chat.archive.done'), ...(title ? { body: title } : {}) });
+      onConversationChanged({ kind: 'archived', id: conversationId });
+    } catch (error) {
+      toast({ kind: 'info', icon: 'alert', title: t('chat.archive.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    }
+  }
 
+  async function send(preset?: string): Promise<void> {
+    const text = (preset ?? input).trim();
+    if ((!text && !attached.length) || sending) return;
+    if (draft) { toast({ kind: 'info', icon: 'alert', title: t('chat.busyTitle'), body: t('chat.busyBody') }); return; }
+    const newTitle = renameTitleOf(text);
+    if (newTitle) { await rename(newTitle); return; }
+    if (isRenameWithoutTitle(text)) { toast({ kind: 'info', icon: 'alert', title: t('chat.rename.empty') }); return; }
+    stick.current = true;
+    setSending(true); setFailure(null);
+    try {
+      let id = conversationId ?? created.current;
+      if (!id) { id = (await api.createConversation()).conversation.id; created.current = id; }
+      onClearNotices(id);
+      await api.send(id, text, attached.map(a => a.id));
+      if (preset === undefined) setInput('');
+      setAttached([]);
+      if (!conversationId) onCreated(id);
+      else await load();
+    } catch (error) {
+      await fail(error, t('chat.send.failed'));
+    } finally { setSending(false); }
+  }
+
+  async function retry(): Promise<void> {
+    if (!conversationId) return;
+    onClearNotices(conversationId);
+    setFailure(null);
+    try { await api.retry(conversationId); }
+    catch (error) { await fail(error, t('chat.retry.failed')); }
+  }
+
+  function runSlash(command: SlashCommand): void {
+    if (command.name === 'rename') { setInput('/rename '); return; }
+    setInput('');
+    switch (command.name) {
+      case 'new': onNewChat(); return;
+      case 'task': case 'tasks': location.hash = '#/tasks'; return;
+      case 'skills': location.hash = '#/skills'; return;
+      case 'log': location.hash = '#/runs'; return;
+      case 'memory': location.hash = '#/memory'; return;
+      case 'stop':
+        if (draft) void api.stop(draft.runId); else toast({ kind: 'info', icon: 'square', title: t('chat.stopNothing') });
+        return;
+      case 'archive':
+        if (conversationId) setConfirmArchive(true); else toast({ kind: 'info', icon: 'alert', title: t('chat.needsChat') });
+        return;
+    }
+  }
+
+  function approveOnce(shownId: string): void {
+    if (!approvalEnterAllowed(frontGate.current, shownId, Date.now())) return;
+    void decideApproval(shownId, 'once').catch(error => {
+      toast({ kind: 'info', icon: 'alert', title: t('approval.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    });
+  }
+
+  const replyModel = (runId: string | null): string | null => {
+    if (!runId) return null;
+    if (runId === liveRunId) return models.length ? modelNameOf(models, draft?.modelId) : null;
+    return runModels.get(runId) ?? null;
+  };
+  const keys: string[] = [];
+  const items: Array<{ key: string; kind: ItemKind; node: ReactNode }> = [];
+  const push = (key: string, kind: ItemKind, node: ReactNode): void => { keys.push(key); items.push({ key, kind, node }); };
+
+  for (const m of visible) {
+    if (m.role === 'tool') push(`m-${m.id}`, 'tool', <ToolMessage message={m} />);
+    else if (m.role === 'user') push(`m-${m.id}`, 'user', <UserMessage message={m} />);
+    else push(`m-${m.id}`, 'assistant', (
+      <AssistantMessage profile={profile} text={m.text} time={m.createdAt} model={replyModel(m.runId)} />
+    ));
+  }
+  if (draft) {
+    if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} />);
+    else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} />);
+    else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} model={models.length ? modelNameOf(models, draft.modelId) : null} startedAt={startedAt} />);
+  }
+  notices.filter(n => n.kind !== 'error').forEach((n, i) => {
+    const key = `n-${n.runId}-${i}`;
+    if (n.kind === 'memory') push(key, 'note', <MemoryRow message={n.message} eventId={n.eventId} />);
+    else push(key, 'note', <NoteRow icon={noteIcon(n)}>{n.message}</NoteRow>);
+  });
+  if (errorNotice) {
+    push(`err-${errorNotice.runId}`, 'fail', (
+      <FailureCard message={errorNotice.message} hint={errorNotice.hint} numbers={runOverflowOf(errorNotice)} onRetry={lastIsUser && !draft ? () => void retry() : undefined} />
+    ));
+  }
+  if (failure) {
+    push('send-failure', 'fail', failure.context
+      ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} />
+      : <SendErrorCard message={failure.message} hint={failure.hint} />);
+  }
+
+  useEffect(() => {
+    for (const key of keys) seen.current.add(key);
+    if (loaded) primed.current = true;
+  });
+
+  const empty = loaded && items.length === 0;
+  let previous: ItemKind | null = null;
   return (
     <section className="chat">
-      <div className="messages">
-        {!messages.length && !draft && (
-          <div className="empty">
-            <h2>Clive</h2>
-            <p>話しかけてください。Enter で送信、Shift+Enter で改行します。</p>
-          </div>
-        )}
-        {messages.map(m => {
-          if (m.role === 'tool') return <ToolMessage key={m.id} message={m} />;
-          if (m.role === 'assistant' && !m.text.trim() && m.toolCalls?.length) return null; // ツールを呼んだだけの返事は、結果の表示に任せる
-          return (
-            <article key={m.id} className={`message ${m.role}`}>
-              {m.role === 'assistant' ? <Markdown text={m.text} /> : <p className="plain">{m.text}</p>}
-              {m.attachments?.length ? <p className="attachments">{m.attachments.map(a => <span key={a.id} className="tag">{a.kind === 'image' ? '画像' : a.kind === 'pdf' ? 'PDF' : 'ファイル'}: {a.name}</span>)}</p> : null}
-              {m.toolCalls?.length ? <p className="muted tool-hint">ツールを使います: {m.toolCalls.map(c => c.name).join('、')}</p> : null}
-            </article>
-          );
-        })}
-        {draft && (
-          <article className="message assistant streaming">
-            {draft.text ? <Markdown text={draft.text} />
-              : <p className="muted">{draft.activeTool ? `ツールを実行しています: ${draft.activeTool}` : `考えています…（${draft.modelId}）`}</p>}
-          </article>
-        )}
-        {approvals.map(a => <ApprovalCard key={a.id} approval={a} />)}
-        {notices.filter(n => n.kind !== 'error').map((n, i) => (
-          <p key={`${n.runId}-${i}`} className={`notice ${n.kind}`}>
-            {n.message}
-            {n.kind === 'memory' && n.eventId !== undefined && <MemoryUndo eventId={n.eventId} />}
-          </p>
-        ))}
-        {errorNotice && (
-          <div className="error-panel">
-            <p className="pre">{errorNotice.message}</p>
-            {errorNotice.hint && <p className="hint">直し方: {errorNotice.hint}</p>}
-            {lastIsUser && !draft && <button onClick={() => void retry()}>もう一度送る</button>}
-          </div>
-        )}
-        <div ref={bottom} />
-      </div>
-      {sendError && (
-        <div className="error-panel compose-error">
-          <p className="pre">{sendError.message}</p>
-          {sendError.hint && <p className="hint">直し方: {sendError.hint}</p>}
-          <a href="#/settings">設定を開く</a>
+      <div
+        ref={thread} className="chat-thread"
+        onScroll={e => { stick.current = isNearBottom(e.currentTarget); }}
+      >
+        <div className="chat-col">
+          {empty && <EmptyChat profile={profile} onPick={text => void send(text)} />}
+          {items.map(item => {
+            const indent = item.kind === 'tool' || item.kind === 'run' || item.kind === 'note' || item.kind === 'fail';
+            const gap = item.kind === 'user' && previous !== null && previous !== 'user';
+            const enter = primed.current && !seen.current.has(item.key);
+            previous = item.kind;
+            return <div key={item.key} className={`chat-item${indent ? ' indent' : ''}${gap ? ' gap' : ''}${enter ? ' enter' : ''}`}>{item.node}</div>;
+          })}
         </div>
-      )}
-      {attached.length > 0 && (
-        <div className="attached">
-          {attached.map(a => (
-            <span key={a.id} className="tag">
-              {a.kind === 'image' ? '画像' : a.kind === 'pdf' ? `PDF ${a.pages} ページ` : 'ファイル'}: {a.name}
-              <button className="link" aria-label={`${a.name} を外す`} onClick={() => setAttached(list => list.filter(x => x.id !== a.id))}>×</button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="composer">
-        <input ref={fileInput} type="file" multiple hidden onChange={e => void attach(e.target.files)}
-          accept=".txt,.md,.csv,.json,.yaml,.yml,.log,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*,application/pdf,image/png,image/jpeg,image/gif,image/webp" />
-        <button className="secondary" onClick={() => fileInput.current?.click()} disabled={sending || uploading || attached.length >= 5} title="ファイルを添付（テキスト・PDF・画像、10MB まで）">
-          {uploading ? '添付中…' : '添付'}
-        </button>
-        <textarea
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="メッセージ"
-          rows={3}
-          disabled={sending}
-          aria-label="メッセージ"
-        />
-        {draft
-          ? <button className="stop" onClick={() => void api.stop(draft.runId)}>止める</button>
-          : <button onClick={() => void send()} disabled={sending || uploading || (!input.trim() && !attached.length)}>送信</button>}
       </div>
+      <div className="chat-dock">
+        <div className="chat-dock-inner">
+          <ApprovalDock approvals={approvals} />
+          <Composer
+            textareaRef={textarea} fileInputRef={fileInput} input={input} attached={attached} uploading={uploading} sending={sending} generating={Boolean(draft)}
+            approvalId={frontApprovalId} assistantName={assistantName} modelName={modelName}
+            onInput={setInput} onAttach={files => void attach(files)} onDetach={id => setAttached(list => list.filter(a => a.id !== id))}
+            onSend={() => void send()} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
+          />
+        </div>
+      </div>
+      {confirmArchive && (
+        <ChatDialog
+          title={t('chat.archive.title')} onClose={() => setConfirmArchive(false)}
+          actions={(
+            <>
+              <button type="button" className="btn btn-ghost chat-plain" onClick={() => setConfirmArchive(false)}>{t('chat.archive.cancel')}</button>
+              <button type="button" className="btn btn-primary" onClick={() => void archive()}>{t('chat.archive.confirm')}</button>
+            </>
+          )}
+        >
+          <p className="chat-dialog-text">{t('chat.archive.body', title ?? t('conversation.untitled'))}</p>
+        </ChatDialog>
+      )}
     </section>
   );
 }

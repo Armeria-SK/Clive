@@ -167,7 +167,7 @@ test('スキルの下書きは、承認するまで索引に出ず、読めな�
   assert.equal(s.app.skills.index(), '');
   const draft = s.app.skills.drafts()[0]!;
   assert.equal(draft.status, 'pending');
-  assert.equal(s.app.notifications.list()[0]?.link, '#/review');
+  assert.equal(s.app.notifications.list()[0]?.link, '#/skills/draft/weekly-report');
 
   s.app.skills.approve(draft.id);
   assert.match(s.app.skills.index(), /weekly-report: 週報を書くとき/u);

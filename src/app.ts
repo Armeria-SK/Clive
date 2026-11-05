@@ -15,6 +15,9 @@ import { ModelStatus } from './engine/status.ts';
 import { estimateTextTokens, estimateToolTokens } from './engine/tokens.ts';
 import { buildDynamic, buildSnapshot, ensureWorkspace } from './engine/workspace.ts';
 import type { AppPaths } from './paths.ts';
+import { languageOf } from './shared/language.ts';
+import { engineText } from './shared/messages/engine.ts';
+import { taskText } from './shared/messages/tasks.ts';
 import { EndpointLimiter } from './providers/limiter.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
@@ -91,16 +94,16 @@ export class App {
   constructor(options: AppOptions) {
     this.paths = options.paths;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
-    ensureWorkspace(this.paths);
     this.configStore = new ConfigStore(this.paths.config);
     const config = this.configStore.load();
+    ensureWorkspace(this.paths, languageOf(config));
     this.bootServer = structuredClone(config.server);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
     const now = options.now ?? Date.now;
     this.conversations = new Conversations(this.db, now);
     this.runs = new Runs(this.db, now);
     this.kv = new KV(this.db, now);
-    const dangling = this.runs.closeDangling();
+    const dangling = this.runs.closeDangling(engineText(languageOf(config), 'run.restart_interrupted'));
     if (dangling) this.log(`[INFO] 前回の終了時に途中だった実行 ${dangling} 件を中断扱いにしました`);
     this.registry = new ProviderRegistry({
       env: options.env ?? process.env,
@@ -122,7 +125,7 @@ export class App {
         // タスクの実行中は画面を見ていないことが多いので、通知でも知らせる
         const task = this.tasks.byConversation(v.conversationId);
         if (task) {
-          this.notifications.notify({ kind: 'approval_needed', title: `承認が必要です: ${task.title}`, body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}` });
+          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}` });
         }
       } else {
         this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: v.conversationId, approvalId: v.id, outcome: event.outcome });
@@ -131,12 +134,12 @@ export class App {
     this.memory = new MemoryStore(this.db, () => {
       const m = this.config().memory;
       return { user: m.userMaxChars, notes: m.notesMaxChars };
-    });
-    this.tasks = new TaskStore(this.db, now);
+    }, undefined, () => languageOf(this.config()));
+    this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.notifications = new Notifications(this.db, now);
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
-    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now);
+    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()));
     this.#importCuriosity();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
     this.engine = new ChatEngine({
@@ -153,7 +156,7 @@ export class App {
       reviews: this.reviews, memory: this.memory, curiosity: this.curiosity,
     });
     this.tasks.onChange = task => {
-      this.bus.publish({ type: 'task.changed', task: taskView(task) });
+      this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });
       if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
         this.curiosity.onTaskFinished(task);
         // 実行したタスクが終わったら振り返る（実行の記録があるものだけ）
@@ -164,10 +167,10 @@ export class App {
       this.worker.poke();
     };
     this.notifications.onNotify = notification => this.bus.publish({ type: 'notification', notification });
-    this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log });
+    this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));
     this.skills.onDraft = draft => {
-      this.notifications.notify({ kind: 'info', title: `スキルの下書きを確かめてください: ${draft.name}`, body: draft.reason ?? undefined, link: '#/review', dedupKey: `skill-draft:${draft.id}` });
+      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: `#/skills/draft/${encodeURIComponent(draft.name)}`, dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
       // 道具を多く使った重い会話の後に振り返る
@@ -212,10 +215,11 @@ export class App {
     const config = this.config();
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const memoryBudget = config.memory.userMaxChars + config.memory.notesMaxChars;
-    const memoryNow = this.memory ? estimateTextTokens(renderBooks(this.memory.list())) : 0;
+    const language = languageOf(config);
+    const memoryNow = this.memory ? estimateTextTokens(renderBooks(this.memory.list(), language)) : 0;
     const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat'))) : 0;
-    return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index() ?? '' }).text) + Math.max(memoryBudget, memoryNow) + tools
-      + estimateTextTokens(buildDynamic(config.timezone)) + 64;
+    return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + Math.max(memoryBudget, memoryNow) + tools
+      + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }
 
   async applyConfig(next: AppConfig): Promise<AppConfig> {

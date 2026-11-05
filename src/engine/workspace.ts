@@ -1,22 +1,45 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { AppPaths } from '../paths.ts';
 
 export const WORKSPACE_FILES = ['SOUL.md', 'USER.md', 'CURIOSITY.md'] as const;
+export type WorkspaceFile = (typeof WORKSPACE_FILES)[number];
+export type TemplateName = 'rules' | WorkspaceFile;
 
-export function ensureWorkspace(paths: AppPaths): void {
+export function templatePath(paths: AppPaths, name: TemplateName, language: Language): string | undefined {
+  const japanese = join(paths.templates, name === 'rules' ? 'rules.ja.md' : name);
+  const candidates = language === 'ja' ? [japanese] : [join(paths.templates, language, name === 'rules' ? 'rules.md' : name), japanese];
+  return candidates.find(path => existsSync(path));
+}
+
+export function ensureWorkspace(paths: AppPaths, language: Language = DEFAULT_LANGUAGE): void {
   mkdirSync(paths.workspace, { recursive: true });
   for (const name of WORKSPACE_FILES) {
     const target = join(paths.workspace, name);
-    const source = join(paths.templates, name);
-    if (!existsSync(target) && existsSync(source)) copyFileSync(source, target);
+    const source = templatePath(paths, name, language);
+    if (!source) continue;
+    try { copyFileSync(source, target, constants.COPYFILE_EXCL); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
   }
 }
 
-function readIfExists(path: string): string {
+function readIfExists(path: string | undefined): string {
+  if (!path) return '';
   try { return existsSync(path) ? readFileSync(path, 'utf8').trim() : ''; } catch { return ''; }
+}
+
+export function readTemplate(paths: AppPaths, name: TemplateName, language: Language): string {
+  return readIfExists(templatePath(paths, name, language));
+}
+
+export function defaultTexts(paths: AppPaths, language: Language): { rules: string; files: Array<{ name: WorkspaceFile; content: string }> } {
+  return {
+    rules: readTemplate(paths, 'rules', language),
+    files: WORKSPACE_FILES.map(name => ({ name, content: readTemplate(paths, name, language) })),
+  };
 }
 
 export interface Snapshot {
@@ -24,14 +47,20 @@ export interface Snapshot {
   hash: string;
 }
 
-export function buildSnapshot(paths: AppPaths, extra: { memories?: string; skills?: string } = {}): Snapshot {
-  const rules = readIfExists(join(paths.templates, 'rules.ja.md'));
+const SNAPSHOT_HEADINGS: Record<Language, { soul: string; user: string }> = {
+  ja: { soul: '# あなた自身（SOUL.md）', user: '# ユーザーについて（USER.md）' },
+  en: { soul: '# Who you are (SOUL.md)', user: '# About the user (USER.md)' },
+};
+
+export function buildSnapshot(paths: AppPaths, extra: { memories?: string; skills?: string } = {}, language: Language = DEFAULT_LANGUAGE): Snapshot {
+  const rules = readTemplate(paths, 'rules', language);
   const soul = readIfExists(join(paths.workspace, 'SOUL.md'));
   const user = readIfExists(join(paths.workspace, 'USER.md'));
+  const headings = SNAPSHOT_HEADINGS[language];
   const sections = [
     rules,
-    soul && `# あなた自身（SOUL.md）\n\n${soul}`,
-    user && `# ユーザーについて（USER.md）\n\n${user}`,
+    soul && `${headings.soul}\n\n${soul}`,
+    user && `${headings.user}\n\n${user}`,
     extra.memories,
     extra.skills,
   ].filter(Boolean);
@@ -50,9 +79,23 @@ export function recordFileVersions(db: DatabaseSync, paths: AppPaths, now = Date
   }
 }
 
-export function buildDynamic(timezone: string, now = new Date()): string {
-  const formatted = new Intl.DateTimeFormat('ja-JP', {
-    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit',
-  }).format(now);
-  return `現在時刻: ${formatted}（${timezone}）`;
+const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string }> = {
+  ja: {
+    locale: 'ja-JP',
+    format: { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' },
+    time: (formatted, timezone) => `現在時刻: ${formatted}（${timezone}）`,
+    reply: '返事は日本語で書く（ユーザーが別の言語で話しかけたら、その言語で返す）',
+  },
+  en: {
+    locale: 'en-US',
+    format: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
+    time: (formatted, timezone) => `Current time: ${formatted} (${timezone})`,
+    reply: 'Write your replies in English (if the user speaks to you in another language, reply in that language).',
+  },
+};
+
+export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date()): string {
+  const text = DYNAMIC[language];
+  const formatted = new Intl.DateTimeFormat(text.locale, { ...text.format, timeZone: timezone }).format(now);
+  return [text.time(formatted, timezone), text.reply].join('\n');
 }

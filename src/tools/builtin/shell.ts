@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Type } from '@sinclair/typebox';
+import { languageOf } from '../../shared/language.ts';
+import { guardText } from '../../shared/messages/guard.ts';
+import { toolText } from '../../shared/messages/tools.ts';
 import { expandPath, placePath } from '../hooks/scope.ts';
 import { checkShellCommand } from '../hooks/shell-guard.ts';
 import { resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
@@ -11,25 +14,29 @@ interface ShellInput { command: string; cwd?: string; timeoutSec?: number }
 
 function resolveCwd(input: ShellInput, ctx: ToolContext): { cwd: string } | { problem: string } {
   if (!input.cwd) return { cwd: ctx.workspace };
-  const expanded = expandPath(input.cwd, ctx.workspace);
-  if ('unresolved' in expanded) return { problem: `cwd が判定できません: ${expanded.unresolved}` };
+  const language = languageOf(ctx.config);
+  const expanded = expandPath(input.cwd, ctx.workspace, process.env, language);
+  if ('unresolved' in expanded) return { problem: guardText(language, 'shell.cwd_unresolved', { detail: expanded.unresolved }) };
   const placement = placePath(expanded.path, ctx.policy);
-  if (placement.kind !== 'inside') return { problem: `cwd は許可フォルダの中にしてください（${expanded.path}）` };
-  if (!statSync(expanded.path, { throwIfNoEntry: false })?.isDirectory()) return { problem: `cwd のフォルダがありません（${expanded.path}）` };
+  if (placement.kind !== 'inside') return { problem: guardText(language, 'shell.cwd_outside', { path: expanded.path }) };
+  if (!statSync(expanded.path, { throwIfNoEntry: false })?.isDirectory()) return { problem: guardText(language, 'shell.cwd_missing', { path: expanded.path }) };
   return { cwd: expanded.path };
 }
 
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
-  if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: ['シェルの実行は設定で無効になっています'] };
+  const language = languageOf(ctx.config);
+  if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')] };
   const cwd = resolveCwd(input, ctx);
   if ('problem' in cwd) return { decision: 'deny', reasons: [cwd.problem] };
   const shell = ctx.config.tools.shell;
   const verdict = checkShellCommand(input.command, cwd.cwd, {
-    policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny,
+    policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny, language,
   });
-  const details = verdict.paths.map(p => `${p.input} → ${p.path ?? '（判定できない）'}：${
-    p.placement.kind === 'inside' ? (p.placement.mode === 'write' ? '許可フォルダ（読み書き）' : '許可フォルダ（読むだけ）')
-      : p.placement.kind === 'outside' ? '許可フォルダの外' : p.placement.kind === 'deny' ? '拒否' : '判定できない'}`);
+  const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
+    input: p.input, path: p.path ?? guardText(language, 'shell.unresolved_path'),
+    place: guardText(language, p.placement.kind === 'inside' ? (p.placement.mode === 'write' ? 'shell.place.write' : 'shell.place.read')
+      : p.placement.kind === 'outside' ? 'shell.place.outside' : p.placement.kind === 'deny' ? 'shell.place.deny' : 'shell.place.unknown'),
+  }));
   return { decision: verdict.decision, reasons: verdict.reasons, details };
 }
 
@@ -48,10 +55,11 @@ export const shellRun: ToolDef<ShellInput> = {
   effect: 'exec',
   allowedIn: ['chat', 'task'],
   preCheck: shellPreCheck,
-  summarize: input => ({ title: 'コマンドを実行する', body: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) }),
+  summarize: (input, language) => ({ title: toolText(language, 'summary.shell'), body: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) }),
   async execute(input, ctx) {
     const cwd = resolveCwd(input, ctx);
     if ('problem' in cwd) return { content: cwd.problem, isError: true };
+    const language = languageOf(ctx.config);
     const settings = ctx.config.tools.shell;
     const shell = resolveShell(settings.shell);
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
@@ -59,13 +67,13 @@ export const shellRun: ToolDef<ShellInput> = {
       cwd: cwd.cwd, env: scrubEnv(settings.envAllow), timeoutMs: timeoutSec * 1000, signal: ctx.signal,
       maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
     });
-    if (result.spawnError) return { content: `シェル（${shell.name}）を起動できません: ${result.spawnError}`, isError: true };
-    const parts = [`$ ${input.command}`, `（${shell.name}、cwd: ${cwd.cwd}、終了コード: ${result.exitCode ?? '—'}、${(result.durationMs / 1000).toFixed(1)} 秒）`];
+    if (result.spawnError) return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: result.spawnError }), isError: true };
+    const parts = [`$ ${input.command}`, toolText(language, 'shell.header', { shell: shell.name, cwd: cwd.cwd, code: result.exitCode ?? '—', seconds: (result.durationMs / 1000).toFixed(1) })];
     if (result.stdout.trim()) parts.push(result.stdout.trimEnd());
     if (result.stderr.trim()) parts.push(`[stderr]\n${result.stderr.trimEnd()}`);
-    if (result.truncated) parts.push(`[出力が ${result.totalBytes.toLocaleString('en-US')} バイトあったため、先頭 ${settings.outputCapBytes.toLocaleString('en-US')} バイトだけを返しました${result.fullOutputPath ? `。全文: ${result.fullOutputPath}` : ''}]`);
-    if (result.timedOut) parts.push(`[${timeoutSec} 秒でタイムアウトしたため止めました（子プロセスも含めて）]`);
-    if (result.aborted) parts.push('[中止しました]');
+    if (result.truncated) parts.push(toolText(language, 'shell.truncated', { total: result.totalBytes.toLocaleString('en-US'), cap: settings.outputCapBytes.toLocaleString('en-US'), tail: result.fullOutputPath ? toolText(language, 'shell.truncated_tail', { path: result.fullOutputPath }) : '' }));
+    if (result.timedOut) parts.push(toolText(language, 'shell.timeout', { seconds: timeoutSec }));
+    if (result.aborted) parts.push(toolText(language, 'shell.aborted'));
     return {
       content: parts.join('\n\n'),
       isError: result.timedOut || result.aborted || result.exitCode !== 0,
