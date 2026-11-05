@@ -391,6 +391,30 @@ for (const shell of ['powershell', 'bash'] as const) {
   });
 }
 
+// 8 回目の審査（高）: findstr /f:list.txt は、list.txt に書かれたファイルを読む。チェックサムの -c も、一覧のファイルに書かれたファイルを読む。引用符で囲んだフラグも、プログラムにはフラグ
+test('実機（Windows PowerShell 5.1・制限モード）: findstr /f: は素のシェルでは一覧のファイル（.env）を読むが、Clive のシェルでは今回だけの確かめになり、拒否すれば動かない。引用符つきの /s も下を歩いて止まる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  seedSecrets(s);
+  writeFileSync(s.files('list.txt'), '.env\n');
+  const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  for (const command of ['findstr /f:list.txt SECRET', "findstr '/f:list.txt' SECRET"]) {
+    assert.match(raw(command), /SECRET=root/u, `前提: 素のシェルでは一覧のファイルが読まれる: ${command}`);
+    await expectAsk(s, command);
+  }
+  await expectDenied(s, ["findstr '/s' SECRET *", 'findstr "/s" SECRET *'], raw);
+});
+
+test('実機（bash）: md5sum -c は素のシェルでは一覧のファイルを読んで照合するが、Clive のシェルでは今回だけの確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  seedSecrets(s);
+  const bash = (command: string): string => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  bash('md5sum .env > sums.txt');
+  assert.match(bash('md5sum -c sums.txt'), /\.env: OK/u, '前提: 素のシェルでは、一覧に書かれた .env が読まれて照合される');
+  await expectAsk(s, 'md5sum -c sums.txt');
+  await expectAsk(s, "md5sum '-c' sums.txt");
+  assert.equal((await s.call('md5sum a.txt')).decision, 'allow', '照合でない md5sum は、これまでどおり');
+});
+
 // 7 回目の審査（高）: フォルダを再帰して中身を読むコマンドは、下の秘密のパスを調べていなかった。素のシェルで本当に表示されること（前提）と、Clive のシェルでは止まり、秘密が出ないことを確かめる
 function seedSecrets(s: ReturnType<typeof setup>): void {
   mkdirSync(s.files('proj/inner'), { recursive: true });
