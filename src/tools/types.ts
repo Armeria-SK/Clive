@@ -11,6 +11,7 @@ import type { SearchThrottle } from './web/search.ts';
 import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
+import type { PreviewFile } from './approvals.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -26,6 +27,13 @@ export interface PreCheck {
   decision: Decision;
   reasons: string[];
   details?: string[];
+  // コードを動かす確かめ（種類 'code'）を含む。会話の許可を越えず、毎回確かめる
+  onceOnly?: boolean;
+  askKinds?: Array<'code'>;
+  // 確かめの札で見せるコードのファイル
+  preview?: PreviewFile[];
+  // 見せたファイルの中身の指紋。承認のあと実行の前にもう一度判定して、変わっていたら実行しない
+  bind?: string;
 }
 
 export interface ToolContext {

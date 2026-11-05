@@ -4,6 +4,7 @@ import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
 import { TaskError, taskView, type Task } from '../tasks/store.ts';
 import { languageOf } from '../shared/language.ts';
+import { approvalPublic } from '../tools/approvals.ts';
 import { taskText } from '../shared/messages/tasks.ts';
 import { domainProblem, HttpProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
@@ -73,9 +74,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
 
   router.add('GET', '/api/tasks/:id', ({ res, params }) => {
     const task = getTask(params[0]!);
-    const approvals = task.conversation_id ? app.approvals.pending().filter(a => a.conversationId === task.conversation_id).map(a => ({
-      id: a.id, runId: a.runId, conversationId: a.conversationId, tool: a.tool, title: a.title, body: a.body, cwd: a.cwd, reasons: a.reasons, details: a.details, expiresAt: a.expiresAt,
-    })) : [];
+    const approvals = task.conversation_id ? app.approvals.pending().filter(a => a.conversationId === task.conversation_id).map(a => ({ runId: a.runId, conversationId: a.conversationId, ...approvalPublic(a) })) : [];
     const children = task.status === 'scheduled'
       ? app.db.prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at DESC LIMIT 20').all(task.id) as unknown as Task[]
       : [];

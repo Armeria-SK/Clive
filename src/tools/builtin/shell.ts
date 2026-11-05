@@ -1,10 +1,14 @@
-import { randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Type } from '@sinclair/typebox';
+import type { AppConfig, Language } from '../../config/schema.ts';
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
+import { redactSecrets } from '../../shared/redaction.ts';
+import type { PreviewFile } from '../approvals.ts';
+import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, placePath } from '../hooks/scope.ts';
 import { checkShellCommand } from '../hooks/shell-guard.ts';
 import { resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
@@ -23,6 +27,34 @@ function resolveCwd(input: ShellInput, ctx: ToolContext): { cwd: string } | { pr
   return { cwd: expanded.path };
 }
 
+const PREVIEW_CHARS = 8000;
+const FINGERPRINT_LIMIT_BYTES = 1_048_576;
+
+const sha256 = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');
+
+// server.origins の host。Tailscale の URL なども Clive に届くので、ループバックと同じに確かめる
+function selfHostsOf(config: AppConfig): string[] {
+  return config.server.origins.flatMap(origin => {
+    try { return [new URL(origin).hostname]; } catch { return origin.trim() ? [origin.trim()] : []; }
+  });
+}
+
+interface Peeked { preview: PreviewFile; fingerprint: string; content?: string }
+
+// 確かめの札で見せるファイルを読む。指紋は、承認のあとで中身が変わったかを調べるためのもの
+function peek(file: string, language: Language): Peeked {
+  const unreadable = (fingerprint: string): Peeked => ({ preview: { path: file, text: guardText(language, 'code.preview_unreadable'), truncated: false }, fingerprint });
+  const stat = statSync(file, { throwIfNoEntry: false });
+  if (!stat) return { preview: { path: file, text: guardText(language, 'code.preview_missing'), truncated: false }, fingerprint: `${file}\0missing` };
+  if (!stat.isFile() || stat.size > FINGERPRINT_LIMIT_BYTES) return unreadable(`${file}\0${stat.isFile() ? 'big' : 'dir'}\0${stat.size}\0${stat.mtimeMs}`);
+  let bytes: Buffer;
+  try { bytes = readFileSync(file); } catch { return unreadable(`${file}\0unreadable`); }
+  const fingerprint = `${file}\0${sha256(bytes)}`;
+  if (bytes.subarray(0, 8000).includes(0)) return unreadable(fingerprint);
+  const content = bytes.toString('utf8');
+  return { preview: { path: file, text: redactSecrets(content.slice(0, PREVIEW_CHARS)), truncated: content.length > PREVIEW_CHARS }, fingerprint, content };
+}
+
 export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const language = languageOf(ctx.config);
   if (!ctx.config.tools.shell.enabled) return { decision: 'deny', reasons: [guardText(language, 'shell.disabled')] };
@@ -31,13 +63,21 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const shell = ctx.config.tools.shell;
   const verdict = checkShellCommand(input.command, cwd.cwd, {
     policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny, language,
+    selfHosts: selfHostsOf(ctx.config),
   });
   const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
     input: p.input, path: p.path ?? guardText(language, 'shell.unresolved_path'),
     place: guardText(language, p.placement.kind === 'inside' ? (p.placement.mode === 'write' ? 'shell.place.write' : 'shell.place.read')
       : p.placement.kind === 'outside' ? 'shell.place.outside' : p.placement.kind === 'deny' ? 'shell.place.deny' : 'shell.place.unknown'),
   }));
-  return { decision: verdict.decision, reasons: verdict.reasons, details };
+  if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, details };
+  const peeked = verdict.scripts.map(file => peek(file, language));
+  const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));
+  const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...verdict.reasons] : verdict.reasons;
+  return {
+    decision: verdict.decision, reasons, details, onceOnly: true, askKinds: verdict.askKinds,
+    preview: peeked.map(p => p.preview), bind: sha256(peeked.map(p => p.fingerprint).join('\n')),
+  };
 }
 
 export const shellRun: ToolDef<ShellInput> = {

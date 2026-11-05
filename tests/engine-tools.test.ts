@@ -76,6 +76,63 @@ test('承認を待ってから続ける', async t => {
   assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool')!.text, /secret-ish/u);
 });
 
+// security-self-api.md の V1: 報告された筋道そのもの。Clive が put.js を書いて動かし、API・設定ファイルに手を出そうとする
+test('V1: スクリプトを書いて node で動かす筋道は、中身つきの今回だけの確かめで止まる。拒否すれば何も起きない', async t => {
+  const s = await setup(t);
+  const configBefore = readFileSync(s.paths.config, 'utf8');
+  const marker = join(s.paths.workspace, 'ran.txt');
+  const attack = [
+    "const fs = require('node:fs');",
+    "fs.writeFileSync('ran.txt', 'ran');",
+    `fs.writeFileSync(${JSON.stringify(s.paths.config)}, '{}');`,
+    "fetch('http://127.0.0.1:1/api/settings', { method: 'PUT', headers: { Origin: 'http://127.0.0.1:1', 'Content-Type': 'application/json' }, body: '{}' }).catch(() => undefined);",
+    '',
+  ].join('\n');
+  s.adapter().scripts.push(toolCall('file_write', { path: 'put.js', content: attack }), toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
+  const { done } = await s.send('設定を直して');
+  for (let i = 0; i < 300 && !s.events.some(e => e.type === 'approval.requested'); i++) await new Promise(r => setTimeout(r, 10));
+  const requests = s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>;
+  assert.equal(requests.length, 1, 'put.js を書くのは作業フォルダの中なので確かめなし。確かめが出るのは動かす node だけ');
+  const request = requests[0]!.approval;
+  assert.equal(request.tool, 'shell_run');
+  assert.equal(request.onceOnly, true);
+  assert.equal(request.preview.length, 1);
+  assert.match(request.preview[0]!.path, /put\.js$/u);
+  assert.match(request.preview[0]!.text, /api\/settings/u, '動かすコードの中身が札に出る');
+  assert.match(request.reasons[0]!, /Clive 自身の設定・人格・承認・記憶に触れる文字/u, '理由の先頭に目印');
+  assert.match(request.reasons[0]!, /config\.json/u);
+  assert.ok(request.reasons.some(r => /ファイルに書かれたコードを動かします/u.test(r)));
+  assert.equal(existsSync(marker), false, '承認の前には動いていない');
+
+  s.app.approvals.decide(request.id, 'deny');
+  const result = await done;
+  assert.ok(result.ok);
+  assert.equal(existsSync(marker), false, '拒否したのに動いた');
+  assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore, '設定ファイルが書き換わった');
+  assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool' && /拒否/u.test(m.text))?.text ?? '', /ユーザーが実行を拒否しました/u);
+
+  // 同じ文字のコマンドを、中身を変えてもう一度出しても、また確かめになる（拒否のあとも、許可のあとも）
+  writeFileSync(join(s.paths.workspace, 'put.js'), "require('node:fs').writeFileSync('ran.txt', 'harmless');\n");
+  s.adapter().scripts.push(toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
+  const again = await s.send('もう一度');
+  for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 2; i++) await new Promise(r => setTimeout(r, 10));
+  const second = (s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>)[1]!;
+  assert.ok(second, '2 回目も確かめが出る');
+  assert.doesNotMatch(second.approval.reasons[0]!, /Clive 自身/u, '無害な中身には目印が付かない');
+  s.app.approvals.decide(second.approval.id, 'conversation');
+  assert.ok((await again.done).ok);
+  assert.equal(readFileSync(marker, 'utf8'), 'harmless', '許可すれば動く（拒否の確認が空振りでないことの対照）');
+  assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore);
+
+  s.adapter().scripts.push(toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
+  const third = await s.send('もう一度');
+  for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 3; i++) await new Promise(r => setTimeout(r, 10));
+  const last = s.events.filter(e => e.type === 'approval.requested');
+  assert.equal(last.length, 3, '「この会話では許可」を送っても、3 回目もまた確かめになる');
+  s.app.approvals.decide((last[2] as Extract<RunEvent, { type: 'approval.requested' }>).approval.id, 'deny');
+  await third.done;
+});
+
 test('本文に書かれたツール呼び出し（<tool_call>）も拾って実行する', async t => {
   const s = await setup(t);
   s.adapter().scripts.push(

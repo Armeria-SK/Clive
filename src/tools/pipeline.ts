@@ -11,7 +11,7 @@ import { inputHash, type ApprovalBroker } from './approvals.ts';
 import { runCommandHook } from './hooks/command-hook.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import type { ToolRegistry } from './registry.ts';
-import type { ToolContext, ToolDef, ToolOutput } from './types.ts';
+import type { PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
 
 export const REVIEW_FORBIDDEN: ReadonlySet<ToolDef['effect']> = new Set(['write', 'exec', 'network']);
 
@@ -77,9 +77,11 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   let decidedBy = 'builtin';
   const reasons: string[] = [];
   let details: string[] = [];
+  let first: PreCheck | undefined;
   if (tool.preCheck) {
     try {
       const pre = await tool.preCheck(args, ctx);
+      first = pre;
       decision = pre.decision; reasons.push(...pre.reasons); details = pre.details ?? [];
     } catch (error) {
       decision = 'deny'; reasons.push(guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message }));
@@ -100,7 +102,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   }
 
   const hash = inputHash(tool.name, args);
-  if (decision === 'ask' && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
+  // コードを動かす確かめは中身が変わりうるので、前に同じ文字のコマンドを「この会話では許可」にしていても、また確かめる
+  const onceOnly = first?.onceOnly === true;
+  if (decision === 'ask' && !onceOnly && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
   if (decision === 'deny') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
 
   let approvalId: string | undefined;
@@ -108,7 +112,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
-      cwd: summary.cwd, reasons, details,
+      cwd: summary.cwd, reasons, details, onceOnly, preview: first?.preview,
     }, ctx.config.tools.shell.approvalTimeoutSec * 1000, ctx.signal);
     approvalId = deps.approvals.pending().find(p => p.inputHash === hash && p.runId === ctx.runId)?.id;
     const outcome = await pending;
@@ -119,6 +123,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       return finish({ output: { content: message, isError: true }, decision: 'ask', decidedBy: 'user', invalidArguments: false }, approvalId);
     }
     decidedBy = 'user';
+
+    // 見せたあとで中身が変わっていたら（ほかの会話やタスクが書き換えた場合など）、許可されたものとは別のコードなので動かさない
+    if (onceOnly && tool.preCheck) {
+      let again: PreCheck;
+      try { again = await tool.preCheck(args, ctx); }
+      catch (error) { again = { decision: 'deny', reasons: [guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message })] }; }
+      if (again.decision === 'deny') return finish({ output: { content: toolText(language, 'pipeline.denied', { reasons: again.reasons.join('\n- ') }), isError: true }, decision: 'deny', decidedBy: 'recheck', invalidArguments: false }, approvalId);
+      if (again.bind !== first?.bind) return finish({ output: { content: toolText(language, 'pipeline.changed'), isError: true }, decision: 'deny', decidedBy: 'recheck', invalidArguments: false }, approvalId);
+    }
   }
 
   // ── 実行 ──

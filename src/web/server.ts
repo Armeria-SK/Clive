@@ -7,7 +7,7 @@ import { candidateModelIds } from '../engine/chat.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
-import type { ApprovalView } from '../tools/approvals.ts';
+import { approvalPublic, type ApprovalView } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
 import { MemoryError, planBooks } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
@@ -49,7 +49,7 @@ function isLanguage(value: string): value is Language {
 }
 
 function approvalView(a: ApprovalView) {
-  return { id: a.id, runId: a.runId, conversationId: a.conversationId, tool: a.tool, title: a.title, body: a.body, cwd: a.cwd, reasons: a.reasons, details: a.details, expiresAt: a.expiresAt };
+  return { runId: a.runId, conversationId: a.conversationId, ...approvalPublic(a) };
 }
 
 function modelsView(app: App) {

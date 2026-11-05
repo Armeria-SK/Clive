@@ -9,7 +9,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
-import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
 import { curiosityAdd, curiosityList, curiosityUpdate } from '../src/tools/builtin/curiosity.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from '../src/tools/builtin/memory.ts';
@@ -37,7 +37,7 @@ function setup(t: { after: (fn: () => void) => void }, language: Language, mutat
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
   const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: { id: e.view.id, tool: e.view.tool, title: e.view.title, body: e.view.body, cwd: e.view.cwd, reasons: e.view.reasons, details: e.view.details, expiresAt: e.view.expiresAt } }
+    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
     : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun);
   const policy = buildPolicy(parsed, paths);
@@ -147,6 +147,29 @@ for (const language of ['ja', 'en'] as const) {
     ]);
     assert.ok(shellRequest.details.length === 0 || shellRequest.details.every(d => typeof d === 'string'));
     await cmd;
+  });
+}
+
+for (const language of ['ja', 'en'] as const) {
+  test(`コードを動かす確かめ（${language}）: 理由・Clive 自身に触れる目印・見せられないファイルの文は設定の言語で書く`, async t => {
+    const s = setup(t, language);
+    writeFileSync(join(s.paths.workspace, 'put.js'), "fetch('http://127.0.0.1:4777/api/settings');\n");
+    mkdirSync(join(s.paths.workspace, 'sub'), { recursive: true });
+    const pending = s.call('shell_run', { command: 'node put.js; node nothere.js; node ./sub' });
+    const request = await decideNext(s.approvals, 'deny');
+    await pending;
+    assert.equal((request as { onceOnly?: boolean }).onceOnly, true);
+    assert.equal(request.reasons[0], pick(language,
+      'このコードは Clive 自身の設定・人格・承認・記憶に触れる文字を含みます: /api/, 127.0.0.1 / localhost',
+      'This code contains text that touches Clive itself (its settings, persona, approvals or memory): /api/, 127.0.0.1 / localhost'));
+    assert.ok(request.reasons.includes(pick(language,
+      'ファイルに書かれたコードを動かします（put.js）。中身は Clive が書き換えられるので、毎回確かめます',
+      'It runs code written in a file (put.js). Clive can rewrite that file, so it is checked with you every time')));
+    const texts = (request.preview ?? []).map(p => p.text);
+    assert.equal(texts[0], "fetch('http://127.0.0.1:4777/api/settings');\n");
+    assert.equal(texts[1], pick(language, 'まだ無いファイルです（コマンドの中で作られます）。中身は見せられません', 'This file does not exist yet (the command creates it). Its contents cannot be shown'));
+    assert.equal(texts[2], pick(language, '中身は見せられません', 'The contents cannot be shown'));
+    if (language === 'en') for (const reason of request.reasons) assert.doesNotMatch(reason, CJK, reason);
   });
 }
 

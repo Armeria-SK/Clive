@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
 import { parseConfig } from '../src/config/store.ts';
@@ -8,7 +8,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
-import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { ApprovalBroker, approvalPublic, inputHash } from '../src/tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -30,7 +30,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
   const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: { id: e.view.id, tool: e.view.tool, title: e.view.title, body: e.view.body, cwd: e.view.cwd, reasons: e.view.reasons, details: e.view.details, expiresAt: e.view.expiresAt } }
+    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
     : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun);
   const policy = buildPolicy(parsed, paths);
@@ -156,6 +156,116 @@ test('承認: 「この会話では許可」なら同じ入力は聞き直さな
   s.controller.abort();
   const cancelled = await third;
   assert.match(cancelled.output.content, /中止/u);
+});
+
+async function waitPending(s: ReturnType<typeof setup>) {
+  for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+  const pending = s.approvals.pending()[0];
+  assert.ok(pending, '承認の依頼が来ていない');
+  return pending;
+}
+
+test('V6: コードを動かす確かめは今回だけ。「この会話では許可」を送られても、前に会話の許可があっても、また確かめる', async t => {
+  const s = setup(t);
+  writeFileSync(join(s.paths.workspace, 'put.js'), "console.log('first');\n");
+  const command = 'node put.js';
+  const hash = inputHash('shell_run', { command });
+
+  const first = s.call('shell_run', { command });
+  const request = await decideNext(s, 'conversation');
+  assert.equal(request.onceOnly, true);
+  assert.deepEqual(request.preview?.map(p => [basename(p.path), p.text, p.truncated]), [['put.js', "console.log('first');\n", false]]);
+  const ran = await first;
+  assert.equal(ran.decidedBy, 'user');
+  assert.match(ran.output.content, /first/u);
+  assert.equal(s.approvals.isGranted('c1', hash), false, '会話の許可に足されている');
+  assert.deepEqual((s.db.prepare('SELECT scope FROM approvals').all() as Array<{ scope: string }>).map(r => r.scope), ['once'], '記録も今回だけ');
+
+  const second = s.call('shell_run', { command });
+  const asked = await decideNext(s, 'deny');
+  assert.equal(asked.onceOnly, true);
+  assert.match((await second).output.content, /拒否しました/u);
+
+  // 前に同じ文字のコマンドを「この会話では許可」にしていても（コードを動かす確かめではなかった頃の許可など）、中身が違いうるのでまた確かめる
+  const grant = s.approvals.request({ runId: 'r0', conversationId: 'c1', tool: 'shell_run', input: { command }, title: '', body: command, reasons: [], details: [] }, 60_000, new AbortController().signal);
+  s.approvals.decide(s.approvals.pending()[0]!.id, 'conversation');
+  await grant;
+  assert.equal(s.approvals.isGranted('c1', hash), true, '前提: 会話の許可がある');
+  const third = s.call('shell_run', { command });
+  const again = await decideNext(s, 'deny');
+  assert.equal(again.onceOnly, true);
+  assert.equal((await third).decidedBy, 'user', '会話の許可で通ってしまう');
+});
+
+test('V6: コードを動かさない確かめ（外への送信など）は、これまでどおり「この会話では許可」で済ませられる', async t => {
+  const s = setup(t, c => { c.tools.shell.ask = ['echo needs-approval']; });
+  const first = s.call('shell_run', { command: 'echo needs-approval' });
+  const request = await decideNext(s, 'conversation');
+  assert.equal(request.onceOnly, false);
+  assert.deepEqual(request.preview, undefined);
+  await first;
+  assert.equal((await s.call('shell_run', { command: 'echo needs-approval' })).decidedBy, 'conversation-grant');
+});
+
+test('V7: 確かめの札を出したあとでファイルの中身が書き換わったら、許可されても動かさない', async t => {
+  const s = setup(t);
+  const file = join(s.paths.workspace, 'put.js');
+  const marker = join(s.paths.workspace, 'ran.txt');
+  const code = (word: string) => `require('node:fs').writeFileSync('ran.txt', '${word}');\n`;
+
+  writeFileSync(file, code('safe'));
+  const swapped = s.call('shell_run', { command: 'node put.js' });
+  const pending = await waitPending(s);
+  writeFileSync(file, code('evil'));
+  s.approvals.decide(pending.id, 'once');
+  const outcome = await swapped;
+  assert.equal(outcome.output.isError, true);
+  assert.match(outcome.output.content, /中身が変わった/u);
+  assert.equal(outcome.decision, 'deny');
+  assert.equal(outcome.decidedBy, 'recheck');
+  assert.equal(existsSync(marker), false, '書き換えられたコードが動いた');
+
+  const removed = s.call('shell_run', { command: 'node put.js' });
+  const pendingRemoved = await waitPending(s);
+  rmSync(file);
+  s.approvals.decide(pendingRemoved.id, 'once');
+  assert.match((await removed).output.content, /中身が変わった/u, 'ファイルが消えても同じ');
+
+  // 対照: 書き換えなければ、許可どおり動く
+  writeFileSync(file, code('safe'));
+  const kept = s.call('shell_run', { command: 'node put.js' });
+  await decideNext(s, 'once');
+  const ok = await kept;
+  assert.equal(ok.decidedBy, 'user');
+  assert.equal(readFileSync(marker, 'utf8'), 'safe');
+});
+
+test('V7: 許可のあとで判定が deny になったら（設定が変わるなど）、動かさない', async t => {
+  const s = setup(t);
+  writeFileSync(join(s.paths.workspace, 'put.js'), "require('node:fs').writeFileSync('ran.txt', 'x');\n");
+  const pending = s.call('shell_run', { command: 'node put.js' });
+  const request = await waitPending(s);
+  s.ctx.config.tools.shell.deny = ['node'];
+  s.approvals.decide(request.id, 'once');
+  const outcome = await pending;
+  assert.equal(outcome.decision, 'deny');
+  assert.match(outcome.output.content, /実行しませんでした（拒否）/u);
+  assert.equal(existsSync(join(s.paths.workspace, 'ran.txt')), false);
+});
+
+test('V6: 裏で動くタスクも、コードを動かす前は人の許可を待つ。時間が過ぎたら動かさない', async t => {
+  const s = setup(t);
+  writeFileSync(join(s.paths.workspace, 'put.js'), "require('node:fs').writeFileSync('ran.txt', 'ran');\n");
+  s.ctx.config.tools.shell.approvalTimeoutSec = 1;
+  const outcome = await s.call('shell_run', { command: 'node put.js' }, { ...s.ctx, kind: 'task', conversationId: 'task-conv' });
+  assert.equal(outcome.decision, 'ask');
+  assert.equal(outcome.decidedBy, 'user');
+  assert.match(outcome.output.content, /承認の待ち時間が過ぎたため実行しませんでした/u);
+  assert.equal(existsSync(join(s.paths.workspace, 'ran.txt')), false);
+  const requested = s.events.filter(e => e.type === 'approval.requested');
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0]!.conversationId, 'task-conv');
+  assert.deepEqual((s.db.prepare('SELECT status FROM approvals').all() as Array<{ status: string }>).map(r => r.status), ['expired']);
 });
 
 test('taint: Web や添付の内容を読んだ後は、書き込みも承認制になる', async t => {

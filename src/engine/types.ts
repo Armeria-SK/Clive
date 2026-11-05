@@ -1,6 +1,7 @@
 import type { Notification } from '../notify/notifications.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
 import type { TaskView } from '../tasks/store.ts';
+import type { approvalPublic } from '../tools/approvals.ts';
 
 export type EngineErrorKind =
   | 'timeout'
@@ -81,9 +82,7 @@ export type RunEvent =
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: ChatMessage['role'] }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
   | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string }
-  | { type: 'approval.requested'; runId: string; conversationId: string; approval: {
-    id: string; tool: string; title: string; body: string; cwd?: string | undefined; reasons: string[]; details: string[]; expiresAt: number;
-  } }
+  | { type: 'approval.requested'; runId: string; conversationId: string; approval: ReturnType<typeof approvalPublic> }
   | { type: 'approval.resolved'; runId: string; conversationId: string; approvalId: string; outcome: 'approved' | 'denied' | 'expired' | 'cancelled' }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }

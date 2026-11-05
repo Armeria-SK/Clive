@@ -9,9 +9,12 @@ export interface Message {
   attachments?: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>;
 }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
+export interface ApprovalPreview { path: string; text: string; truncated: boolean }
 export interface Approval {
   id: string; runId: string; conversationId: string; tool: string; title: string; body: string; cwd?: string;
   reasons: string[]; details: string[]; expiresAt: number;
+  // コードを動かす確かめ: 毎回確かめる（「この会話では許可」と Enter での許可は無い）。preview は動かすファイルの中身
+  onceOnly: boolean; preview: ApprovalPreview[];
 }
 export interface ContextDetail { reason: string; measured?: number; required?: number; hint?: string }
 

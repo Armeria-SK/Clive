@@ -63,12 +63,13 @@ function ApprovalPanel({ approval, hint, position, onDetails }: PanelProps) {
       </div>
       <pre className="chat-approval-body">{approval.body}</pre>
       {approval.reasons.length > 0 && <div className="chat-approval-reasons">{approval.reasons.join(' · ')}</div>}
+      {approval.onceOnly && <div className="chat-approval-note">{t('approval.checkContent')}</div>}
       {error && <div className="chat-approval-error" role="alert">{error}</div>}
       <div className="chat-approval-actions">
         <button type="button" className="btn btn-ghost chat-plain" disabled={busy} onClick={() => void decide('deny')}>{t('approval.deny')}</button>
-        <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>
+        {!approval.onceOnly && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide('once')}>
-          {hint ? <>{t('approval.run')}<span className="chat-approval-key">↵</span></> : t('approval.once')}
+          {hint && !approval.onceOnly ? <>{t('approval.run')}<span className="chat-approval-key">↵</span></> : t('approval.once')}
         </button>
       </div>
     </div>
@@ -91,13 +92,20 @@ function ApprovalDetails({ approval, onClose }: { approval: Approval; onClose: (
       actions={(
         <>
           <button type="button" className="btn btn-ghost chat-plain" disabled={busy} onClick={() => void decide('deny')}>{t('approval.deny')}</button>
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>
+          {!approval.onceOnly && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide('once')}>{t('approval.once')}</button>
         </>
       )}
     >
       <div className="chat-approval-line"><div className="chat-approval-fill" style={{ width: `${approvalFraction(approval.expiresAt, now, total) * 100}%` }} /></div>
       <pre className="chat-dialog-body">{approval.body}</pre>
+      {approval.onceOnly && <div className="chat-approval-note">{t('approval.checkContent')}</div>}
+      {approval.preview.map(file => (
+        <div key={file.path} className="chat-dialog-file">
+          <div className="chat-dialog-mono small">{file.path}{file.truncated ? t('approval.previewCut') : ''}</div>
+          <pre className="chat-dialog-body" aria-label={t('approval.preview')}>{file.text}</pre>
+        </div>
+      ))}
       <div className="chat-dialog-grid">
         {approval.cwd && (
           <>

@@ -214,6 +214,12 @@ export function chatTime(ms: number, language = getLanguage(), zone = getTimezon
 
 export const APPROVAL_ENTER_GRACE_MS = 1000;
 
+// Enter で「今回だけ許可」できる先頭の承認。コードを動かす確かめ（onceOnly）は、中身を見てボタンで許可するので Enter では許可しない
+export function enterApprovalId(approvals: ReadonlyArray<{ id: string; onceOnly?: boolean }>): string | null {
+  const front = approvals[0];
+  return front && !front.onceOnly ? front.id : null;
+}
+
 export interface ApprovalGate { id: string | null; since: number }
 
 export function advanceApprovalGate(gate: ApprovalGate, frontId: string | null, now: number): ApprovalGate {

@@ -254,6 +254,7 @@
     "pipeline.bad_args": "引数の形が正しくありません。直して呼び直してください:\n- {errors}",
     "pipeline.denied": "実行しませんでした（拒否）:\n- {reasons}\n別の方法を考えるか、ユーザーに相談してください",
     "pipeline.user_denied": "ユーザーが実行を拒否しました。別の方法を考えるか、理由を尋ねてください",
+    "pipeline.changed": "承認のあとで、確かめてもらったコードのファイルの中身が変わったので、実行しませんでした。もう一度実行して、改めて確かめてもらってください",
     "pipeline.expired": "承認の待ち時間が過ぎたため実行しませんでした",
     "pipeline.cancelled": "中止しました",
     "pipeline.exec_error": "ツールの実行中にエラーが起きました: {detail}",

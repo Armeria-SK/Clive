@@ -3,7 +3,7 @@ import { api, ApiError, type Approval, type Message, type ModelView, type Profil
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, sendTarget, toolInputSummary,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, sendTarget, toolInputSummary,
   type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
@@ -124,7 +124,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const errorNotice = notices.find(n => n.kind === 'error');
   const visible = messages.filter(m => !(m.role === 'assistant' && !m.text.trim() && m.toolCalls?.length));
   const assistantName = profile?.name ?? 'Clive';
-  const frontApprovalId = approvals[0]?.id ?? null;
+  const frontApprovalId = enterApprovalId(approvals);
   useLayoutEffect(() => { frontGate.current = advanceApprovalGate(frontGate.current, frontApprovalId, Date.now()); }, [frontApprovalId]);
   useEffect(() => {
     const restart = () => { frontGate.current = restartApprovalGate(frontGate.current, Date.now()); };

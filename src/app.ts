@@ -21,7 +21,7 @@ import { taskText } from './shared/messages/tasks.ts';
 import { EndpointLimiter } from './providers/limiter.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
-import { ApprovalBroker } from './tools/approvals.ts';
+import { ApprovalBroker, approvalPublic } from './tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from './tools/builtin/files.ts';
 import { historyRead, historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from './tools/builtin/memory.ts';
 import { shellRun } from './tools/builtin/shell.ts';
@@ -119,9 +119,7 @@ export class App {
     this.approvals = new ApprovalBroker(this.db, event => {
       const v = event.view;
       if (event.type === 'requested') {
-        this.bus.publish({ type: 'approval.requested', runId: v.runId, conversationId: v.conversationId, approval: {
-          id: v.id, tool: v.tool, title: v.title, body: v.body, cwd: v.cwd, reasons: v.reasons, details: v.details, expiresAt: v.expiresAt,
-        } });
+        this.bus.publish({ type: 'approval.requested', runId: v.runId, conversationId: v.conversationId, approval: approvalPublic(v) });
         // タスクの実行中は画面を見ていないことが多いので、通知でも知らせる
         const task = this.tasks.byConversation(v.conversationId);
         if (task) {
