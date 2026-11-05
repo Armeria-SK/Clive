@@ -1,7 +1,9 @@
 import { Icon } from '../icons.tsx';
 import { useT } from '../i18n/index.ts';
+import { foldersFromConfig } from '../skills-meta.ts';
 import { FieldRow, NumberField, RangeField, SegField, SubTitle, TagsField, TextField } from './fields.tsx';
 import { updateAt, type Config } from './model.ts';
+import { RootsField } from './RootsField.tsx';
 import { differs, errorFor, type SectionProps } from './types.ts';
 
 type Hook = { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask' };
@@ -25,13 +27,20 @@ export function ToolsSection({ draft, saved, update, problems }: SectionProps) {
   return (
     <div className="set-stack">
       <div className="set-rows">
-        <SubTitle>{t('settings.tools.shellTitle')}</SubTitle>
+        <SubTitle>{t('settings.tools.foldersTitle')}</SubTitle>
+        <FieldRow label={t('settings.tools.roots')} desc={t('folders.relativeHint')} changed={changed(c => c.tools.roots)} path="tools.roots" error={errorFor(problems, 'tools.roots')}>
+          <RootsField roots={foldersFromConfig(draft).roots} onChange={roots => setTools({ roots })} />
+        </FieldRow>
         <FieldRow label={t('settings.tools.deny')} desc={t('settings.tools.denyDesc')} changed={changed(c => c.tools.deny)} path="tools.deny" error={errorFor(problems, 'tools.deny')}>
           <TagsField tags={tools.deny} label={t('settings.tools.deny')} placeholder="~/.ssh" onChange={v => setTools({ deny: v })} />
         </FieldRow>
         <FieldRow label={t('settings.tools.outside')} desc={t('settings.tools.outsideDesc')} changed={changed(c => c.tools.outsideRoots)} path="tools.outsideRoots">
           <SegField value={tools.outsideRoots as string} label={t('settings.tools.outside')} options={[{ value: 'ask', label: t('settings.tools.ask') }, { value: 'deny', label: t('settings.tools.block') }]} onChange={v => setTools({ outsideRoots: v })} />
         </FieldRow>
+      </div>
+
+      <div className="set-rows">
+        <SubTitle>{t('settings.tools.shellTitle')}</SubTitle>
         <FieldRow label={t('settings.tools.shellEnabled')} changed={changed(c => c.tools.shell.enabled)} path="tools.shell.enabled">
           <SegField value={Boolean(shell.enabled)} label={t('settings.tools.shellEnabled')} options={[{ value: true, label: t('settings.tools.use') }, { value: false, label: t('settings.tools.noUse') }]} onChange={v => setShell({ enabled: v })} />
         </FieldRow>

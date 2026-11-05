@@ -10,15 +10,13 @@ import { AccessConfirm } from './settings/AccessConfirm.tsx';
 import { accessKey, accessWidening, type Access } from './settings/access.ts';
 import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merge.ts';
 import {
-  blockUnload, closeAction, countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
+  blockUnload, closeAction, countChanges, isSection, parseProblem, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
 import { editsToKeep, restoreKept, type KeptEdits } from './settings/keep.ts';
 import { SectionView } from './settings/SectionView.tsx';
 import { SettingsFrame } from './settings/SettingsFrame.tsx';
 import { toast } from './toast.tsx';
 import './styles/settings.css';
-
-const SECTION_KEY = 'clive.settingsSection';
 
 function loadSection(): SettingsSection {
   try { const saved = sessionStorage.getItem(SECTION_KEY); if (isSection(saved)) return saved; } catch { }

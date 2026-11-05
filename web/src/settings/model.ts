@@ -33,6 +33,15 @@ export function isSection(value: unknown): value is SettingsSection {
   return typeof value === 'string' && (SECTION_IDS as readonly string[]).includes(value);
 }
 
+// 開いている節の覚え（セッションの間だけ）。設定の小窓は、開くときにこれを読む
+export const SECTION_KEY = 'clive.settingsSection';
+
+// 設定の小窓を、指定の節で開く
+export function openSettingsSection(section: SettingsSection): void {
+  try { sessionStorage.setItem(SECTION_KEY, section); } catch { }
+  location.hash = '#/settings';
+}
+
 // 節ごとの、設定のうちその節が持つ部分（変更の印と、元に戻すかどうかの判定に使う）。
 export function sectionSlice(config: Config, section: SettingsSection): unknown {
   switch (section) {

@@ -79,8 +79,6 @@ export type RootMode = 'read' | 'write';
 export interface Root { path: string; mode: RootMode }
 export interface FolderDraft { roots: Root[]; deny: string[] }
 
-export const cloneFolders = (value: FolderDraft): FolderDraft => ({ roots: value.roots.map(r => ({ ...r })), deny: [...value.deny] });
-
 export function foldersFromConfig(config: Record<string, any>): FolderDraft {
   const tools = (config.tools ?? {}) as { roots?: unknown; deny?: unknown };
   const roots = Array.isArray(tools.roots)
@@ -89,15 +87,6 @@ export function foldersFromConfig(config: Record<string, any>): FolderDraft {
   const deny = Array.isArray(tools.deny) ? tools.deny.filter((p): p is string => typeof p === 'string') : [];
   return { roots, deny };
 }
-
-// 設定の tools.roots / tools.deny だけを差し替える。ほかの項目は、渡された設定のまま残す。
-export function applyFolders(config: Record<string, any>, folders: FolderDraft): Record<string, any> {
-  return { ...config, tools: { ...(config.tools ?? {}), roots: folders.roots.map(r => ({ path: r.path, mode: r.mode })), deny: [...folders.deny] } };
-}
-
-export const foldersEqual = (a: FolderDraft, b: FolderDraft): boolean =>
-  a.deny.length === b.deny.length && a.deny.every((p, i) => p === b.deny[i])
-  && a.roots.length === b.roots.length && a.roots.every((r, i) => r.path === b.roots[i]!.path && r.mode === b.roots[i]!.mode);
 
 export function addRoot(folders: FolderDraft, path: string, mode: RootMode): FolderDraft {
   const clean = path.trim();
@@ -109,14 +98,6 @@ export const removeRoot = (folders: FolderDraft, path: string): FolderDraft => (
 
 export const setRootMode = (folders: FolderDraft, path: string, mode: RootMode): FolderDraft =>
   ({ ...folders, roots: folders.roots.map(r => (r.path === path ? { ...r, mode } : r)) });
-
-export function addDeny(folders: FolderDraft, path: string): FolderDraft {
-  const clean = path.trim();
-  if (!clean || folders.deny.includes(clean)) return folders;
-  return { ...folders, deny: [...folders.deny, clean] };
-}
-
-export const removeDeny = (folders: FolderDraft, path: string): FolderDraft => ({ ...folders, deny: folders.deny.filter(p => p !== path) });
 
 // サーバーの既定の「触れないパス」（src/config/schema.ts の tools.deny の既定値。tests/skills.test.ts が突き合わせる）。
 export const DEFAULT_DENY: readonly string[] = ['~/.ssh', '~/.aws', '~/.gnupg'];
