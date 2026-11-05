@@ -186,3 +186,36 @@ for (const shell of ['powershell', 'bash'] as const) {
     assert.doesNotMatch(hookSetting.output.content, /hook\.sh/u, 'コードを動かせる項目は残らない');
   });
 }
+
+// 審査の追加の指摘: cd で動いた先のリポジトリの core.fsmonitor は、許可された git status で動いていた（最初の作業フォルダの設定しか見ていなかった）。
+// 本物の git で、今回だけの確かめを断れば動かないこと、問題のないリポジトリは確かめなしで動くことを確かめる
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: cd で動いた先のリポジトリの core.fsmonitor は今回だけの確かめになり、断れば動かない。問題のないリポジトリは確かめなしで動く`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const fwd = (p: string): string => p.replaceAll('\\', '/');
+    const marker = join(root, 'marker');
+    const hook = join(root, 'hook.sh');
+    writeFileSync(hook, `#!/bin/sh\necho ran > "${fwd(marker)}"\nprintf '\\0'\n`, { mode: 0o755 });
+    for (const d of ['bad', 'good']) {
+      mkdirSync(join(root, d));
+      spawnSync('git', ['init', '-q'], { cwd: join(root, d) });
+    }
+    spawnSync('git', ['config', 'core.fsmonitor', fwd(hook)], { cwd: join(root, 'bad') });
+    // 前提: 素の git では、bad のリポジトリの core.fsmonitor は git status で動く
+    spawnSync('git', ['status', '--short'], { cwd: join(root, 'bad') });
+    assert.equal(existsSync(marker), true, '前提: 本物の git は、リポジトリの core.fsmonitor を動かす');
+    rmSync(marker);
+    const ps = shell === 'powershell';
+    for (const command of ps ? ['cd bad; git status', 'Set-Location bad; git status', 'Push-Location bad; git log -p'] : ['cd bad && git status', 'pushd bad && git diff', 'cd bad; git log -p']) {
+      await expectAsk(s, command);
+      assert.equal(existsSync(marker), false, `${command}: 断ったのに、リポジトリの設定のコードが動いた`);
+    }
+    const clean = await s.call(ps ? 'cd good; git status --short' : 'cd good && git status --short');
+    assert.equal(clean.decision, 'allow', clean.output.content);
+    assert.equal(clean.decidedBy !== 'user', true, '問題のないリポジトリで承認を求めた');
+    assert.equal(clean.output.isError, false, clean.output.content);
+    assert.equal(existsSync(marker), false);
+  });
+}

@@ -126,7 +126,11 @@ export interface Classified { level: Level; lex?: LexFail; results: StatementRes
 export function classifyStatements(command: string, ctx: MatchCtx): Classified {
   const lexed = lexShell(command, ctx.shell);
   if (!lexed.ok) return { level: 'deny', lex: lexed.fail, results: [], statements: [] };
-  const results = lexed.statements.map(st => matchStatement(st, ctx));
+  const results = lexed.statements.map(st => {
+    const result = matchStatement(st, ctx);
+    ctx.afterStatement?.(result);
+    return result;
+  });
   return { level: results.reduce<Level>((l, r) => worstLevel(l, r.level), 'allow'), results, statements: lexed.statements };
 }
 

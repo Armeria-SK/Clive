@@ -375,7 +375,7 @@ register(['curl'], (words, acc, ctx) => {
   const urls: Word[] = [];
   // 設定ファイルを読ませないのは、最初の引数が -q のときだけ（それ以外の -q は、curl は効かせない）
   const config = ctx.toolConfig?.('curl');
-  if (config !== undefined && !(args[0] && literal(args[0]) && args[0].text === '-q')) acc.add('once', 'list.tool_rc', { cmd: 'curl', path: config, flag: '-q' }, false);
+  if (config && !(args[0] && literal(args[0]) && args[0].text === '-q')) acc.add('once', 'file' in config ? 'list.tool_rc' : 'list.tool_rc_cwd', { cmd: 'curl', path: 'file' in config ? config.file : '', flag: '-q' }, false);
   let dir: Word | null = null;
   let remoteName = false;
   let sends = false;
@@ -431,7 +431,7 @@ register(['wget'], (words, acc, ctx) => {
   const args = words.slice(1);
   const urls: Word[] = [];
   const config = ctx.toolConfig?.('wget');
-  if (config !== undefined && !(args[0] && literal(args[0]) && args[0].text === '--no-config')) acc.add('once', 'list.tool_rc', { cmd: 'wget', path: config, flag: '--no-config' }, false);
+  if (config && !(args[0] && literal(args[0]) && args[0].text === '--no-config')) acc.add('once', 'file' in config ? 'list.tool_rc' : 'list.tool_rc_cwd', { cmd: 'wget', path: 'file' in config ? config.file : '', flag: '--no-config' }, false);
   let dir: Word | null = null;
   let output = false;
   let sends = false;

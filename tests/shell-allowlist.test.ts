@@ -192,7 +192,7 @@ test('git のリポジトリの設定: ふつうでなければ git はすべて
 });
 
 test('curl・wget: 設定ファイルがあれば今回だけ（最初の -q・--no-config を除く）。無ければ、これまでどおり', () => {
-  const has = { toolConfig: (tool: 'curl' | 'wget') => `/h/.${tool}rc` };
+  const has = { toolConfig: (tool: 'curl' | 'wget') => ({ file: `/h/.${tool}rc` }) };
   const rows: Array<[string, ShellKind, Level]> = [
     ['curl https://example.com/', 'bash', 'once'], ['curl -sS https://example.com/', 'bash', 'once'], ['curl -q https://example.com/', 'bash', 'allow'], ['curl -q -sS https://example.com/', 'bash', 'allow'],
     ['curl -sS -q https://example.com/', 'bash', 'once'], ['curl -qs https://example.com/', 'bash', 'once'], ['curl -L -q https://example.com/', 'bash', 'once'],
@@ -202,6 +202,16 @@ test('curl・wget: 設定ファイルがあれば今回だけ（最初の -q・-
   assert.deepEqual(rows.flatMap(([c, shell, want]) => (levelOf(c, shell, has) === want ? [] : [`${c} (${shell}) → ${levelOf(c, shell, has)} (want ${want})`])), []);
   const reasons = classify('curl https://example.com/', 'bash', has).results.flatMap(r => r.reasons);
   assert.deepEqual(reasons.map(r => [r.key, r.level, r.exempt]), [['list.tool_rc', 'once', false]]);
+  // cd の先が分からず調べられないときは、別の理由で今回だけ（-q・--no-config が最初にあれば許す）
+  const unknown = { toolConfig: () => ({ unknownCwd: true as const }) };
+  assert.deepEqual(classify('curl https://example.com/', 'bash', unknown).results.flatMap(r => r.reasons.map(x => [x.key, x.level, x.exempt])), [['list.tool_rc_cwd', 'once', false]]);
+  assert.equal(levelOf('wget --max-redirect=0 https://example.com/', 'bash', unknown), 'once');
+  assert.equal(levelOf('curl -q https://example.com/', 'bash', unknown), 'allow');
+  assert.equal(levelOf('wget --no-config --max-redirect=0 https://example.com/', 'bash', unknown), 'allow');
+  // 判定が終わるたびに afterStatement が、文の順に呼ばれる
+  const seen: Array<string | undefined> = [];
+  classify('cd sub && ls; cd - ; ls', 'bash', { afterStatement: r => { seen.push(r.cwd ? (r.cwd.word?.text ?? null) as string : undefined); } });
+  assert.deepEqual(seen, ['sub', undefined, null, undefined]);
   // 設定ファイルが無ければ、これまでどおり（-q・--no-config は付けても付けなくてもよい）
   for (const [c, shell] of [['curl https://example.com/', 'bash'], ['curl -q https://example.com/', 'bash'], ['wget --max-redirect=0 https://example.com/', 'bash'], ['wget --no-config --max-redirect=0 https://example.com/', 'bash'], ['curl.exe -sS https://example.com/', 'powershell']] as const) {
     assert.equal(levelOf(c, shell), 'allow', c);

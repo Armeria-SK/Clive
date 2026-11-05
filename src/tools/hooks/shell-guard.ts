@@ -37,6 +37,9 @@ export interface ShellGuardOptions {
   gitIsolated?: boolean;
 }
 
+// cwd: いま（直前の cd の先）。cwds: これまでにいられたすべてのフォルダ。known: cd の先をすべて決められたか
+interface CwdTrack { cwd: string; cwds: string[]; known: boolean }
+
 export interface CheckedPath { input: string; path?: string; placement: Placement | { kind: 'unresolved'; reason: string }; write: boolean }
 
 export interface ShellVerdict {
@@ -188,14 +191,38 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (windows && !['.exe', '.com'].includes(ext) && !(['.cmd', '.bat'].includes(ext) && /^(?:npm|pnpm|yarn)$/u.test(name))) return { ok: false, ext, detail: found };
     return { ok: true, ext, detail: '' };
   } : undefined;
-  const repoFor = (dashC: string | undefined): RepoInfo => {
-    if (!cwdKnown) return { found: true, configOk: false, badKey: 'cwd', unreadable: false, hooksPath: false, hooksFiles: false };
-    if (dashC === undefined) return inspectRepo(cwd);
-    const target = resolveWord({ text: dashC, dynamic: false, glob: false, quoted: false, home: dashC === '~' || dashC.startsWith('~/'), kind: 'plain' }, cwd, windows, language);
-    return 'path' in target ? inspectRepo(target.path) : { found: true, configOk: false, badKey: '-C', unreadable: false, hooksPath: false, hooksFiles: false };
+  // 許可の一覧の判定は文の順に進む。リポジトリの設定・curl の設定ファイルは、そのとき cd でいられるすべてのフォルダ（最初と、cd で動いた先すべて）で調べる。
+  // cd の先が分からなければ（変数・ワイルドカード・cd -・popd など）、調べられないので今回だけ
+  const seen: CwdTrack = { cwd: initialCwd, cwds: [initialCwd], known: true };
+  const followCd = (track: CwdTrack, cd: { word: Word | null }): void => {
+    if (!cd.word || cd.word.dynamic || cd.word.glob) { track.known = false; return; }
+    const e = resolveWord(cd.word, track.cwd, windows, language);
+    if ('unresolved' in e) { track.known = false; return; }
+    track.cwd = e.path;
+    track.cwds.push(e.path);
   };
-  const toolConfig: MatchCtx['toolConfig'] = tool => (tool === 'curl' ? curlConfigFile(env, cwdKnown ? cwd : undefined) : wgetConfigFile(env));
-  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig };
+  const unresolvedRepo = (badKey: string): RepoInfo => ({ found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false });
+  const mergeRepos = (infos: readonly RepoInfo[]): RepoInfo => infos.find(i => i.unreadable) ?? infos.find(i => !i.configOk) ?? {
+    found: infos.some(i => i.found), configOk: true, badKey: '', unreadable: false, hooksPath: infos.some(i => i.hooksPath), hooksFiles: infos.some(i => i.hooksFiles),
+  };
+  const repoFor = (dashC: string | undefined): RepoInfo => {
+    if (!seen.known) return unresolvedRepo('cwd');
+    if (dashC === undefined) return mergeRepos([...new Set(seen.cwds)].map(inspectRepo));
+    const targets = new Set<string>();
+    for (const base of seen.cwds) {
+      const target = resolveWord({ text: dashC, dynamic: false, glob: false, quoted: false, home: dashC === '~' || dashC.startsWith('~/'), kind: 'plain' }, base, windows, language);
+      if (!('path' in target)) return unresolvedRepo('-C');
+      targets.add(target.path);
+    }
+    return mergeRepos([...targets].map(inspectRepo));
+  };
+  const toolConfig: MatchCtx['toolConfig'] = tool => {
+    if (!seen.known) return { unknownCwd: true };
+    const file = tool === 'curl' ? seen.cwds.map(c => curlConfigFile(env, c)).find(Boolean) : wgetConfigFile(env);
+    return file ? { file } : undefined;
+  };
+  const afterStatement: MatchCtx['afterStatement'] = result => { if (result.cwd) followCd(seen, result.cwd); };
+  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig, afterStatement };
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {
     add('deny', text('lex.denied', { detail: lexDetail(language, classified.lex) }));
@@ -369,12 +396,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     }
 
     if (result.cwd) {
-      if (!result.cwd.word) cwdKnown = false;
-      else {
-        const e = resolveWord(result.cwd.word, cwd, windows, language);
-        if ('unresolved' in e) cwdKnown = false;
-        else { cwd = e.path; cwds.push(e.path); }
-      }
+      const track: CwdTrack = { cwd, cwds, known: cwdKnown };
+      followCd(track, result.cwd);
+      cwd = track.cwd;
+      cwdKnown = track.known;
     }
   }
   return done();
