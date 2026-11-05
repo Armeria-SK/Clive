@@ -1,11 +1,24 @@
 import { parse, type DefaultTreeAdapterTypes as Tree } from 'parse5';
+import type { Language } from '../../config/schema.ts';
+import type { MessageParams } from '../../shared/messages/define.ts';
+import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
 import { checkBaseUrl } from '../../shared/url.ts';
 import { attribute } from './html-text.ts';
 import { decodeText, fetchPublic, RetrievalFailure, searchNetwork, type PageNetwork } from './public-page.ts';
 
 export interface SearchHit { title: string; url: string; snippet: string }
 
-export class SearchFailure extends Error {}
+export class SearchFailure extends Error {
+  readonly key: ToolMessageKey | undefined;
+  readonly params: MessageParams;
+  constructor(message: string, key?: ToolMessageKey, params: MessageParams = {}) { super(message); this.key = key; this.params = params; }
+
+  text(language: Language): string { return this.key ? toolText(language, this.key, this.params) : this.message; }
+}
+
+function searchFailure(key: ToolMessageKey, params: MessageParams = {}): SearchFailure {
+  return new SearchFailure(toolText('ja', key, params), key, params);
+}
 
 export type SearchProvider = 'duckduckgo' | 'searxng' | 'off';
 
@@ -58,7 +71,7 @@ export function parseDuckDuckGo(html: string, limit: number): SearchHit[] {
     for (let i = node.childNodes.length - 1; i >= 0; i--) stack.push(node.childNodes[i]!);
   }
   if (!hits.length && (sawChallenge || /anomaly|unusual traffic|bots use DuckDuckGo/iu.test(html))) {
-    throw new SearchFailure('DuckDuckGo に自動アクセスと判断され、結果を返してもらえませんでした。しばらく待つか、SearXNG（tools.web.searxngUrl）に切り替えてください');
+    throw searchFailure('search.blocked');
   }
   return hits;
 }
@@ -73,7 +86,7 @@ export async function searchDuckDuckGo(query: string, options: { limit: number; 
   } catch (error) {
     // 202 は DuckDuckGo の「自動アクセスの確認」。回避はせずに知らせる
     if (error instanceof RetrievalFailure && (error.code === 'refused' || error.status === 202)) {
-      throw new SearchFailure('DuckDuckGo に自動アクセスと判断され、結果を返してもらえませんでした。しばらく待つか、SearXNG（tools.web.searxngUrl）に切り替えてください');
+      throw searchFailure('search.blocked');
     }
     throw error;
   }
@@ -91,11 +104,11 @@ export async function searchSearxng(baseUrl: string, query: string, options: { l
   const signal = AbortSignal.any([AbortSignal.timeout(15_000), ...(options.signal ? [options.signal] : [])]);
   let response: Response;
   try { response = await (options.fetch ?? fetch)(url, { signal, redirect: 'error', headers: { accept: 'application/json' } }); }
-  catch (error) { throw new SearchFailure(`SearXNG（${url.origin}）につなげませんでした: ${(error as Error).message}`); }
-  if (response.status === 403) throw new SearchFailure('SearXNG が JSON を返しません。settings.yml の search.formats に json を足してください');
-  if (!response.ok) throw new SearchFailure(`SearXNG がエラーを返しました（HTTP ${response.status}）`);
+  catch (error) { throw searchFailure('search.searx_connect', { origin: url.origin, detail: (error as Error).message }); }
+  if (response.status === 403) throw searchFailure('search.searx_json');
+  if (!response.ok) throw searchFailure('search.searx_http', { status: response.status });
   const body = await response.json().catch(() => undefined) as { results?: Array<{ title?: unknown; url?: unknown; content?: unknown }> } | undefined;
-  if (!Array.isArray(body?.results)) throw new SearchFailure('SearXNG の返事が読めませんでした');
+  if (!Array.isArray(body?.results)) throw searchFailure('search.searx_bad');
   return body.results
     .filter(r => typeof r.title === 'string' && typeof r.url === 'string' && /^https?:\/\//u.test(r.url))
     .slice(0, options.limit)
@@ -109,7 +122,7 @@ export class SearchThrottle {
   take(maxPerHour: number, minIntervalMs = 1500): number {
     const now = this.#now();
     this.#times = this.#times.filter(t => now - t < 3_600_000);
-    if (this.#times.length >= maxPerHour) throw new SearchFailure(`検索は 1 時間に ${maxPerHour} 回までです（tools.web.maxSearchesPerHour）`);
+    if (this.#times.length >= maxPerHour) throw searchFailure('search.limit', { max: maxPerHour });
     const last = this.#times.at(-1);
     const wait = last === undefined ? 0 : Math.max(0, minIntervalMs - (now - last));
     this.#times.push(now + wait);

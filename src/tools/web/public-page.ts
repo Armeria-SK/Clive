@@ -2,13 +2,27 @@ import { lookup } from 'node:dns/promises';
 import { get as httpGet } from 'node:http';
 import { get as httpsGet } from 'node:https';
 import { isIPv4 } from 'node:net';
+import type { Language } from '../../config/schema.ts';
+import type { MessageParams } from '../../shared/messages/define.ts';
+import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
 
 export type RetrievalCode = 'not_found' | 'refused' | 'http_failure' | 'invalid_response' | 'empty_content' | 'policy_blocked' | 'invalid_request' | 'aborted';
 
 export class RetrievalFailure extends Error {
   readonly code: RetrievalCode;
   readonly status: number | undefined;
-  constructor(code: RetrievalCode, message: string, status?: number) { super(message); this.code = code; this.status = status; }
+  readonly key: ToolMessageKey | undefined;
+  readonly params: MessageParams;
+  constructor(code: RetrievalCode, message: string, status?: number, key?: ToolMessageKey, params: MessageParams = {}) {
+    super(message);
+    this.code = code; this.status = status; this.key = key; this.params = params;
+  }
+
+  text(language: Language): string { return this.key ? toolText(language, this.key, this.params) : this.message; }
+}
+
+function failure(code: RetrievalCode, key: ToolMessageKey, params: MessageParams = {}, status?: number): RetrievalFailure {
+  return new RetrievalFailure(code, toolText('ja', key, params), status, key, params);
 }
 
 const MAX_BYTES = 512 * 1024;
@@ -33,13 +47,13 @@ export function publicIPv4(address: string): boolean {
 }
 
 export function pageUrl(input: string): URL {
-  if (input.length > 4096) throw new RetrievalFailure('invalid_request', 'URL が長すぎます');
+  if (input.length > 4096) throw failure('invalid_request', 'fetch.too_long');
   let url: URL;
-  try { url = new URL(input); } catch { throw new RetrievalFailure('invalid_request', `URL として読めません: ${input.slice(0, 200)}`); }
+  try { url = new URL(input); } catch { throw failure('invalid_request', 'fetch.bad_url', { url: input.slice(0, 200) }); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port
     || url.hostname.includes(':') || !url.hostname.includes('.') || /^[\d.]+$/u.test(url.hostname) && !publicIPv4(url.hostname)
     || /\.(localhost|local|internal|home|lan|test|invalid|example|onion|arpa)\.?$/iu.test(url.hostname)) {
-    throw new RetrievalFailure('policy_blocked', '公開されている http / https のページ（標準のポート）だけを読めます。ローカルや LAN の宛先は読みません');
+    throw failure('policy_blocked', 'fetch.policy');
   }
   url.hash = '';
   return url;
@@ -64,8 +78,9 @@ export function networkFor(accept: string, types: RegExp, maxBytes = MAX_BYTES, 
         }
         if (status !== 200 || !types.test(contentType) || (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity')) {
           response.destroy();
-          reject(new RetrievalFailure(status === 404 ? 'not_found' : [401, 403, 429].includes(status) ? 'refused' : status !== 200 ? 'http_failure' : 'invalid_response',
-            status !== 200 ? `ページを読めませんでした（HTTP ${status}）` : `読めない種類のページです（${contentType || '種類不明'}）`, status));
+          reject(status !== 200
+            ? failure(status === 404 ? 'not_found' : [401, 403, 429].includes(status) ? 'refused' : 'http_failure', 'fetch.http_status', { status }, status)
+            : failure('invalid_response', 'fetch.type', { type: contentType || toolText('ja', 'fetch.type_unknown') }, status));
           return;
         }
         const chunks: Buffer[] = [];
@@ -93,13 +108,13 @@ export const defaultNetwork = networkFor('text/html,application/xhtml+xml,text/p
 export async function publicAddress(host: string, signal: AbortSignal, resolveHost: PageNetwork['resolve']): Promise<string> {
   signal.throwIfAborted();
   const addresses = await new Promise<string[]>((resolve, reject) => {
-    const abort = () => reject(new RetrievalFailure('aborted', '中止しました'));
+    const abort = () => reject(failure('aborted', 'fetch.aborted'));
     signal.addEventListener('abort', abort, { once: true });
-    resolveHost(host).then(resolve, error => reject(new RetrievalFailure('not_found', `名前を引けませんでした: ${host}（${(error as Error).message}）`)))
+    resolveHost(host).then(resolve, error => reject(failure('not_found', 'fetch.dns', { host, detail: (error as Error).message })))
       .finally(() => signal.removeEventListener('abort', abort));
   });
   signal.throwIfAborted();
-  if (!addresses.length || !addresses.every(publicIPv4)) throw new RetrievalFailure('policy_blocked', `「${host}」は公開のアドレスではないため読みません`);
+  if (!addresses.length || !addresses.every(publicIPv4)) throw failure('policy_blocked', 'fetch.not_public', { host });
   return addresses[0]!;
 }
 
@@ -115,22 +130,22 @@ export async function fetchPublic(input: string, signal: AbortSignal | undefined
       const response = await transport.get(url, address, cancellation);
       cancellation.throwIfAborted();
       if ([301, 302, 303, 307, 308].includes(response.status) && response.location) {
-        if (redirects === 5) throw new RetrievalFailure('invalid_response', 'リダイレクトが多すぎます');
+        if (redirects === 5) throw failure('invalid_response', 'fetch.redirects');
         const next = pageUrl(new URL(response.location, url).href);
-        if (url.protocol === 'https:' && next.protocol === 'http:') throw new RetrievalFailure('policy_blocked', 'https から http へのリダイレクトは追いません');
+        if (url.protocol === 'https:' && next.protocol === 'http:') throw failure('policy_blocked', 'fetch.redirect_downgrade');
         url = next;
         continue;
       }
-      if (response.status !== 200) throw new RetrievalFailure(response.status === 404 ? 'not_found' : 'http_failure', `ページを読めませんでした（HTTP ${response.status}）`, response.status);
-      if (!PAGE_TYPES.test(response.contentType) || /[\r\n]/u.test(response.contentType)) throw new RetrievalFailure('invalid_response', `読めない種類のページです（${response.contentType}）`);
+      if (response.status !== 200) throw failure(response.status === 404 ? 'not_found' : 'http_failure', 'fetch.http_status', { status: response.status }, response.status);
+      if (!PAGE_TYPES.test(response.contentType) || /[\r\n]/u.test(response.contentType)) throw failure('invalid_response', 'fetch.type', { type: response.contentType });
       return { url: url.href, contentType: response.contentType, body: response.body, truncated: Boolean(response.truncated) };
     }
   } catch (error) {
     if (error instanceof RetrievalFailure) throw error;
-    if (cancellation.aborted) throw new RetrievalFailure('aborted', signal?.aborted ? '中止しました' : `時間切れです（${timeoutMs / 1000} 秒）`);
-    throw new RetrievalFailure('http_failure', `つなげませんでした: ${(error as Error).message}`);
+    if (cancellation.aborted) throw signal?.aborted ? failure('aborted', 'fetch.aborted') : failure('aborted', 'fetch.timeout', { seconds: timeoutMs / 1000 });
+    throw failure('http_failure', 'fetch.connect', { detail: (error as Error).message });
   }
-  throw new RetrievalFailure('invalid_response', 'リダイレクトが多すぎます');
+  throw failure('invalid_response', 'fetch.redirects');
 }
 
 const CHARSET_META = /<meta\s[^>]*?charset\s*=\s*["']?\s*([\w:.-]+)/iu;

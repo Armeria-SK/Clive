@@ -133,12 +133,12 @@ export class App {
     this.memory = new MemoryStore(this.db, () => {
       const m = this.config().memory;
       return { user: m.userMaxChars, notes: m.notesMaxChars };
-    });
+    }, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.notifications = new Notifications(this.db, now);
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
-    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now);
+    this.skills = new SkillStore(this.db, join(this.paths.workspace, 'skills'), now, () => languageOf(this.config()));
     this.#importCuriosity();
     this.uploads = new Uploads(this.db, this.paths.uploads, now);
     this.engine = new ChatEngine({

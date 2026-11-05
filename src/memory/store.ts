@@ -1,6 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import { transaction } from '../db/database.ts';
+import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
+import { storeText, type StoreMessageKey } from '../shared/messages/stores.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
 
 export type Book = 'user' | 'notes';
@@ -31,7 +33,9 @@ export interface MemoryEvent {
   created_at: number;
 }
 
-export class MemoryError extends Error {}
+export class MemoryError extends LocalizedError<StoreMessageKey> {
+  constructor(code: StoreMessageKey, params?: MessageParams) { super(storeText, code, params); }
+}
 
 export const BOOK_LABELS: Record<Language, Record<Book, string>> = {
   ja: { user: 'ユーザーについての記憶', notes: 'Clive のメモと教訓' },
@@ -46,8 +50,9 @@ export class MemoryStore {
   readonly #db: DatabaseSync;
   readonly #caps: () => Record<Book, number>;
   readonly #now: () => number;
-  constructor(db: DatabaseSync, caps: () => Record<Book, number>, now: () => number = Date.now) {
-    this.#db = db; this.#caps = caps; this.#now = now;
+  readonly #language: () => Language;
+  constructor(db: DatabaseSync, caps: () => Record<Book, number>, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE) {
+    this.#db = db; this.#caps = caps; this.#now = now; this.#language = language;
   }
 
   get(id: number): Memory | undefined {
@@ -72,13 +77,13 @@ export class MemoryStore {
 
   #check(book: Book, content: string, replacingLength = 0): string {
     const text = content.replace(/\s+/gu, ' ').trim();
-    if (!text) throw new MemoryError('中身が空です');
-    if (text.length > MAX_ITEM_CHARS) throw new MemoryError(`1件が長すぎます（${text.length} 文字、上限 ${MAX_ITEM_CHARS}）。要点だけにするか、詳しい内容はファイルに書いてください`);
-    if (sanitizeModelInputText(text).redaction_count > 0) throw new MemoryError('API キーやトークンらしい文字列を含む内容は記憶しません');
+    if (!text) throw new MemoryError('memory.empty');
+    if (text.length > MAX_ITEM_CHARS) throw new MemoryError('memory.too_long', { length: text.length, max: MAX_ITEM_CHARS });
+    if (sanitizeModelInputText(text).redaction_count > 0) throw new MemoryError('memory.secret');
     const cap = this.#caps()[book];
     const next = this.used(book) - replacingLength + text.length;
     if (next > cap) {
-      throw new MemoryError(`${BOOK_LABEL[book]}が上限 ${cap.toLocaleString('en-US')} 文字を超えます（今 ${this.used(book).toLocaleString('en-US')} 文字）。似た記憶を memory_update でまとめるか、もう要らない記憶を memory_forget で消してから保存してください`);
+      throw new MemoryError(book === 'user' ? 'memory.over_cap.user' : 'memory.over_cap.notes', { cap: cap.toLocaleString('en-US'), used: this.used(book).toLocaleString('en-US') });
     }
     return text;
   }
@@ -93,7 +98,7 @@ export class MemoryStore {
     return transaction(this.#db, () => {
       const text = this.#check(input.book, input.content);
       const duplicate = this.#db.prepare("SELECT id FROM memories WHERE book = ? AND status = 'active' AND content = ?").get(input.book, text) as { id: number } | undefined;
-      if (duplicate) throw new MemoryError(`同じ内容が既にあります（[${prefix(input.book)}${duplicate.id}]）`);
+      if (duplicate) throw new MemoryError('memory.duplicate', { ref: `${prefix(input.book)}${duplicate.id}` });
       const now = this.#now();
       const result = this.#db.prepare(`INSERT INTO memories (book, content, origin, source_conversation_id, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(input.book, text, input.origin ?? (input.actor === 'user' ? 'user' : input.actor === 'review' ? 'review' : 'chat'), input.conversationId ?? null, input.messageId ?? null, now, now);
@@ -106,9 +111,9 @@ export class MemoryStore {
   update(id: number, content: string, actor: Actor, runId?: string): { memory: Memory; eventId: number } {
     return transaction(this.#db, () => {
       const current = this.get(id);
-      if (!current || current.status !== 'active') throw new MemoryError(`記憶 ${id} がありません`);
+      if (!current || current.status !== 'active') throw new MemoryError('memory.not_found', { id });
       const text = this.#check(current.book, content, current.content.length);
-      if (text === current.content) throw new MemoryError('内容が変わっていません');
+      if (text === current.content) throw new MemoryError('memory.unchanged');
       this.#db.prepare('UPDATE memories SET content = ?, updated_at = ? WHERE id = ?').run(text, this.#now(), id);
       const eventId = this.#event(id, 'update', current.content, text, actor, runId);
       return { memory: this.get(id)!, eventId };
@@ -118,7 +123,7 @@ export class MemoryStore {
   forget(id: number, actor: Actor, reason?: string, runId?: string): { memory: Memory; eventId: number } {
     return transaction(this.#db, () => {
       const current = this.get(id);
-      if (!current || current.status !== 'active') throw new MemoryError(`記憶 ${id} がありません`);
+      if (!current || current.status !== 'active') throw new MemoryError('memory.not_found', { id });
       this.#db.prepare("UPDATE memories SET status = 'forgotten', updated_at = ? WHERE id = ?").run(this.#now(), id);
       const eventId = this.#event(id, 'forget', current.content, null, actor, runId, reason);
       return { memory: this.get(id)!, eventId };
@@ -128,22 +133,22 @@ export class MemoryStore {
   undo(eventId: number): Memory {
     return transaction(this.#db, () => {
       const event = this.#db.prepare('SELECT * FROM memory_events WHERE id = ?').get(eventId) as MemoryEvent | undefined;
-      if (!event) throw new MemoryError('その変更はありません');
-      if (event.undone_at) throw new MemoryError('既に取り消しています');
+      if (!event) throw new MemoryError('memory.no_event');
+      if (event.undone_at) throw new MemoryError('memory.already_undone');
       const current = this.get(event.memory_id);
-      if (!current) throw new MemoryError('記憶がありません');
+      if (!current) throw new MemoryError('memory.gone');
       const now = this.#now();
       if (event.action === 'create') {
         this.#db.prepare("UPDATE memories SET status = 'forgotten', updated_at = ? WHERE id = ?").run(now, current.id);
-        this.#event(current.id, 'forget', current.content, null, 'user', undefined, '取り消し');
+        this.#event(current.id, 'forget', current.content, null, 'user', undefined, storeText(this.#language(), 'memory.undo_note'));
       } else if (event.action === 'update') {
         this.#db.prepare("UPDATE memories SET content = ?, status = 'active', updated_at = ? WHERE id = ?").run(event.before, now, current.id);
-        this.#event(current.id, 'update', current.content, event.before, 'user', undefined, '取り消し');
+        this.#event(current.id, 'update', current.content, event.before, 'user', undefined, storeText(this.#language(), 'memory.undo_note'));
       } else if (event.action === 'forget') {
         this.#check(current.book, current.content);
         this.#db.prepare("UPDATE memories SET status = 'active', updated_at = ? WHERE id = ?").run(now, current.id);
-        this.#event(current.id, 'restore', null, current.content, 'user', undefined, '取り消し');
-      } else throw new MemoryError('この変更は取り消せません');
+        this.#event(current.id, 'restore', null, current.content, 'user', undefined, storeText(this.#language(), 'memory.undo_note'));
+      } else throw new MemoryError('memory.cannot_undo');
       this.#db.prepare('UPDATE memory_events SET undone_at = ? WHERE id = ?').run(now, eventId);
       return this.get(current.id)!;
     });

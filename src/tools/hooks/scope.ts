@@ -1,6 +1,8 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
+import { guardText } from '../../shared/messages/guard.ts';
 
 export type RootMode = 'read' | 'write';
 export interface ResolvedRoot { path: string; mode: RootMode }
@@ -22,11 +24,11 @@ const DEVICE_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 
 export type Expanded = { path: string } | { unresolved: string };
 
-export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Expanded {
+export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = process.env, language: Language = DEFAULT_LANGUAGE): Expanded {
   let p = input.replace(/^["']|["']$/gu, '');
-  if (/\$\(|`|<\(|>\(/u.test(p)) return { unresolved: 'コマンド置換を含んでいます' };
+  if (/\$\(|`|<\(|>\(/u.test(p)) return { unresolved: guardText(language, 'scope.cmd_subst') };
   if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) p = join(homedir(), p.slice(2));
-  else if (/^~[A-Za-z]/u.test(p)) return { unresolved: '別のユーザーのホームフォルダです' };
+  else if (/^~[A-Za-z]/u.test(p)) return { unresolved: guardText(language, 'scope.other_home') };
   let unknown: string | undefined;
   const lookup = (name: string): string => {
     const upper = name.toUpperCase();
@@ -40,11 +42,11 @@ export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = 
     .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/gu, (_, n: string) => lookup(n))
     .replace(/\$([A-Za-z_][A-Za-z0-9_]*)/gu, (_, n: string) => lookup(n))
     .replace(/%([A-Za-z_][A-Za-z0-9_]*)%/gu, (_, n: string) => lookup(n));
-  if (unknown !== undefined) return { unresolved: `中身が分からない環境変数 ${unknown} を含んでいます` };
+  if (unknown !== undefined) return { unresolved: guardText(language, 'scope.unknown_env', { name: unknown }) };
   if (/[*?[\]{}]/u.test(p)) {
     const parts = p.split(/[\\/]/u);
     const first = parts.findIndex(part => /[*?[\]{}]/u.test(part));
-    if (parts.slice(first).some(part => part === '..')) return { unresolved: 'glob の後ろに .. があります' };
+    if (parts.slice(first).some(part => part === '..')) return { unresolved: guardText(language, 'scope.glob_dotdot') };
     p = parts.slice(0, first).join('/') || '.';
   }
   return { path: resolve(cwd, p) };
@@ -71,11 +73,11 @@ export function isInside(root: string, target: string): boolean {
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
-export function windowsHazard(p: string): string | undefined {
-  if (/^\\\\[?.]\\/u.test(p)) return '\\\\?\\ や \\\\.\\ で始まるパスは扱いません';
+export function windowsHazard(p: string, language: Language = DEFAULT_LANGUAGE): string | undefined {
+  if (/^\\\\[?.]\\/u.test(p)) return guardText(language, 'scope.hazard_prefix');
   const withoutDrive = p.replace(/^[A-Za-z]:/u, '');
-  if (withoutDrive.includes(':')) return 'NTFS の代替データストリーム（: を含むパス）は扱いません';
-  if (p.split(/[\\/]/u).some(part => DEVICE_NAMES.test(part))) return 'デバイス名（CON・NUL など）は扱いません';
+  if (withoutDrive.includes(':')) return guardText(language, 'scope.hazard_stream');
+  if (p.split(/[\\/]/u).some(part => DEVICE_NAMES.test(part))) return guardText(language, 'scope.hazard_device');
   return undefined;
 }
 
@@ -88,6 +90,7 @@ export interface ScopePolicy {
   roots: ResolvedRoot[];
   deny: string[];
   askOnWrite?: string[];
+  language?: Language;
 }
 
 export function needsWriteApproval(abs: string, policy: ScopePolicy): boolean {
@@ -101,12 +104,13 @@ export type Placement =
   | { kind: 'outside' };
 
 export function placePath(abs: string, policy: ScopePolicy): Placement {
-  const hazard = windowsHazard(abs);
+  const language = policy.language ?? DEFAULT_LANGUAGE;
+  const hazard = windowsHazard(abs, language);
   if (hazard) return { kind: 'deny', reason: hazard };
   const real = realish(abs);
-  if (isSecretPath(real) || isSecretPath(abs)) return { kind: 'deny', reason: `秘密情報らしいパスです（${abs}）` };
+  if (isSecretPath(real) || isSecretPath(abs)) return { kind: 'deny', reason: guardText(language, 'scope.secret', { path: abs }) };
   for (const d of policy.deny) {
-    if (isInside(d, real) || isInside(d, abs)) return { kind: 'deny', reason: `拒否リストのパスです（${d}）` };
+    if (isInside(d, real) || isInside(d, abs)) return { kind: 'deny', reason: guardText(language, 'scope.deny_list', { path: d }) };
   }
   let best: ResolvedRoot | undefined;
   for (const root of policy.roots) {

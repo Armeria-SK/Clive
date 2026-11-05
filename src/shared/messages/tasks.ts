@@ -107,7 +107,7 @@ const en: Record<keyof typeof ja, string> = {
 
   'notify.waiting_reminder': 'Waiting for your reply: {title}',
   'notify.budget.title': 'The hourly run limit was reached, so tasks are being held back for a while',
-  'notify.budget.body': 'The limit is {max} runs per hour (worker.maxRunsPerHour in the settings). Urgent tasks can be started with "Run now"',
+  'notify.budget.body': 'The limit is {max} run(s) per hour (worker.maxRunsPerHour in the settings). Urgent tasks can be started with "Run now"',
   'notify.review_no_model': 'No model is available for the review',
   'notify.task_no_model': 'No model is available to run the task',
   'notify.task_done': 'Task finished: {title}',

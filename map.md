@@ -99,7 +99,7 @@
 
 ### 共通の小道具 — `src/shared`
 - `url.ts`（ループバックの判定、`baseUrl` の検査）、`redaction.ts`（秘密の伏せ字）、`pdf-text.ts`（PDF から本文を取り出す）、`http-json.ts`（JSON を取る小さな関数。今はどこからも使われていない）、`language.ts`（設定から Clive の言語を決める `languageOf`）。
-- `messages/`: サーバーが作る文の、日本語と英語の対応表。`define.ts`（表の作り方と、コードと差し込みの値を持つ `LocalizedError`）、領域ごとの表（`tasks.ts`：タスクの経過・理由・通知・繰り返しの説明、`providers.ts`：モデルの確認の文・直し方・プロバイダのエラー、`engine.ts`：返事の失敗・警告・添付の目印）、`index.ts`（全部の表）。文は `{名前}` で値を差し込み、キーは画面が訳すときのコードにもなる。日本語の文を変えると `tests/fixtures/messages-ja.json` との照合が落ちる。
+- `messages/`: サーバーが作る文の、日本語と英語の対応表。`define.ts`（表の作り方と、コードと差し込みの値を持つ `LocalizedError`）、領域ごとの表（`tasks.ts`：タスクの経過・理由・通知・繰り返しの説明、`providers.ts`：モデルの確認の文・直し方・プロバイダのエラー、`engine.ts`：返事の失敗・警告・添付の目印、`guard.ts`：道具の実行前の判定の理由（フォルダの範囲・シェルのコマンド・フック）、`tools.ts`：道具の結果・承認の題・Web の取得と検索の失敗、`stores.ts`：記憶・スキル・好奇心・添付ファイルのエラーと添付の目印）、`index.ts`（全部の表）。文は `{名前}` で値を差し込み、キーは画面が訳すときのコードにもなる。日本語の文を変えると `tests/fixtures/messages-ja.json` との照合が落ちる。
 - 入口: 部品ごとに別（まとまった入口はない）
 - 使うもの: Node の標準だけ
 
@@ -159,7 +159,7 @@
 - 使うもの: `node src/main.ts`、環境変数 `CLIVE_DATA_DIR`、`/etc/clive/env`
 
 ### テスト — `tests/`
-- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値）。`language` はサーバーの言語（設定の既定値、テンプレートの読み分けと写し、返事の言語の指示、決まり文の英語に日本語が混ざらないこと）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `language` `language-server` `memory` `messages` `providers` `review` `schedule` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
+- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値）。`language` はサーバーの言語（設定の既定値、テンプレートの読み分けと写し、返事の言語の指示、決まり文の英語に日本語が混ざらないこと）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `language` `language-server` `language-tools` `memory` `messages` `providers` `review` `schedule` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
 - `helpers.ts`: 一時フォルダ（`tempDir`）、偽のサーバー（`fakeServer`）、偽のモデル窓口（`FakeAdapter`）と返事の台本（`reply` `fail`）。
 - 入口: `tests/helpers.ts`
 - 使うもの: `src/` の各部品（`App` で組み立てるものが多い）

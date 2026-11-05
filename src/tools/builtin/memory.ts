@@ -1,17 +1,23 @@
 import { Type } from '@sinclair/typebox';
 import { readHistory, searchHistory } from '../../memory/history.ts';
-import { BOOK_LABEL, MemoryError, prefix, type Book } from '../../memory/store.ts';
+import { BOOK_LABELS, MemoryError, prefix, type Book } from '../../memory/store.ts';
+import { errorText } from '../../shared/messages/define.ts';
+import { languageOf } from '../../shared/language.ts';
+import { toolText } from '../../shared/messages/tools.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 const BookArg = Type.Union([Type.Literal('user'), Type.Literal('notes')], { description: 'user: ユーザーについての事実・好み／notes: Clive 自身のメモと教訓' });
 const IdArg = Type.Union([Type.Integer({ minimum: 1 }), Type.String({ pattern: '^[unUN]?[0-9]+$' })], { description: '記憶の ID（[u7] なら "u7" か 7）' });
 
 function services(ctx: ToolContext) {
-  if (!ctx.services) throw new MemoryError('記憶の仕組みが使えません');
+  if (!ctx.services) throw new MemoryError('memory.unavailable');
   return ctx.services;
 }
 const parseId = (id: number | string) => (typeof id === 'number' ? id : Number(String(id).replace(/^[unUN]/u, '')));
-const fail = (error: unknown): ToolOutput => ({ content: error instanceof MemoryError ? error.message : `失敗しました: ${(error as Error).message}`, isError: true });
+const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
+  const language = languageOf(ctx.config);
+  return { content: error instanceof MemoryError ? error.text(language) : toolText(language, 'failed', { detail: (error as Error).message }), isError: true };
+};
 
 function latestUserMessage(ctx: ToolContext): number | undefined {
   const row = services(ctx).db.prepare("SELECT id FROM messages WHERE conversation_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1").get(ctx.conversationId) as { id: number } | undefined;
@@ -35,8 +41,9 @@ export const memorySave: ToolDef<{ book: Book; content: string }> = {
       const { memory, eventId } = s.memory.save({ book: input.book, content: input.content, actor: ctx.kind === 'review' ? 'review' : 'clive', conversationId: ctx.conversationId, ...(messageId === undefined ? {} : { messageId }), runId: ctx.runId });
       s.emit({ type: 'memory.changed', runId: ctx.runId, conversationId: ctx.conversationId, memoryId: memory.id, book: memory.book, action: 'create', content: memory.content, eventId });
       const usage = s.memory.usage()[memory.book];
-      return { content: `記憶しました [${prefix(memory.book)}${memory.id}]（${BOOK_LABEL[memory.book]}: ${usage.used}/${usage.max} 文字）。次の会話から使われます` };
-    } catch (error) { return fail(error); }
+      const language = languageOf(ctx.config);
+      return { content: toolText(language, 'memory.saved', { id: `${prefix(memory.book)}${memory.id}`, label: BOOK_LABELS[language][memory.book], used: usage.used, max: usage.max }) };
+    } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -51,8 +58,8 @@ export const memoryUpdate: ToolDef<{ id: number | string; content: string }> = {
       const s = services(ctx);
       const { memory, eventId } = s.memory.update(parseId(input.id), input.content, ctx.kind === 'review' ? 'review' : 'clive', ctx.runId);
       s.emit({ type: 'memory.changed', runId: ctx.runId, conversationId: ctx.conversationId, memoryId: memory.id, book: memory.book, action: 'update', content: memory.content, eventId });
-      return { content: `書き直しました [${prefix(memory.book)}${memory.id}]` };
-    } catch (error) { return fail(error); }
+      return { content: toolText(languageOf(ctx.config), 'memory.updated', { id: `${prefix(memory.book)}${memory.id}` }) };
+    } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -67,8 +74,8 @@ export const memoryForget: ToolDef<{ id: number | string; reason: string }> = {
       const s = services(ctx);
       const { memory, eventId } = s.memory.forget(parseId(input.id), ctx.kind === 'review' ? 'review' : 'clive', input.reason, ctx.runId);
       s.emit({ type: 'memory.changed', runId: ctx.runId, conversationId: ctx.conversationId, memoryId: memory.id, book: memory.book, action: 'forget', content: memory.content, eventId });
-      return { content: `消しました [${prefix(memory.book)}${memory.id}]` };
-    } catch (error) { return fail(error); }
+      return { content: toolText(languageOf(ctx.config), 'memory.forgotten', { id: `${prefix(memory.book)}${memory.id}` }) };
+    } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -81,9 +88,9 @@ export const memorySearch: ToolDef<{ query: string; limit?: number }> = {
   async execute(input, ctx) {
     try {
       const hits = services(ctx).memory.search(input.query, input.limit ?? 20);
-      if (!hits.length) return { content: `「${input.query}」に当たる記憶はありません` };
+      if (!hits.length) return { content: toolText(languageOf(ctx.config), 'memory.no_hit', { query: input.query }) };
       return { content: hits.map(m => `- [${prefix(m.book)}${m.id}] ${m.content}`).join('\n') };
-    } catch (error) { return fail(error); }
+    } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -102,9 +109,10 @@ export const historySearch: ToolDef<{ query: string; days?: number; limit?: numb
   async execute(input, ctx) {
     try {
       const hits = searchHistory(services(ctx).db, input.query, { days: input.days, limit: input.limit ?? 12, excludeConversationId: ctx.conversationId });
-      if (!hits.length) return { content: `「${input.query}」は過去の会話に見つかりませんでした${input.days ? `（直近 ${input.days} 日）` : ''}` };
-      return { content: hits.map(h => `- ${fmtDate(h.createdAt)} 会話「${h.title ?? '無題'}」(conversation_id=${h.conversationId}, message_id=${h.messageId}, ${h.role}): ${h.snippet}`).join('\n') };
-    } catch (error) { return fail(error); }
+      const language = languageOf(ctx.config);
+      if (!hits.length) return { content: toolText(language, 'history.no_hit', { query: input.query, days: input.days ? toolText(language, 'history.days', { days: input.days }) : '' }) };
+      return { content: hits.map(h => toolText(language, 'history.line', { date: fmtDate(h.createdAt), title: h.title ?? toolText(language, 'history.untitled'), cid: h.conversationId, mid: h.messageId, role: h.role, snippet: h.snippet })).join('\n') };
+    } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -121,8 +129,8 @@ export const historyRead: ToolDef<{ conversation_id: string; around_message_id?:
   async execute(input, ctx) {
     try {
       const rows = readHistory(services(ctx).db, input.conversation_id, { aroundMessageId: input.around_message_id, limit: input.limit ?? 20 });
-      if (!rows.length) return { content: 'その会話は見つかりませんでした', isError: true };
+      if (!rows.length) return { content: toolText(languageOf(ctx.config), 'history.not_found'), isError: true };
       return { content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${r.text.slice(0, 1500)}`).join('\n\n') };
-    } catch (error) { return fail(error); }
+    } catch (error) { return fail(error, ctx); }
   },
 };

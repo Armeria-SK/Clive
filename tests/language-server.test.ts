@@ -157,7 +157,7 @@ test('実行の上限・使えるモデルが無いときの通知（英語）',
   assert.equal(await s.app.worker.tick(), 'budget');
   const budget = s.app.notifications.list().find(n => n.kind === 'info')!;
   assert.equal(budget.title, 'The hourly run limit was reached, so tasks are being held back for a while');
-  assert.equal(budget.body, 'The limit is 1 runs per hour (worker.maxRunsPerHour in the settings). Urgent tasks can be started with "Run now"');
+  assert.equal(budget.body, 'The limit is 1 run(s) per hour (worker.maxRunsPerHour in the settings). Urgent tasks can be started with "Run now"');
 });
 
 test('ワーカーの題・理由（英語）: 振り返りの会話の題と、モデルが無いときの待ち', async t => {
@@ -404,7 +404,7 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
     s.adapter().scripts.push(toolCall('task_list', {}));
     await send('c3', 'hi');
     const limit = events.find(e => e.type === 'warning' && e.code === 'max_iterations') as Extract<RunEvent, { type: 'warning' }>;
-    assert.equal(limit.message, pick('ツールを使った呼び直しが上限（1 回）に達したため止めました。続けるなら「続けて」と送ってください', 'Stopped because the tool-calling loop reached its limit (1 times). Send "continue" if you want it to keep going'));
+    assert.equal(limit.message, pick('ツールを使った呼び直しが上限（1 回）に達したため止めました。続けるなら「続けて」と送ってください', 'Stopped because the tool-calling loop reached its limit of 1. Send "continue" if you want it to keep going'));
     assert.deepEqual(limit.params, { max: 1 });
 
     // 止められた返事（途中まで保存される）
