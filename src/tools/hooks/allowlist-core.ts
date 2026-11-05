@@ -127,7 +127,7 @@ export function checkValue(type: ValueType, word: Word, acc: Acc, cmd: string, f
 }
 
 // ── URL（§11.3.4）──
-const LOOPBACK_HOST = /^(?:127\.\d{1,3}(?:\.\d{1,3}){0,2}|localhost|0\.0\.0\.0|2130706433|0x7f[0-9a-f]*|::1)$/iu;
+const LOOPBACK_HOST = /^(?:127\.\d{1,3}(?:\.\d{1,3}){0,2}|localhost|0\.0\.0\.0|2130706433|0x7f[0-9a-f]*|::1|::)$/iu;
 const LAN_HOST = /^(?:10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|f[cd][0-9a-f]{2}:.*|fe[89ab][0-9a-f]:.*)$/iu;
 
 // 末尾のドット（localhost.）は同じ名前を指すので落とす
@@ -135,8 +135,17 @@ export function hostOf(url: string): string | null {
   try { return new URL(url).hostname.toLowerCase().replace(/^\[|\]$/gu, '').replace(/\.+$/u, ''); } catch { return null; }
 }
 
+// IPv4 を埋め込んだ IPv6（::ffff:a.b.c.d と ::a.b.c.d。URL は 16 進に直す）は、埋め込まれた IPv4 と同じ宛先に届く。そうでなければ、そのまま返す
+function v4Of(host: string): string {
+  const m = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/iu.exec(host);
+  if (!m) return host;
+  const hi = Number.parseInt(m[1]!, 16);
+  const lo = Number.parseInt(m[2]!, 16);
+  return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+}
+
 export const isLoopbackHost = (host: string, selfHosts: readonly string[]): boolean =>
-  LOOPBACK_HOST.test(host) || host.endsWith('.localhost') || selfHosts.some(h => h && h.toLowerCase().replace(/\.+$/u, '') === host.replace(/\.+$/u, ''));
+  LOOPBACK_HOST.test(host) || LOOPBACK_HOST.test(v4Of(host)) || host.endsWith('.localhost') || selfHosts.some(h => h && h.toLowerCase().replace(/\.+$/u, '') === host.replace(/\.+$/u, ''));
 
 export function checkUrl(word: Word, acc: Acc, ctx: MatchCtx, cmd: string): void {
   acc.fetch = true;
@@ -146,7 +155,7 @@ export function checkUrl(word: Word, acc: Acc, ctx: MatchCtx, cmd: string): void
   if (url.protocol !== 'http:' && url.protocol !== 'https:') { acc.add('once', 'list.form', { cmd, detail: word.text }, true); return; }
   const host = hostOf(word.text) ?? '';
   if (isLoopbackHost(host, ctx.selfHosts)) acc.add('once', 'code.loopback', { host }, false);
-  else if (LAN_HOST.test(host) || /\.(?:local|lan|internal)$/u.test(host) || host.endsWith('.home.arpa')) acc.add('ask', 'list.lan', { host });
+  else if (LAN_HOST.test(host) || LAN_HOST.test(v4Of(host)) || /\.(?:local|lan|internal)$/u.test(host) || host.endsWith('.home.arpa')) acc.add('ask', 'list.lan', { host });
 }
 
 // ── フラグの定義（C3）──

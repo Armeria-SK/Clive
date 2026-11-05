@@ -77,7 +77,7 @@ gnu({ names: ['od'], ro: true, flags: '-A:s -t:s -N:n -j:n -v -c -x', pos: ['pat
 gnu({ names: ['hexdump'], ro: true, flags: '-C -n:n -s:n -v', pos: ['path-r…'] });
 gnu({ names: ['strings'], ro: true, flags: '-n:n -a -t:s', pos: ['path-r…'] });
 gnu({ names: ['mkdir'], flags: '-p -v -m:s', pos: ['path-w…'] });
-gnu({ names: ['rmdir'], flags: '-p -v', pos: ['path-w…'] }, false, (_p, acc) => { acc.deletes = true; });
+gnu({ names: ['rmdir'], flags: '-v', pos: ['path-w…'] }, false, (_p, acc) => { acc.deletes = true; });
 gnu({ names: ['touch'], flags: '-a -m -c -d:s -t:s -r:path-r', pos: ['path-w…'] });
 gnu({ names: ['tee'], flags: '-a', pos: ['path-w…'] });
 const MODE = /^(?:[ugoa]*[-+=][rwxXst]+|[0-7]{3,4})$/u;
