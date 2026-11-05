@@ -45,6 +45,8 @@ export interface ToolContext {
     web?: { network?: PageNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
+  // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）
+  forbiddenTools?: ReadonlySet<string> | undefined;
 }
 
 export type TaskControl =
@@ -60,6 +62,8 @@ export interface ToolDef<I = any> {
   effect: ToolEffect;
   allowedIn: readonly RunKind[];
   preCheck?: (input: I, ctx: ToolContext) => PreCheck | Promise<PreCheck>;
+  // 外から読んだ内容（Web・添付）のあとで確認を求める道具。書き込み・実行の道具は、これが無くても確認する
+  escalateOnTaint?: boolean;
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext) => Promise<ToolOutput>;
 }

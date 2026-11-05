@@ -4,12 +4,12 @@ import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import { defaultConfig } from '../src/config/store.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO } from '../src/engine/chat.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { WebAuth } from '../src/web/auth.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, reply, tempDir } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, testConfig } from './helpers.ts';
 
 const req = (headers: Record<string, string>, method = 'GET') => ({ headers, method } as unknown as IncomingMessage);
 
@@ -30,7 +30,7 @@ test('認証: Host・Origin・Sec-Fetch-Site・Tailscale を確かめる', () =>
 async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, models?: ModelConfig[]) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = models ?? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: config.models.map(m => m.id), background: [], retriesPerModel: 0 };
@@ -110,6 +110,10 @@ test('API: 使えるモデルが無ければ 409 で理由と直し方を返し�
   const models = await (await s.api('/api/models')).json() as any;
   assert.equal(models.models[0].probe.status, 'too_small');
   assert.equal(s.app.conversations.messages('c1').length, 0);
+  assert.equal(s.app.conversations.get('c1'), undefined, '断った送信は、空の会話を残さない');
+  const created = await s.api('/api/conversations/c9/messages', { method: 'POST', body: JSON.stringify({ text: 'もう一度' }) });
+  assert.equal(created.status, 409);
+  assert.deepEqual(s.app.conversations.list(), []);
 });
 
 test('API: 設定の検証エラーは 400 で場所を返し、API キーの値は返さない', async t => {
@@ -139,7 +143,16 @@ test('API: 記憶の追加・編集・削除・取り消しと、過去の会話
   assert.equal((await s.api(`/api/memory-events/${removed.eventId}/undo`, { method: 'POST', body: '{}' })).status, 200);
   const books = (await (await s.api('/api/memories')).json() as any).books;
   assert.equal(books.user.items[0].content, '朝は紅茶');
-  assert.equal(books.user.max, 2000);
+  assert.equal(books.user.used, '朝は紅茶'.length);
+  assert.equal('max' in books.user, false, '本の大きさに上限は無い');
+  for (let i = 0; i < 14; i++) {
+    const saved = await s.api('/api/memories', { method: 'POST', body: JSON.stringify({ book: 'user', content: `${i}${'あ'.repeat(590)}` }) });
+    assert.equal(saved.status, 201, '以前の上限（2,000 文字）を超えても保存できる');
+  }
+  const context = (await (await s.api('/api/memories')).json() as any).context;
+  assert.equal(context.budget, Math.floor((Math.floor(65536 * CONTEXT_FILL_RATIO) - 1024) * MEMORY_BUDGET_RATIO), '会話に入れる量の予算（使えるモデルの available の 12%）');
+  assert.ok(context.tokens > 8000 && context.tokens > context.budget, `全部を入れたときの見積もり: ${context.tokens}`);
+  assert.ok(context.omitted >= 1, '予算を超えた分は会話に入らない');
   const tooLong = await s.api('/api/memories', { method: 'POST', body: JSON.stringify({ book: 'user', content: 'あ'.repeat(2500) }) });
   assert.equal(tooLong.status, 400);
   s.app.conversations.append('past', { role: 'user', content: 'ベクトル検索の話をしよう' });
@@ -151,4 +164,19 @@ test('API: ほかのサイトからの書き込みは 403', async t => {
   const s = await startApp(t);
   const res = await fetch(`${s.origin}/api/conversations`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: '{}' });
   assert.equal(res.status, 403);
+});
+
+test('API: 作っていない会話の id に最初の発言を送ると、受け付けたときだけ会話ができる（断られたときは残らない）', async t => {
+  const s = await startApp(t);
+  s.adapter().scripts.push(reply('はじめまして'));
+  const sent = await s.api('/api/conversations/fresh1/messages', { method: 'POST', body: JSON.stringify({ text: 'はじめまして' }) });
+  assert.equal(sent.status, 202);
+  await s.app.engine.wait(((await sent.json()) as any).runId);
+  const row = s.app.conversations.get('fresh1')!;
+  assert.deepEqual([row.kind, row.title], ['chat', 'はじめまして']);
+  assert.deepEqual(s.app.conversations.list().map(c => c.id), ['fresh1']);
+  assert.deepEqual(s.app.conversations.messages('fresh1').map(m => m.role), ['user', 'assistant']);
+  const refused = await s.api('/api/conversations/fresh2/messages', { method: 'POST', body: JSON.stringify({ text: 'x'.repeat(100_001) }) });
+  assert.equal(refused.status, 400);
+  assert.equal(s.app.conversations.get('fresh2'), undefined, '入力の誤りで断った送信も、会話を作らない');
 });

@@ -137,8 +137,8 @@ export const AppConfig = Type.Object({
     curiosityPerDay: Type.Integer({ minimum: 0, maximum: 48, default: 2 }),
   }, { additionalProperties: false, default: {} }),
   memory: Type.Object({
-    userMaxChars: Type.Integer({ minimum: 200, maximum: 50_000, default: 2000 }),
-    notesMaxChars: Type.Integer({ minimum: 200, maximum: 50_000, default: 3000 }),
+    userMaxChars: Type.Optional(Type.Integer()),
+    notesMaxChars: Type.Optional(Type.Integer()),
     review: Type.Boolean({ default: true }),
     reviewIdleMinutes: Type.Integer({ minimum: 5, maximum: 1440, default: 30 }),
     reviewAfterToolCalls: Type.Integer({ minimum: 1, maximum: 200, default: 8 }),

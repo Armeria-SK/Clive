@@ -17,6 +17,7 @@ import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import type { RunBus } from './bus.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable } from './context-budget.ts';
 import { ContextOverflow, fitMessages } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
@@ -30,7 +31,7 @@ import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapsho
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
-export const CONTEXT_FILL_RATIO = 0.95;
+export { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable };
 export const TRUNCATION_RATIO = 0.6;
 const TRUNCATION_MIN_ESTIMATE = 2048;
 const TRUNCATION_STRIKES = 2;
@@ -73,6 +74,13 @@ export type SendOutcome =
   | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; detail?: ContextDetail; problems?: ModelProblem[] };
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
+
+// 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
+// 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
+export function candidateModelIds(config: AppConfig, route: 'chat' | 'background'): string[] {
+  const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
+  return preferred.length ? [...preferred] : config.models.map(m => m.id);
+}
 
 type Failure = { kind: EngineErrorKind; message: string; code?: string; params?: MessageParams; retryable: boolean; detail?: ContextDetail; route?: Route };
 
@@ -151,7 +159,7 @@ export class ChatEngine {
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
 
-  runReview(conversationId: string, prompt: string): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[] } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.review_running') };
     const chain = this.#chain('background');
     if (!chain.usable.length) {
@@ -161,11 +169,28 @@ export class ChatEngine {
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt });
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
-    this.#start(runId, conversationId, chain.usable, 'review');
+    this.#start(runId, conversationId, chain.usable, 'review', undefined, options.forbidTools?.length ? new Set(options.forbidTools) : undefined);
     return { ok: true, runId, done: this.#active.get(runId)!.done };
   }
 
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
+
+  // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
+  // 容量が分かるものの available のいちばん小さい値の 12%。容量が分かるモデルが無ければ undefined（予算なし = 全部入れる。0 にはしない）。
+  memoryBudget(): number | undefined {
+    const config = this.#d.config();
+    const ids = new Set([...candidateModelIds(config, 'chat'), ...candidateModelIds(config, 'background')]);
+    let smallest: number | undefined;
+    for (const id of ids) {
+      const model = config.models.find(m => m.id === id);
+      if (!model || !this.#d.status.usable(id)) continue;
+      const capacity = this.#d.status.get(id)?.effective ?? model.contextLength ?? 0;
+      if (!(capacity > 0)) continue;
+      const available = contextAvailable(capacity, model);
+      if (available > 0) smallest = smallest === undefined ? available : Math.min(smallest, available);
+    }
+    return smallest === undefined ? undefined : Math.floor(smallest * MEMORY_BUDGET_RATIO);
+  }
 
   #preemptFor(routes: Route[]): void {
     const providers = new Set(routes.map(r => r.provider.id));
@@ -194,8 +219,7 @@ export class ChatEngine {
   #chain(route: 'chat' | 'background'): { usable: Route[]; problems: ModelProblem[] } {
     const config = this.#d.config();
     const language = languageOf(config);
-    const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
-    const ids = preferred.length ? preferred : config.models.map(m => m.id);
+    const ids = candidateModelIds(config, route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];
@@ -227,10 +251,10 @@ export class ChatEngine {
     };
   }
 
-  #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl } }): void {
+  #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>): void {
     const controller = new AbortController();
     this.#byConversation.set(conversationId, runId);
-    const done = this.#execute(runId, conversationId, chain, controller.signal, kind, task)
+    const done = this.#execute(runId, conversationId, chain, controller.signal, kind, task, forbid)
       .catch((error): EngineResult => {
         this.#d.log?.(`[ERROR] run ${runId}: ${(error as Error).stack ?? error}`);
         this.#d.runs.finish(runId, { ok: false, attempts: 0, errorKind: 'internal', errorMessage: (error as Error).message });
@@ -248,12 +272,13 @@ export class ChatEngine {
     this.#active.set(runId, { runId, conversationId, kind, providers: new Set(chain.map(r => r.provider.id)), controller, done });
   }
 
-  #toolsFor(model: ModelConfig, kind: RunKind): ToolDef[] {
+  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
-    return this.#d.tools.registry.forRun(kind, { limit: model.maxTools, ...(kind === 'review' ? { exclude: t => REVIEW_FORBIDDEN.has(t.effect) } : {}) });
+    const exclude = (t: ToolDef) => (kind === 'review' && REVIEW_FORBIDDEN.has(t.effect)) || forbid?.has(t.name) === true;
+    return this.#d.tools.registry.forRun(kind, { limit: model.maxTools, exclude });
   }
 
-  async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl } }): Promise<EngineResult> {
+  async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>): Promise<EngineResult> {
     const d = this.#d;
     const config = d.config();
     d.runs.start(runId, kind, conversationId);
@@ -275,6 +300,7 @@ export class ChatEngine {
       log: d.log ?? (() => undefined),
       services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
+      ...(forbid ? { forbiddenTools: forbid } : {}),
     };
     const addUsage = (u: Usage) => {
       for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
@@ -298,7 +324,7 @@ export class ChatEngine {
     const maxIterations = config.tools.maxIterations;
     const compaction = { done: false };
     for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
-      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind });
+      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
         return finishFail(call.failure);
@@ -341,7 +367,7 @@ export class ChatEngine {
     return finishOk('', 'other');
   }
 
-  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: { done: boolean }; kind: RunKind }): Promise<CallResult> {
+  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: { done: boolean }; kind: RunKind; forbid?: ReadonlySet<string> | undefined }): Promise<CallResult> {
     const d = this.#d;
     const sleep = d.sleep ?? abortableSleep;
     const retries = d.retriesPerModel ?? d.config().routing.retriesPerModel;
@@ -356,7 +382,7 @@ export class ChatEngine {
       }
       const adapter = d.registry.get(provider.id);
       if (!adapter) { last = { kind: 'internal', message: engineText(language, 'run.no_provider', { id: provider.id }), code: 'engine.run.no_provider', params: { id: provider.id }, retryable: false, route }; continue; }
-      const toolDefs = this.#toolsFor(model, p.kind);
+      const toolDefs = this.#toolsFor(model, p.kind, p.forbid);
       const specs = ToolRegistry.specs(toolDefs);
       const fallbackMode = model.toolMode === 'json_fallback';
       const toolNames = new Set(toolDefs.map(t => t.name));
@@ -365,7 +391,7 @@ export class ChatEngine {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
         const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
-        const available = Math.floor(capacity * CONTEXT_FILL_RATIO) - model.maxOutputTokens;
+        const available = contextAvailable(capacity, model);
         const conversation = d.conversations.get(p.conversationId);
         const upto = conversation?.summary_upto ?? 0;
         const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
@@ -500,7 +526,7 @@ export class ChatEngine {
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
     const snapshot = buildSnapshot(d.paths, {
-      ...(d.memory ? { memories: renderBooks(d.memory.list(), language) } : {}),
+      ...(d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
     }, language);
     if (d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash)) d.kv.set(snapshotLanguageKey(conversationId), language);

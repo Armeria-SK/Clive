@@ -18,6 +18,7 @@ const ja = {
   'pipeline.note_none': '続きは表示していません',
 
   'summary.file_write': 'ファイルに書き込む: {path}',
+  'summary.memory_save': '記憶する（{label}）',
   'summary.file_edit': 'ファイルを編集する: {path}',
   'summary.shell': 'コマンドを実行する',
   'summary.web_fetch': 'Web ページを読む',
@@ -81,7 +82,7 @@ const ja = {
   'search.searx_bad': 'SearXNG の返事が読めませんでした',
   'search.limit': '検索は 1 時間に {max} 回までです（tools.web.maxSearchesPerHour）',
 
-  'memory.saved': '記憶しました [{id}]（{label}: {used}/{max} 文字）。次の会話から使われます',
+  'memory.saved': '記憶しました [{id}]（{label}: 計 {used} 文字）。次の会話から使われます',
   'memory.updated': '書き直しました [{id}]',
   'memory.forgotten': '消しました [{id}]',
   'memory.no_hit': '「{query}」に当たる記憶はありません',
@@ -154,6 +155,7 @@ const en: Record<keyof typeof ja, string> = {
   'pipeline.note_none': 'The rest is not shown',
 
   'summary.file_write': 'Write to a file: {path}',
+  'summary.memory_save': 'Save to memory ({label})',
   'summary.file_edit': 'Edit a file: {path}',
   'summary.shell': 'Run a command',
   'summary.web_fetch': 'Read a web page',
@@ -217,7 +219,7 @@ const en: Record<keyof typeof ja, string> = {
   'search.searx_bad': 'The reply from SearXNG could not be read',
   'search.limit': 'Searches are limited to {max} per hour (tools.web.maxSearchesPerHour)',
 
-  'memory.saved': 'Saved to memory [{id}] ({label}: {used}/{max} characters). It will be used from the next conversation',
+  'memory.saved': 'Saved to memory [{id}] ({label}: {used} characters in total). It will be used from the next conversation',
   'memory.updated': 'Rewritten [{id}]',
   'memory.forgotten': 'Deleted [{id}]',
   'memory.no_hit': 'No memory matches "{query}"',

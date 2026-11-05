@@ -4,7 +4,6 @@ import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig, Language, ModelConfig, ProviderConfig } from '../src/config/schema.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError, providerError } from '../src/providers/types.ts';
@@ -15,7 +14,7 @@ import { CONTEXT_HINTS, contextHint, evaluateContext } from '../src/providers/co
 import { classifyFetchError, classifyHttpFailure, requireApiKey } from '../src/providers/http.ts';
 import { OllamaAdapter } from '../src/providers/ollama.ts';
 import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
-import { fail, fakeServer, FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
+import { fail, fakeServer, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
 const MIN = 60_000;
@@ -49,7 +48,7 @@ async function waitFor(condition: () => boolean, label: string, timeoutMs = 3000
 async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { language?: Language; edit?: (c: AppConfig) => void } = {}) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
@@ -567,7 +566,7 @@ test('再起動で中断した実行の記録は、設定の言語で書く', as
     const dir = tempDir(t);
     const paths = resolvePaths(dir);
     mkdirSync(paths.data, { recursive: true });
-    const config = defaultConfig();
+    const config = testConfig();
     config.language = language;
     writeFileSync(paths.config, JSON.stringify(config));
     const first = new App({ paths, log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });

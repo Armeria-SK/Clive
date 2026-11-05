@@ -75,6 +75,10 @@ test('辞書: 差し込みの文は、引数を入れた形で読める', () => 
   assert.equal(jaLine, '10:15 あなたが削除');
   const enLine = (en['memory.event.line'] as (a: string, b: string, c: string) => string)('10:15', 'you', 'deleted');
   assert.equal(enLine, '10:15 deleted by you');
-  assert.equal((ja['memory.usage'] as (a: string, b: string) => string)('1,240', '2,000'), '使用 1,240 / 2,000 字');
-  assert.equal((en['memory.usage'] as (a: string, b: string) => string)('1,240', '2,000'), '1,240 / 2,000 chars used');
+  assert.equal((ja['memory.size'] as (a: string) => string)('1,240'), '文字数 1,240 字');
+  assert.equal((en['memory.size'] as (a: string) => string)('1,240'), '1,240 chars');
+  assert.equal((ja['memory.context'] as (a: string, b: string) => string)('3,200', '7,348'), '会話に入る量 約 3,200 / 7,348 トークン');
+  assert.equal((en['memory.context'] as (a: string, b: string) => string)('3,200', '7,348'), 'In a conversation: about 3,200 / 7,348 tokens');
+  assert.equal((ja['memory.over'] as (a: string) => string)('3'), '3 件は会話に入りません。必要なときは Clive が memory_search で探します');
+  assert.equal((en['memory.over'] as (a: string) => string)('3'), '3 will not fit in a conversation. Clive looks them up with memory_search when needed');
 });

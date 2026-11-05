@@ -4,14 +4,13 @@ import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { DEDUP_MS } from '../src/notify/notifications.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import { inQuietHours, taskPrompt } from '../src/tasks/worker.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { fail, FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
+import { fail, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -45,7 +44,7 @@ async function waitFor(condition: () => boolean, label: string, timeoutMs = 3000
 async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig) => void = () => undefined) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
@@ -414,4 +413,27 @@ test('API: タスク・ワーカー・通知・プロフィール', async t => {
   assert.equal((await api('/api/profile', { shape: 'dragon' }, 'PATCH')).status, 400);
   assert.equal((await api('/api/profile', { color: 'red' }, 'PATCH')).status, 400);
   assert.equal(s.app.config().profile.shape, 'droplet');
+});
+
+test('モデルが 0 個のあいだは、タスクも振り返りも選ばず、会話も通知も作らずに休む。モデルを足せば動く', async t => {
+  const s = await setup(t, c => { c.memory.review = true; c.models = []; c.routing = { chat: [], background: [], retriesPerModel: 0 }; });
+  const task = s.userTask('仕事');
+  s.app.reviews.enqueue('manual', 'manual:1');
+  const taskConversations = () => (s.app.db.prepare("SELECT COUNT(*) AS n FROM conversations WHERE kind = 'task'").get() as { n: number }).n;
+  for (let i = 0; i < 3; i++) assert.equal(await s.app.worker.tick(), 'no_model');
+  assert.equal(taskConversations(), 0, '振り返りやタスクの空の会話を、tick のたびに作らない');
+  assert.equal(s.app.notifications.list().length, 0, '0 個は「まだ設定していない」で、不調の知らせは出さない');
+  const waiting = s.app.tasks.get(task.id)!;
+  assert.equal(waiting.status, 'ready');
+  assert.equal(waiting.attempts, 0);
+  assert.equal(s.app.reviews.pendingCount(), 1);
+  assert.equal(s.app.runs.recent(10).length, 0);
+
+  const next = s.app.config();
+  next.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  next.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
+  await s.app.applyConfig(next);
+  s.adapter().scripts.push(toolCall('task_complete', { summary: '済み', notify: false }));
+  assert.equal(await s.app.worker.tick(), 'ran', 'モデルを足したら、待っていたタスクが動く');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
 });

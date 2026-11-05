@@ -3,13 +3,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import type { ModelConfig } from '../src/config/schema.ts';
-import { defaultConfig } from '../src/config/store.ts';
+import type { AppConfig, ModelConfig } from '../src/config/schema.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { attachmentBlock, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../src/uploads/store.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 export function tinyPdf(text: string): Buffer {
   const content = `BT /F1 12 Tf 10 100 Td (${text}) Tj ET`;
@@ -33,15 +32,16 @@ function toolCall(name: string, args: unknown): Script {
   };
 }
 
-async function setup(t: { after: (fn: () => void | Promise<void>) => void }, model: Partial<ModelConfig> = {}) {
+async function setup(t: { after: (fn: () => void | Promise<void>) => void }, model: Partial<ModelConfig> = {}, edit: (c: AppConfig) => void = () => undefined) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 131072, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...model }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
   config.memory.review = false;
   config.tools.shell.approvalTimeoutSec = 10;
+  edit(config);
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => (adapter = new FakeAdapter(p)) });
@@ -129,4 +129,36 @@ test('API: 画像を読めるモデルなら、画像として渡す', async t =
   assert.equal(last.images?.[0]?.mediaType, 'image/png');
   assert.equal(Buffer.from(last.images![0]!.data, 'base64').subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
   assert.equal(last.content, '（画像を添付しました）');
+});
+
+test('API: 順番（routing.chat）が空でも、エンジンと同じ候補（設定のモデル全部）で画像の可否を決める', async t => {
+  const s = await setup(t, { vision: true }, c => { c.routing = { chat: [], background: [], retriesPerModel: 0 }; });
+  const img = await s.upload('a.png', PNG, 'image/png');
+  s.adapter().scripts.push(reply('見えました'));
+  const sent = await s.post('/api/conversations/c1/messages', { text: '見て', attachments: [img.body.upload.id] });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  await s.app.engine.wait(sent.body.runId);
+  const last = s.adapter().calls[0]!.messages.at(-1) as { images?: unknown[] };
+  assert.equal(last.images?.length, 1);
+  const blind = await setup(t, { vision: false }, c => { c.routing = { chat: [], background: [], retriesPerModel: 0 }; });
+  const img2 = await blind.upload('a.png', PNG, 'image/png');
+  const refused = await blind.post('/api/conversations/c1/messages', { text: '見て', attachments: [img2.body.upload.id] });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.code, 'http.no_vision', '画像を読めるモデルが無ければ、順番が空でも今までどおり断る');
+});
+
+test('API: モデルが 0 個のとき、画像つきの送信は no_vision ではなく「モデルを設定する」案内（engine.no_usable）に着く', async t => {
+  const s = await setup(t, {}, c => { c.models = []; c.routing = { chat: [], background: [], retriesPerModel: 0 }; });
+  const img = await s.upload('a.png', PNG, 'image/png');
+  const sent = await s.post('/api/conversations/c1/messages', { text: '見て', attachments: [img.body.upload.id] });
+  assert.equal(sent.status, 409);
+  assert.equal(sent.body.errorCode, 'engine.no_usable');
+  assert.deepEqual(sent.body.problems, []);
+  assert.equal(s.app.conversations.messages('c1').length, 0, '発言は保存しない');
+  const plain = await s.post('/api/conversations/c2/messages', { text: 'やあ' });
+  assert.equal(plain.status, 409);
+  assert.equal(plain.body.errorCode, 'engine.no_usable');
+  assert.equal(s.app.conversations.get('c1'), undefined, '断った送信は、空の会話を残さない');
+  assert.equal(s.app.conversations.get('c2'), undefined);
+  assert.deepEqual(s.app.conversations.list(), []);
 });

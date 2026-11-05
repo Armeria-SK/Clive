@@ -2,7 +2,6 @@ import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from '
 import { Icon } from '../icons.tsx';
 import { formatNumber, useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
-import { usageFraction, usageIsHigh } from '../usage.ts';
 import { addTag, parseNumber } from './model.ts';
 
 // 設定の 1 行（デザインの並び: 左に名前・説明・エラー、右に入力）。changed の点は「保存していない変更」。
@@ -102,18 +101,6 @@ export function TagsField({ tags, onChange, placeholder, label }: { tags: readon
         </span>
       ))}
       <input className="set-tag-input" value={draft} placeholder={placeholder} aria-label={t('settings.tag.add', label)} spellCheck={false} onChange={e => setDraft(e.target.value)} onKeyDown={onKey} onBlur={commit} />
-    </div>
-  );
-}
-
-export function UsageField({ value, onChange, used, label, min, max }: { value: number; onChange: (value: number) => void; used: number | undefined; label: string; min?: number; max?: number }) {
-  const t = useT();
-  const fraction = used !== undefined ? usageFraction(used, value) * 100 : 0;
-  return (
-    <div className="set-usage">
-      <NumberField value={value} onChange={v => { if (v !== undefined) onChange(v); }} unit={t('settings.unit.chars')} width="110px" label={label} min={min} max={max} />
-      <div className="set-meter" aria-hidden="true"><div className={used !== undefined && usageIsHigh(used, value) ? 'high' : undefined} style={{ width: `${fraction}%` }} /></div>
-      <span className="set-usage-text">{used === undefined ? '—' : t('settings.usedChars', formatNumber(used))}</span>
     </div>
   );
 }

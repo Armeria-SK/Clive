@@ -1,8 +1,6 @@
-import { useEffect, useState } from 'react';
-import { api } from '../api.ts';
 import { Icon } from '../icons.tsx';
 import { useT } from '../i18n/index.ts';
-import { FieldRow, NumberField, RangeField, SegField, SubTitle, TagsField, TextField, UsageField } from './fields.tsx';
+import { FieldRow, NumberField, RangeField, SegField, SubTitle, TagsField, TextField } from './fields.tsx';
 import { updateAt, type Config } from './model.ts';
 import { differs, errorFor, type SectionProps } from './types.ts';
 
@@ -129,22 +127,11 @@ export function WorkerSection({ draft, saved, update, problems }: SectionProps) 
   );
 }
 
-export function MemorySection({ draft, saved, update, problems }: SectionProps) {
+export function MemorySection() {
   const t = useT();
-  const memory = draft.memory as Record<string, any>;
-  const [used, setUsed] = useState<{ user?: number; notes?: number }>({});
-  useEffect(() => { void api.memories().then(r => setUsed({ user: r.books.user.used, notes: r.books.notes.used })).catch(() => undefined); }, []);
-  const set = (patch: Record<string, unknown>) => update(c => updateAt(c, 'memory', patch));
   return (
     <div className="set-stack">
-      <div className="set-rows">
-        <FieldRow label={t('settings.memory.user')} desc={t('settings.memory.userDesc')} changed={differs(saved, draft, c => c.memory.userMaxChars)} path="memory.userMaxChars" error={errorFor(problems, 'memory.userMaxChars')}>
-          <UsageField value={memory.userMaxChars as number} used={used.user} label={t('settings.memory.user')} min={200} max={50000} onChange={v => set({ userMaxChars: v })} />
-        </FieldRow>
-        <FieldRow label={t('settings.memory.notes')} desc={t('settings.memory.notesDesc')} changed={differs(saved, draft, c => c.memory.notesMaxChars)} path="memory.notesMaxChars" error={errorFor(problems, 'memory.notesMaxChars')}>
-          <UsageField value={memory.notesMaxChars as number} used={used.notes} label={t('settings.memory.notes')} min={200} max={50000} onChange={v => set({ notesMaxChars: v })} />
-        </FieldRow>
-      </div>
+      <p className="set-note">{t('settings.memory.note')}</p>
       <a className="set-link-out" href="#/memory"><Icon name="bookmark" size={14} />{t('settings.memory.open')}</a>
     </div>
   );

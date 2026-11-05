@@ -297,3 +297,12 @@ test('joinsToolRun: 続けて並ぶ道具の行（実行中の道具を含む）
   assert.deepEqual(joinsToolRun(['assistant', 'think', 'fail']), [false, false, false], '道具の行でないものはくっつかない');
   assert.deepEqual(joinsToolRun([]), []);
 });
+
+test('sendFailureOf: モデルが 1 つも無い 409（problems が空）だけ noModels になり、「モデルを設定する」案内を出せる', () => {
+  const none = { error: 'provider_error', errorKind: 'provider_error', errorCode: 'engine.no_usable', errorMessage: '使えるモデルがないため送信しませんでした', problems: [] };
+  assert.equal(sendFailureOf(new ApiError(409, none), 'x', []).noModels, true);
+  const broken = { ...none, problems: [{ modelId: 'local', status: 'unreachable', message: '接続できません' }] };
+  assert.equal(sendFailureOf(new ApiError(409, broken), 'x', []).noModels, false, 'モデルがあるけれど使えないときは、設定を開くだけ');
+  assert.equal(sendFailureOf(new ApiError(409, { error: 'busy', errorCode: 'engine.send.busy', problems: [] }), 'x', []).noModels, false);
+  assert.equal(sendFailureOf(new Error('x'), 'x', []).noModels, false);
+});

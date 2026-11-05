@@ -3,12 +3,13 @@ import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
 import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
+import { candidateModelIds } from '../engine/chat.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
 import type { ApprovalView } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
-import { MemoryError } from '../memory/store.ts';
+import { MemoryError, planBooks } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
 import { httpText } from '../shared/messages/http.ts';
 import { domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
@@ -134,12 +135,13 @@ export function createWebServer(app: App): WebServer {
     }
     if (images.length) {
       const config = app.config();
-      const vision = config.routing.chat.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
-      if (!vision) throw problem(409, 'no_vision', 'no_vision');
+      const candidates = candidateModelIds(config, 'chat');
+      // 候補が 1 つも無い（モデルが 0 個）ときは画像の話の前に、エンジンの「使えるモデルがない」案内に任せる
+      const vision = candidates.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
+      if (candidates.length && !vision) throw problem(409, 'no_vision', 'no_vision');
     }
     const attachments: AttachmentMeta[] = uploads.map(u => ({ id: u.id, name: u.name, kind: u.kind }));
     const content = [text || engineText(languageOf(app.config()), images.length ? 'attachment.image' : 'attachment.file'), ...blocks].join('\n\n');
-    if (!app.conversations.get(id)) app.conversations.create({ id });
     const outcome = app.engine.send(id, content, images, attachments);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     sendJson(res, 202, { runId: outcome.runId, messageId: outcome.messageId });
@@ -197,12 +199,16 @@ export function createWebServer(app: App): WebServer {
     return id;
   };
   router.add('GET', '/api/memories', ({ res }) => {
-    const usage = app.memory.usage();
     const items = app.memory.list();
-    sendJson(res, 200, { books: {
-      user: { ...usage.user, items: items.filter(m => m.book === 'user') },
-      notes: { ...usage.notes, items: items.filter(m => m.book === 'notes') },
-    } });
+    const budget = app.engine.memoryBudget();
+    const plan = planBooks(items, languageOf(app.config()), budget);
+    sendJson(res, 200, {
+      books: {
+        user: { used: app.memory.used('user'), items: items.filter(m => m.book === 'user') },
+        notes: { used: app.memory.used('notes'), items: items.filter(m => m.book === 'notes') },
+      },
+      context: { tokens: plan.tokens, budget: budget ?? null, omitted: plan.omitted.length },
+    });
   });
   router.add('POST', '/api/memories', async ({ req, res }) => {
     const body = requireObject(await readJson(req));

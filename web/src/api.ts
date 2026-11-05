@@ -45,7 +45,8 @@ export interface ToolCallRow {
 export type Book = 'user' | 'notes';
 export interface MemoryItem { id: number; book: Book; content: string; origin: string; source_conversation_id: string | null; source_message_id: number | null; created_at: number; updated_at: number }
 export interface MemoryEvent { id: number; memory_id: number; action: string; before: string | null; after: string | null; actor: string; reason: string | null; undone_at: number | null; created_at: number }
-export interface BookView { used: number; max: number; items: MemoryItem[] }
+export interface BookView { used: number; items: MemoryItem[] }
+export interface MemoryContext { tokens: number; budget: number | null; omitted: number }
 export interface HistoryHit { conversationId: string; title: string | null; messageId: number; role: string; createdAt: number; snippet: string }
 
 export type TaskStatus = 'inbox' | 'ready' | 'running' | 'waiting' | 'scheduled' | 'done' | 'failed' | 'cancelled';
@@ -130,7 +131,7 @@ export const api = {
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
-  memories: () => call<{ books: Record<Book, BookView> }>('/api/memories'),
+  memories: () => call<{ books: Record<Book, BookView>; context: MemoryContext }>('/api/memories'),
   addMemory: (book: Book, content: string) => call('/api/memories', { method: 'POST', body: JSON.stringify({ book, content }) }),
   editMemory: (id: number, content: string) => call(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
   forgetMemory: (id: number) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'DELETE' }),

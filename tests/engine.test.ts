@@ -3,14 +3,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig, ModelConfig } from '../src/config/schema.ts';
-import { defaultConfig, parseConfig } from '../src/config/store.ts';
+import { parseConfig } from '../src/config/store.ts';
 import { Conversations } from '../src/db/conversations.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { KV } from '../src/db/kv.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { Runs } from '../src/db/runs.ts';
 import { RunBus } from '../src/engine/bus.ts';
-import { ChatEngine } from '../src/engine/chat.ts';
+import { candidateModelIds, ChatEngine } from '../src/engine/chat.ts';
 import { ModelStatus } from '../src/engine/status.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import type { RunEvent } from '../src/engine/types.ts';
@@ -18,7 +18,7 @@ import { resolvePaths } from '../src/paths.ts';
 import { EndpointLimiter } from '../src/providers/limiter.ts';
 import { ProviderRegistry } from '../src/providers/registry.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { FakeAdapter, fail, reply, tempDir, type Script } from './helpers.ts';
+import { FakeAdapter, fail, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function localModel(id: string, over: Partial<ModelConfig> = {}): ModelConfig {
   return { id, provider: 'fake', model: id, contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...over };
@@ -29,7 +29,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { models?:
   const paths = resolvePaths(dir);
   mkdirSync(paths.workspace, { recursive: true });
   writeFileSync(join(paths.workspace, 'SOUL.md'), '最初の SOUL');
-  const base = defaultConfig();
+  const base = testConfig();
   const config: AppConfig = parseConfig({
     ...base,
     providers: [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }],
@@ -261,4 +261,34 @@ test('会話中は system の凍結スナップショットを変えない（SOU
 test('トークンの見積もり: 日本語は1文字1トークン、英数字は3.5文字1トークン', () => {
   assert.equal(estimateTextTokens('あいうえお'), 5);
   assert.equal(estimateTextTokens('abcdefg'), 2);
+});
+
+test('モデルが 1 つも無いときの送信は 409 engine.no_usable（problems は空）で、発言を保存せず、モデルにも送らない', async t => {
+  const s = await setup(t, { models: [] });
+  s.conversations.append('c0', { role: 'user', content: '前の発言' });
+  for (const outcome of [s.engine.send('c1', 'やあ'), s.engine.retry('c0')]) {
+    assert.equal(outcome.ok, false);
+    if (outcome.ok) return;
+    assert.equal(outcome.httpStatus, 409);
+    assert.equal(outcome.errorCode, 'engine.no_usable');
+    assert.deepEqual(outcome.problems, []);
+    assert.match(outcome.errorMessage, /モデルがまだ設定されていません/u);
+  }
+  assert.equal(s.conversations.messages('c1').length, 0);
+  assert.equal(s.adapter.calls.length, 0);
+  assert.equal(s.runs.recent(10).length, 0);
+});
+
+test('会話で使う候補: 順番が空なら設定のモデル全部。裏方が空ならチャットと同じ。モデルが 0 個なら空', () => {
+  const config = testConfig();
+  assert.deepEqual(candidateModelIds(config, 'chat'), ['claude-sonnet']);
+  assert.deepEqual(candidateModelIds(config, 'background'), ['claude-haiku']);
+  config.routing.background = [];
+  assert.deepEqual(candidateModelIds(config, 'background'), ['claude-sonnet'], '裏方が空ならチャットの順番');
+  config.routing.chat = [];
+  assert.deepEqual(candidateModelIds(config, 'chat'), ['claude-sonnet', 'claude-haiku', 'local'], 'チャットが空なら設定のモデル全部（今までの動き）');
+  assert.deepEqual(candidateModelIds(config, 'background'), ['claude-sonnet', 'claude-haiku', 'local']);
+  config.models = [];
+  assert.deepEqual(candidateModelIds(config, 'chat'), []);
+  assert.deepEqual(candidateModelIds(config, 'background'), []);
 });

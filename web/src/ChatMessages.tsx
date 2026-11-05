@@ -267,7 +267,10 @@ export function PreSendCard({ message, hint, numbers }: PreSendProps) {
   );
 }
 
-export function SendErrorCard({ message, hint }: { message: string; hint: string | null }) {
+// 設定の開く節は sessionStorage の同じキーで渡す（Settings.tsx の SECTION_KEY と同じ値）
+const openModelSettings = () => { try { sessionStorage.setItem('clive.settingsSection', 'models'); } catch { } };
+
+export function SendErrorCard({ message, hint, setup = false }: { message: string; hint: string | null; setup?: boolean }) {
   const t = useT();
   return (
     <div className="chat-fail">
@@ -280,7 +283,9 @@ export function SendErrorCard({ message, hint }: { message: string; hint: string
         </div>
       </div>
       <div className="chat-actions">
-        <a className="btn btn-secondary" href="#/settings"><Icon name="sliders" size={13} />{t('chat.settings')}</a>
+        {setup
+          ? <a className="btn btn-primary" href="#/settings" onClick={openModelSettings}><Icon name="sliders" size={13} />{t('chat.send.setupModel')}</a>
+          : <a className="btn btn-secondary" href="#/settings"><Icon name="sliders" size={13} />{t('chat.settings')}</a>}
       </div>
     </div>
   );
