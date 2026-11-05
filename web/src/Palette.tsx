@@ -91,7 +91,7 @@ function PaletteDialog({ narrow, panelOpen, worker, conversations, leaving, onCl
       },
       {
         key: 'skills', label: t('palette.group.skills'),
-        items: skills.map(skill => entry(`s:${skill.name}`, 'book', skill.name, go('#/skills'), { sub: skill.description })),
+        items: skills.map(skill => entry(`s:${skill.name}`, 'book', skill.name, go(`#/skills/${encodeURIComponent(skill.name)}`), { sub: skill.description })),
       },
     ];
   }, [t, effective, narrow, panelOpen, worker, conversations, tasks, skills, onClose, onNewChat, onActivity, onWorker]);

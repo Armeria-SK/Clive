@@ -24,7 +24,9 @@ import { StatusBar } from './StatusBar.tsx';
 import { TabBar } from './TabBar.tsx';
 import { toast, ToastHost } from './toast.tsx';
 import { Tooltip } from './Tooltip.tsx';
-import { CuriosityPage, ReviewPage, SkillsPage } from './Review.tsx';
+import { CuriosityPage, ReviewPage } from './Review.tsx';
+import { skillDraftLink } from './skills-meta.ts';
+import { SkillsPage } from './SkillsPage.tsx';
 import { TasksPage } from './Tasks.tsx';
 import { useTabs } from './useTabs.ts';
 
@@ -166,7 +168,7 @@ export function App() {
     setNotifOpen(false);
     if (!n.read_at) markRead([n.id]);
     const link = notificationLink(n.link);
-    if (link) location.hash = link;
+    if (link) location.hash = skillDraftLink(n) ?? link;
   }, [markRead]);
   const openActivity = useCallback(() => {
     if (modeRef.current === 'narrow') location.hash = '#/today';
@@ -402,7 +404,7 @@ export function App() {
             {route.page === 'runs' && <Runs />}
             {route.page === 'memory' && <Memory />}
             {route.page === 'review' && <ReviewPage revision={taskRevision + notificationRevision} />}
-            {route.page === 'skills' && <SkillsPage />}
+            {route.page === 'skills' && <SkillsPage target={route.target} revision={notificationRevision} />}
             {route.page === 'curiosity' && <CuriosityPage revision={taskRevision} />}
           </div>
         </main>

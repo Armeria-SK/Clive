@@ -119,14 +119,14 @@
 - 使うもの: 読まれる側（`src/engine/workspace.ts` と `src/app.ts` が使う）
 
 ### 画面 — `web/src`（React 19 + Vite）
-- 経路は URL のハッシュ（`#/c/<id>` `#/tasks[/<id>]` `#/today` `#/notifications` `#/review` `#/memory` `#/skills` `#/curiosity` `#/settings` `#/runs`）。古い経路は通知のリンクに保存されているので、移した後もずっと受け付ける。`#/today` は、広い画面では右のパネルを開いて直前の会話に戻し、760px 未満では「いまの動き」のページになる。サーバーとは `api.ts`（HTTP）と `events.ts`（SSE。出来事の型はサーバーの `RunEvent` の手書きの写し）だけで話す。
+- 経路は URL のハッシュ（`#/c/<id>` `#/tasks[/<id>]` `#/today` `#/notifications` `#/review` `#/memory` `#/skills[/<名前>|/draft/<名前>]` `#/curiosity` `#/settings` `#/runs`）。`#/skills/<名前>` はそのスキルの窓、`#/skills/draft/<名前>` はレビュー待ちの下書きの窓を開く。スキルの下書きの通知は `#/review` を保存しているので、通知を押したときは題の「…: <名前>」から下書きの窓へ移す（`skills-meta.ts` の `skillDraftLink`）。古い経路は通知のリンクに保存されているので、移した後もずっと受け付ける。`#/today` は、広い画面では右のパネルを開いて直前の会話に戻し、760px 未満では「いまの動き」のページになる。サーバーとは `api.ts`（HTTP）と `events.ts`（SSE。出来事の型はサーバーの `RunEvent` の手書きの写し）だけで話す。
 - ファイル:
   - `main.tsx` `App.tsx`: 入口。`main.tsx` はテーマと言語を決め、サーバーの設定（`/api/settings`）からタイムゾーンを読んでから最初の描画をする（最初の描画は 3 秒までしか待たない。遅れて届いた設定も捨てず、届いた時点で反映する。読めなければ一度だけやり直し、それまでは既定の Asia/Tokyo。読み込みは `i18n/load-timezone.ts`）。`App.tsx` は全体の状態（作成中の返事・承認待ち・ワーカー・未読・実行の開始時刻・使うモデル・再起動の要否）、SSE の出来事の受け取り（トーストとブラウザ通知を含む）、幅の判定、全体のキー操作、下の枠の部品の組み立て。
   - 全体の枠（デザインの寸法どおり。`styles/shell.css`）:
     - `Sidebar.tsx`: 左。姿と名前と様子の一言（姿を押すと右のパネルが開く）、ページの一覧（新しい会話・検索とコマンド・タスク・スキル・ツール・実行ログ・記憶・設定。狭い画面ではさらに「いまの動き」）、まだ新しい場所へ移していない画面（レビュー・好奇心）の小さな入口、会話の一覧（相対時間・作成中の回転印・承認待ちの点）。狭い画面では引き出しになる。
     - `TabBar.tsx`: 上のタブ列。開いたページと会話、×、＋、検索（パレット）、右のパネルの開閉、選んだタブの下線。`NarrowHeader.tsx` は狭い画面の上の帯（メニュー・題・様子の一言・承認待ち・検索・通知）。
     - `StatusBar.tsx`: 下の状態バー。接続（押すと繋ぎ直す）、ワーカーの状態と 1 時間の実行数、実行中のタスクと経過時間、承認待ち、使うモデル（表示だけ）、未読の通知（押すと通知の吹き出し）、ライト/ダークの切り替え。狭い画面では出さない。
-    - `Palette.tsx`: コマンドパレット（⌘K / Ctrl+K、左の「検索とコマンド」、タブ列の虫眼鏡）。操作・会話・タスク・スキルの 4 群を、開くたびに `api.tasks` `api.skills` を読んで作る。↑↓ で選び ↵ で開く（日本語の変換中の Enter は無視）。操作には表示の言語の切り替え、ワーカーの一時停止と再開（`api.setWorker`）が入る。絞り込みと並びの決まりは `palette.ts`（画面を使わない部分。全角の英数字も半角として探す）。
+    - `Palette.tsx`: コマンドパレット（⌘K / Ctrl+K、左の「検索とコマンド」、タブ列の虫眼鏡）。操作・会話・タスク・スキルの 4 群を、開くたびに `api.tasks` `api.skills` を読んで作る（スキルは、そのスキルの窓 `#/skills/<名前>` を開く）。↑↓ で選び ↵ で開く（日本語の変換中の Enter は無視）。操作には表示の言語の切り替え、ワーカーの一時停止と再開（`api.setWorker`）が入る。絞り込みと並びの決まりは `palette.ts`（画面を使わない部分。全角の英数字も半角として探す）。
     - `NotificationBubble.tsx`: 右下のベルから開く通知の吹き出し（新しい 8 件、「すべて既読にする」、「すべて見る」）。`NotificationsPage.tsx`: 通知のタブ（全件）。`#/notifications` はここを開く。`NotificationRow.tsx` は 2 つで共通の 1 件の行。種類ごとの絵と名前、リンクの読み取り（画面の経路として読めるものだけ開く）は `notification-meta.ts`。通知の一覧と未読数は `App.tsx` が持つ。
     - `ActivityPanel.tsx`: 右のパネル「いまの動き」の枠。中身は段階 6 で作り直すまで `Today.tsx`。
     - `toast.tsx`: 右下のトースト（最大 3 件、ホバーで広がる、操作ボタン付き）。`Tooltip.tsx`: `data-tip` `data-kbd` を持つ要素の説明。
@@ -134,7 +134,8 @@
   - `Chat.tsx`: 会話、承認の札、道具の行（この 2 つは `Tasks.tsx` も使う）、添付、入力欄。
   - `Tasks.tsx`: タスクの一覧・新規・詳細とワーカーの操作。ほかの画面が使う `STATUS_LABEL` `WorkerBar` もここにある。新規の「日時を指定」は、サーバーのタイムゾーンの時刻として読んでから送る。
   - `Today.tsx`（きょう。今は右のパネルの中身）。
-  - `Review.tsx`: 3 つのページ。`ReviewPage`（スキルの下書き・自発タスクの提案・振り返りの記録）、`SkillsPage`、`CuriosityPage`。
+  - `SkillsPage.tsx`: スキル・ツール。見出し + 切り替え（スキル / 道具 / フォルダ）。スキルは、レビュー待ちの下書きを先頭に、名前順で並べる（並びの決まりは `skills-meta.ts`）。道具は、画面に固定で持つ 24 個の名前・説明・効果（読む/書く/実行/通信/内部）を見るだけ（サーバーに道具の一覧の API と、道具ごとの方針が無いため）。フォルダは `FoldersPanel.tsx` で、`tools.roots`（読み書き / 読むだけ）と `tools.deny` を直して、保存のときに設定全体を取り直して差し替える（`PUT /api/settings`）。`SkillDialog.tsx` は、スキルの窓（見る・直す・消す・新しく書く）と、下書きの承認 / 却下（直す下書きは、いまの内容と並べて見せる）。画面全体に重ね、狭い幅では下から出るシートになる。
+  - `Review.tsx`: 2 つのページ。`ReviewPage`（自発タスクの提案・振り返りの記録）、`CuriosityPage`。
   - `Memory.tsx`: 記憶 2 冊の一覧・追加・編集・削除・履歴・取り消しと、過去の会話の検索。
   - `Runs.tsx`: 実行の表。道具の記録（`/api/tool-calls`）は画面から使っていない。
   - `Settings.tsx`（テーマと表示の言語・モデルの確認・API キーの有無・設定ファイルの JSON 編集）と `Profile.tsx`（名前・色・動き・形）。
@@ -142,6 +143,7 @@
   - `Markdown.tsx`: 返事の Markdown 表示。
   - `styles/tokens.css`: デザインの色・字体・余白・角丸・影のトークン。`:root` がライト、`:root[data-theme="dark"]` がダークの上書き。文字用のアクセント色（`--color-accent-text`）と薄い文字の 3 段階（`--color-text-muted*`）は、ライトで WCAG AA（4.5:1）に届くようデザインより少し濃くしてある。
   - `styles/components.css`: デザインの部品クラス（`.btn*` `.input` `.field` `.radio` `.seg` `.card*` `.tag*` `.table` `.dialog*` `.hr`）、スクロールバー、keyframes、`prefers-reduced-motion`。
+  - `styles/skills.css`: スキル・ツールの一覧・道具・フォルダと、スキルの窓（画面全体に重なる窓の枠: 背景・Esc・Tab の巡回）の寸法と動き。
   - `styles/shell.css`: 全体の枠（サイドバー・タブ列・状態バー・右のパネル・トースト・ツールチップ）と、通知の吹き出し・コマンドパレット、ページの並び（`.view*`: 大きな題 + 説明 + 中身。通知のタブが最初の使い手）の寸法と動き、登場のアニメーション。
   - `styles.css`: 全体の CSS（1 ファイル）。古いトークン名（`--bg` など）を新しいトークンへの別名にしてあり、既存の画面はこのまま新しい色と字体になる。ダークは `data-theme` だけで決まり、OS の設定には直接従わない。
   - `icon-paths.ts` `icons.tsx`: アイコン 49 個（Lucide、ISC。デザインの `ICON` と添付の `paperclip`）の形は `icon-paths.ts`（出どころとライセンス文はファイルの先頭）、`<Icon name>` で出す部品は `icons.tsx`。
@@ -169,7 +171,7 @@
 - 使うもの: `node src/main.ts`、環境変数 `CLIVE_DATA_DIR`、`/etc/clive/env`
 
 ### テスト — `tests/`
-- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値・設定の遅れた読み込み）、`shell`（全体の枠の、画面を使わない部分: `routes` `tabs` `layout` `keys` `pages` `conversation-state` `palette` `notification-meta` `avatar` の様子の一言と、枠の辞書）。`language` はサーバーの言語（設定の既定値、テンプレートの読み分けと写し、返事の言語の指示、決まり文の英語に日本語が混ざらないこと）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `language` `memory` `providers` `review` `schedule` `shell` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
+- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値・設定の遅れた読み込み）、`skills`（スキル・ツール: 経路・一覧の並び・下書きの通知の行き先・道具の一覧とサーバーの突き合わせ・フォルダの編集・サーバーの API の組み合わせ）、`shell`（全体の枠の、画面を使わない部分: `routes` `tabs` `layout` `keys` `pages` `conversation-state` `palette` `notification-meta` `avatar` の様子の一言と、枠の辞書）。`language` はサーバーの言語（設定の既定値、テンプレートの読み分けと写し、返事の言語の指示、決まり文の英語に日本語が混ざらないこと）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `language` `memory` `providers` `review` `schedule` `shell` `shell-guard` `skills` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
 - `helpers.ts`: 一時フォルダ（`tempDir`）、偽のサーバー（`fakeServer`）、偽のモデル窓口（`FakeAdapter`）と返事の台本（`reply` `fail`）。
 - 入口: `tests/helpers.ts`
 - 使うもの: `src/` の各部品（`App` で組み立てるものが多い）
