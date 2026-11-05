@@ -184,6 +184,7 @@
     "code.launcher": "別の道からコードを動かす道具です（{cmd}）",
     "code.wrapped_unknown": "{cmd} が動かす先のコマンドを取り出せません",
     "code.unknown_target": "何を動かすかがコマンドの文字から分かりません（{detail}）",
+    "code.env": "あとで起こすプロセスにコードを読み込ませられる環境変数を設定します（{name}）",
     "code.loopback": "この PC の中のサーバー（Clive 自身を含む）につなぎます（{host}）",
     "code.git_config": "git の設定を書き換えます（{cmd}）。設定でコードを動かせるので、毎回確かめます",
     "code.self_touch": "このコードは Clive 自身の設定・人格・承認・記憶に触れる文字を含みます: {markers}",

@@ -46,14 +46,22 @@ export const READ_ONLY_CMDS = new Set([
 const GIT_READ_SUBS = new Set([
   'status', 'log', 'diff', 'show', 'blame', 'ls-files', 'ls-tree', 'rev-parse', 'rev-list', 'describe', 'shortlog', 'cat-file', 'grep', 'reflog', 'diff-tree', 'show-ref', 'for-each-ref', 'count-objects', 'ls-remote',
 ]);
-export function readOnlyInvocation(seg: Segment): boolean {
+// コードを動かさない（R1.3 の引数・R1.7 の宛先を見ない）コマンド
+function noCodeRun(seg: Segment): boolean {
   if (READ_ONLY_CMDS.has(seg.cmd)) return true;
   return seg.cmd === 'git' && GIT_READ_SUBS.has(seg.args.find(a => !a.startsWith('-')) ?? '');
+}
+// 引数の場所に書き込まないコマンド（R1.8）。tar・zip などは展開先（-C skills/）に書くので、読むだけには数えない
+const ARCHIVERS = new Set(['tar', 'zip', 'unzip', 'gzip', 'gunzip', '7z', 'expand-archive', 'compress-archive']);
+export function readOnlyInvocation(seg: Segment): boolean {
+  return noCodeRun(seg) && !ARCHIVERS.has(seg.cmd);
 }
 
 const PACKAGE_TOOLS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 const PACKAGE_READONLY_SUB = new Set(['ls', 'list', 'll', 'la', 'view', 'info', 'show', 'outdated', 'why', 'explain', 'help', 'audit', 'version', 'bin', 'root', 'prefix']);
 const RUNNER_TOOLS = new Set(['uv', 'poetry', 'pipenv', 'pdm', 'hatch', 'rye', 'bundle']);
+// パッケージの道具を取ってきて（または node_modules/.bin のものを）動かす。node_modules は Clive が書き換えられるので、毎回確かめる
+const NPX_TOOLS = new Set(['npx', 'pnpx', 'bunx']);
 const BUILD_TOOLS = new Set([
   'make', 'gmake', 'nmake', 'just', 'rake', 'ninja', 'mvn', 'gradle', 'gradlew', 'ant', 'sbt', 'pytest', 'tox', 'nox', 'jest', 'vitest', 'mocha', 'playwright', 'msbuild',
 ]);
@@ -68,7 +76,7 @@ const PROJECT_FILES: Record<string, string[]> = {
   uv: ['pyproject.toml'], poetry: ['pyproject.toml'], pdm: ['pyproject.toml'], hatch: ['pyproject.toml'],
 };
 
-const SPAWNERS = new Set(['start-process', 'saps', 'start', 'setsid', 'at', 'batch', 'systemd-run', 'start-job', 'start-threadjob', 'invoke-command', 'icm', 'new-pssession', 'enter-pssession', 'screen', 'tmux']);
+const SPAWNERS = new Set(['wsl', 'start-process', 'saps', 'start', 'setsid', 'at', 'batch', 'systemd-run', 'start-job', 'start-threadjob', 'invoke-command', 'icm', 'new-pssession', 'enter-pssession', 'screen', 'tmux']);
 const LAUNCHERS = new Set(['rundll32', 'regsvr32', 'installutil', 'regasm', 'regsvcs', 'cmstp', 'msiexec', 'wmic', 'bitsadmin']);
 const WEB_CMDLETS = new Set(['invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm', 'curl', 'wget']);
 const SAFE_TYPES = new Set(['datetime', 'timespan', 'guid', 'regex', 'int', 'int32', 'int64', 'uint32', 'uint64', 'long', 'double', 'decimal', 'float', 'single', 'string', 'char', 'bool', 'byte']);
@@ -171,7 +179,7 @@ function commandFileFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
 
 // ── R1.3 コードのファイルを引数に取る、読むだけでないコマンド ──
 function argFileFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
-  if (readOnlyInvocation(seg) || seg.cmd === 'git' || STATEMENT_WORDS.has(seg.cmd) || /^[$(]/u.test(seg.rawCmd)) return [];
+  if (noCodeRun(seg) || seg.cmd === 'git' || STATEMENT_WORDS.has(seg.cmd) || /^[$(]/u.test(seg.rawCmd)) return [];
   if (INTERPRETER.test(seg.cmd) || POWERSHELL.test(seg.cmd) || SPAWNERS.has(seg.cmd) || PACKAGE_TOOLS.has(seg.cmd)) return [];
   const files = plainArgs(seg).map(a => a.replace(/^-[A-Za-z]+[:=]/u, '')).filter(a => !a.startsWith('-') && CODE_EXT.test(a));
   return files.length ? [finding(ctx.language, 'code.arg_file', { cmd: seg.cmd, path: files[0]! }, true, resolveAll(files, ctx))] : [];
@@ -188,6 +196,7 @@ function projectToolFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
     if (seg.cmd === 'bun' && sub && fileLike(sub)) return [finding(ctx.language, 'code.file_run', { path: sub }, true, resolveAll([sub], ctx))];
     return sub && PACKAGE_READONLY_SUB.has(sub) ? [] : [tool()];
   }
+  if (NPX_TOOLS.has(seg.cmd)) return infoOnly(args) ? [] : [tool()];
   if (RUNNER_TOOLS.has(seg.cmd)) return sub === 'run' || sub === 'exec' ? [tool()] : [];
   if (BUILD_TOOLS.has(seg.cmd)) return infoOnly(args) ? [] : [tool()];
   const readonly = TOOLCHAINS_READONLY.get(seg.cmd);
@@ -296,9 +305,33 @@ function scanFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   return found.length ? [finding(ctx.language, 'code.unknown_target', { detail: [...new Set(found)].join(', ') }, false)] : [];
 }
 
+// ── R1.6 の続き: コードを動かせる環境変数 ──
+// どれも、あとで起こすプロセスの起動時に読み込まれ、コードを動かせる（NODE_OPTIONS=--require ./put.js など）。NODE_ENV のような設定だけの値は含めない
+const CODE_ENV = new RegExp(`^(?:${[
+  'NODE_OPTIONS', 'NODE_PATH', 'BASH_ENV', 'ENV', 'PYTHONSTARTUP', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+  'PERL5OPT', 'PERL5LIB', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH', 'GIT_SSH_COMMAND', 'GIT_SSH', 'GIT_EXTERNAL_DIFF', 'GIT_ASKPASS',
+  'GIT_PAGER', 'GIT_EDITOR', 'GIT_EXEC_PATH', 'GIT_PROXY_COMMAND', 'GIT_TEMPLATE_DIR', 'GIT_CONFIG\\w*', 'PAGER', 'EDITOR', 'VISUAL', 'PROMPT_COMMAND', 'PATH', 'PATHEXT', 'PSMODULEPATH', 'COMSPEC',
+  'SHELL', 'RUSTC_WRAPPER', 'CARGO_BUILD_RUSTC_WRAPPER', 'GOFLAGS', 'NPM_CONFIG_SCRIPT_SHELL', 'NPM_CONFIG_NODE_OPTIONS',
+].join('|')})$`, 'iu');
+
+function envFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
+  const names: string[] = [...(seg.envAssign ?? [])];
+  const assigned = /^\$env:(\w+)/iu.exec(seg.rawCmd);
+  // $env:NAME = ...（読むだけの $env:PATH は数えない）
+  if (assigned && (/^\$env:\w+\s*[+\-*/]?=/iu.test(seg.rawCmd) || /^[+\-*/]?=$/u.test(seg.args[0] ?? ''))) names.push(assigned[1]!);
+  if (/^(?:export|declare|typeset|setx|set|setenv|readonly|local)$/u.test(seg.cmd)) {
+    for (const arg of plainArgs(seg).filter(a => !a.startsWith('-')).slice(0, 2)) names.push(/^(\w+)/u.exec(arg)?.[1] ?? '');
+  }
+  if (/^(?:set-item|si|set-content|sc|new-item|ni|new-itemproperty|set-variable|sv)$/u.test(seg.cmd)) {
+    for (const arg of plainArgs(seg)) { const m = /^(?:-[A-Za-z]+[:=])?env:(\w+)/iu.exec(arg); if (m) names.push(m[1]!); }
+  }
+  const hit = names.find(name => CODE_ENV.test(name));
+  return hit ? [finding(ctx.language, 'code.env', { name: hit }, false)] : [];
+}
+
 // ── R1.7 この PC の中のサーバー・Clive 自身 ──
 function loopbackFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
-  if (readOnlyInvocation(seg)) return [];
+  if (noCodeRun(seg)) return [];
   const hit = LOOPBACK.exec(seg.raw);
   if (hit) return [finding(ctx.language, 'code.loopback', { host: hit[0].replace(/^[^\w[:]/u, '') }, false)];
   const lower = seg.raw.toLowerCase();
@@ -330,6 +363,6 @@ export function codeFindings(seg: Segment, ctx: CodeContext): CodeFinding[] {
   const argFile = interpreter.length || fileCommand.length ? [] : argFileFindings(seg, ctx);
   return [
     ...interpreter, ...fileCommand, ...argFile, ...projectToolFindings(seg, ctx),
-    ...spawnFindings(seg, ctx), ...unknownTargetFindings(seg, ctx), ...loopbackFindings(seg, ctx), ...gitConfigFindings(seg, ctx),
+    ...spawnFindings(seg, ctx), ...unknownTargetFindings(seg, ctx), ...envFindings(seg, ctx), ...loopbackFindings(seg, ctx), ...gitConfigFindings(seg, ctx),
   ];
 }

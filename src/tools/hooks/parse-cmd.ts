@@ -8,6 +8,8 @@ export interface Segment {
   rawCmd: string;
   // 先頭が & （呼び出し演算子）・. （ドットソース）・source だった
   invoke?: 'call' | 'dot' | 'source';
+  // コマンドの前に付いた環境変数の代入（FOO=1 cmd・env FOO=1 cmd）の名前
+  envAssign?: string[];
   // 標準入力の出どころ: 前のコマンドのパイプ・< のリダイレクト・ヒアドキュメントか here-string
   stdin?: 'pipe' | 'redirect' | 'heredoc';
 }
@@ -215,12 +217,24 @@ function normalizeSegment(seg: string, depth: number, backticks: boolean, from: 
   const tokens = rawTokens.map(unquoteToken);
   if (!tokens.length) return [];
   let idx = 0;
-  while (idx < tokens.length && /^\w+=/u.test(tokens[idx]!)) idx++; // FOO=1 cmd
+  const envAssign: string[] = [];
+  const skipAssignments = () => {
+    for (let m = /^(\w+)=/u.exec(tokens[idx] ?? ''); m; m = /^(\w+)=/u.exec(tokens[idx] ?? '')) { envAssign.push(m[1]!); idx++; } // FOO=1 cmd
+  };
+  skipAssignments();
   let invoke: Segment['invoke'] = from.call ? 'call' : undefined;
   while (idx < tokens.length) {
     const t = tokens[idx]!;
     const stripped = stripExeSuffix(t.toLowerCase());
-    if (WRAPPERS.has(t) || WRAPPERS.has(stripped) || t === '\\') { idx++; continue; }
+    if (WRAPPERS.has(t) || WRAPPERS.has(stripped) || t === '\\') {
+      idx++;
+      if (stripped === 'env') {
+        // env -i -u NAME -C DIR FOO=1 cmd
+        while (idx < tokens.length && tokens[idx]!.startsWith('-')) idx += /^-[uCS]$/u.test(tokens[idx]!) ? 2 : 1;
+      }
+      skipAssignments();
+      continue;
+    }
     if (LEADING_WORDS.has(t) || /^\(+$/u.test(t)) { idx++; continue; }
     if (t === '&' || t === '.') { invoke = t === '.' ? 'dot' : 'call'; idx++; continue; } // PowerShell の呼び出し演算子・ドットソース
     break;
@@ -242,6 +256,7 @@ function normalizeSegment(seg: string, depth: number, backticks: boolean, from: 
     cmd, args: tokens.slice(idx), rawArgs: rest, raw: seg.trim(), rawCmd,
     ...(kind ? { invoke: kind } : {}),
     ...(stdin ? { stdin } : {}),
+    ...(envAssign.length ? { envAssign } : {}),
   };
   if (depth >= 4) return [entry];
 

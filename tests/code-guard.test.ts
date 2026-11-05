@@ -98,6 +98,10 @@ const PROTECTED_PLACES: Array<[string, RegExp]> = [
   ['mv x.sh sub/.git/hooks/post-merge', /git のフォルダ（.git）に書き込みます/u],
   ['cp put.js .git/config', /git のフォルダ（.git）に書き込みます/u],
   ['python tool.py .git/hooks/pre-commit', /git のフォルダ（.git）を指しています/u],
+  ['tar xf a.tgz -C skills/x', /スキルのフォルダを指しています/u],
+  ['tar xf a.tgz -C .git/hooks', /git のフォルダ（.git）を指しています/u],
+  ['unzip a.zip -d skills/x', /スキルのフォルダに書き込みます/u],
+  ['Expand-Archive a.zip -DestinationPath skills/x', /スキルのフォルダに書き込みます/u],
 ];
 
 test('L2: スキルのフォルダ・.git への書き込みは、シェルでも確かめ。読むだけは通す', t => {
@@ -207,6 +211,28 @@ const WRAPPED: Array<[string, string]> = [
   ['[System.IO.File]::ReadAllText("put.js")', '.NET の直接呼び出し'],
   ['[scriptblock]::Create("x").Invoke()', 'scriptblock'],
   ['sed -n 1p put.js | node', 'パイプ先'],
+  // 環境変数で、あとで起こすプロセスにコードを読み込ませる
+  ['NODE_OPTIONS="--require ./put.js" npm --version', '先頭の環境変数の代入'],
+  ['NODE_OPTIONS=--require=./put.js npm ls', '先頭の環境変数の代入（引用符なし）'],
+  ['env NODE_OPTIONS=--require=./put.js npm --version', 'env の先の代入'],
+  ['env -i FOO=1 npm test', 'env のフラグと代入を飛ばして、先を見る'],
+  ['env FOO=1 make', 'env の代入のあとのコマンド'],
+  ['PATH=./bin:$PATH ls', 'PATH の差し替え'],
+  ['export NODE_OPTIONS=--require=./put.js', 'export'],
+  ['export BASH_ENV=./put.sh', 'BASH_ENV'],
+  ['$env:NODE_OPTIONS = "--require ./put.js"', 'PowerShell の $env: への代入'],
+  ['$env:PATH = "./bin;" + $env:PATH', 'PowerShell の PATH の差し替え'],
+  ['Set-Item env:NODE_OPTIONS "--require ./put.js"', 'Set-Item env:'],
+  ['cmd /c "set NODE_OPTIONS=--require ./put.js && npm ls"', 'cmd の set'],
+  // npx 系・wsl
+  ['npx tsc --noEmit', 'npx（node_modules/.bin は Clive が書き換えられる）'],
+  ['npx prettier --check .', 'npx'],
+  ['pnpx tsc', 'pnpx'],
+  ['bunx tsc', 'bunx'],
+  ['pnpm dlx create-foo', 'pnpm dlx'],
+  ['npm exec foo', 'npm exec'],
+  ['wsl node put.js', 'wsl の先'],
+  ['wsl -e bash -c "node put.js"', 'wsl -e'],
 ];
 
 test('V2: 包み方を変えても、コードを動かすものは毎回確かめになる', t => {
@@ -230,6 +256,7 @@ const LEGIT = [
   'Get-Process | Sort-Object CPU -Descending | Select-Object -First 5', 'if (Test-Path put.js) { Write-Host yes }', 'if (Test-Path put.js) { Write-Host yes } else { Write-Host no }',
   'for f in a b; do echo hi; done', 'if [ -f put.js ]; then echo yes; fi', 'while true; do echo hi; done < list.txt', 'echo hi > out.txt', 'echo hi >> out.txt', 'ls 2>&1 | head',
   'cat put.js | grep fetch', 'cat put.js | wc -l', 'git commit -c HEAD -m x', 'git diff SOUL.md', 'cat SOUL.md', 'grep foo SOUL.md', 'pwsh --version',
+  'NODE_ENV=production npm --version', 'GIT_AUTHOR_NAME=x git status', 'FOO=bar echo hi', 'export FOO=bar', '$env:FOO = "x"', '$env:PATH', '$env:PATH -split ";"', 'tar tf a.tgz', 'tar czf a.tgz sub',
   'tsc --noEmit', 'sort a.txt | uniq', 'tar czf a.tgz sub', 'unzip a.zip', 'jq .name package.json', 'sed -n 1p put.js', 'awk "{print 1}" a.txt', 'head -n 5 put.js', 'echo {a,b}', 'ls {src,test}',
 ];
 

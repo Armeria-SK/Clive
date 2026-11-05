@@ -76,7 +76,7 @@
 - `pipeline.ts`: 道具 1 回の流れ。引数の検査 → 事前の判定 → 外から読んだ内容のあとは確認を求める（書き込み・実行の道具と、`escalateOnTaint` を持つ道具 = 記憶の追加・書き換え・削除 `memory_save` `memory_update` `memory_forget`）→ 実行前フック → 承認（コードを動かす確かめは、会話の許可を見ず、承認のあとにもう一度判定して、見せたファイルの中身が変わっていたら動かさない）→ 実行 → 実行後フック → `tool_calls` に記録。振り返りでは書き込み・実行・通信の道具を使わせない。
 - 中の部品:
   - `builtin/`: 組み込みの道具 24 個（`files` `shell` `web` `memory` `tasks` `curiosity` `skills`）。
-  - `hooks/`: 実行前の判定（`parse-cmd.ts` コマンドの分解〔`$( )` `{ }` `if/then` の中身・パイプ・リダイレクトの出どころも読む〕、`scope.ts` フォルダの範囲、`shell-guard.ts` シェルの判定、`code-guard.ts` コードを動かす前の確かめ〔ファイルや組み立てた文字のコード・別のプロセス・この PC の中のサーバー・git の設定。見つけたものは毎回確かめ（今回だけ）にして、中身を見せるファイルも返す。持ち主が `tools.shell.allow` に書いたコマンドで外せるのは、ファイル・プロジェクトのコードを動かす確かめだけ〕、`command-hook.ts` 自分で用意した外部コマンド）。
+  - `hooks/`: 実行前の判定（`parse-cmd.ts` コマンドの分解〔`$( )` `{ }` `if/then` の中身・パイプ・リダイレクトの出どころも読む〕、`scope.ts` フォルダの範囲、`shell-guard.ts` シェルの判定、`code-guard.ts` コードを動かす前の確かめ〔ファイルや組み立てた文字のコード・別のプロセス・コードを読み込ませられる環境変数・この PC の中のサーバー・git の設定。見つけたものは毎回確かめ（今回だけ）にして、中身を見せるファイルも返す。持ち主が `tools.shell.allow` に書いたコマンドで外せるのは、ファイル・プロジェクトのコードを動かす確かめだけ〕、`command-hook.ts` 自分で用意した外部コマンド）。
   - `shell/`: 子プロセスの実行（環境変数を絞る、プロセスツリーごと止める）。PowerShell は制限モード（Constrained Language Mode）で起こす: .NET の直接呼び出し・`New-Object`・`Add-Type` が止まり、元のモードへ戻すのも止まる（別の PowerShell を起こす形は制限の外なので `code-guard.ts` が毎回確かめる。pwsh 7 は未確認）。
   - `skills/`: スキル（`SKILL.md`）の読み書きと、下書き・承認。
   - `web/`: 公開ページの取得（`public-page.ts`、LAN の宛先は拒否）、本文の取り出し（`html-text.ts`）、検索（`search.ts`、DuckDuckGo か SearXNG）。
