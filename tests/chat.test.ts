@@ -4,7 +4,7 @@ import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
   advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels,
-  runOverflowOf, SLASH_COMMANDS, sendFailureOf, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
+  restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -252,4 +252,15 @@ test('decideApproval: Enter と札のボタンが同じ札に同時に決定を�
     await assert.rejects(decideApproval('bad1', 'once'), '失敗したときは受け付けを戻すので、もう一度送れる');
     assert.equal(calls.filter(c => c.includes('/bad1')).length, 2);
   } finally { globalThis.fetch = original; }
+});
+
+test('restartApprovalGate: 見ていない間に出た札も、画面に戻ってから 1 秒は Enter で承認されない', () => {
+  const arrived = advanceApprovalGate({ id: null, since: 0 }, 'a', 1_000);
+  assert.equal(approvalEnterAllowed(arrived, 'a', 1_000 + 5 * 60_000), true, '何もしなければ、時間がたてば Enter が効く');
+  const returned = restartApprovalGate(arrived, 1_000 + 5 * 60_000);
+  assert.equal(returned.id, 'a', '札は同じまま、数え直すだけ');
+  assert.equal(approvalEnterAllowed(returned, 'a', 1_000 + 5 * 60_000), false, '戻った直後の Enter は効かない');
+  assert.equal(approvalEnterAllowed(returned, 'a', 1_000 + 5 * 60_000 + APPROVAL_ENTER_GRACE_MS - 1), false);
+  assert.equal(approvalEnterAllowed(returned, 'a', 1_000 + 5 * 60_000 + APPROVAL_ENTER_GRACE_MS), true);
+  assert.deepEqual(restartApprovalGate({ id: null, since: 5 }, 9), { id: null, since: 9 }, '札が無いときも壊れない');
 });

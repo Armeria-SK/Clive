@@ -3,7 +3,7 @@ import { api, ApiError, type Approval, type Message, type ModelView, type Profil
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels, runOverflowOf, sendFailureOf, toolInputSummary,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels, restartApprovalGate, runOverflowOf, sendFailureOf, toolInputSummary,
   type ApprovalGate, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
@@ -144,6 +144,16 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const assistantName = profile?.name ?? 'Clive';
   const frontApprovalId = approvals[0]?.id ?? null;
   useLayoutEffect(() => { frontGate.current = advanceApprovalGate(frontGate.current, frontApprovalId, Date.now()); }, [frontApprovalId]);
+  useEffect(() => {
+    const restart = () => { frontGate.current = restartApprovalGate(frontGate.current, Date.now()); };
+    const onVisibility = () => { if (!document.hidden) restart(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', restart);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', restart);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const el = thread.current;

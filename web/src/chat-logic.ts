@@ -186,6 +186,10 @@ export function advanceApprovalGate(gate: ApprovalGate, frontId: string | null, 
   return gate.id === frontId ? gate : { id: frontId, since: now };
 }
 
+export function restartApprovalGate(gate: ApprovalGate, now: number): ApprovalGate {
+  return { id: gate.id, since: now };
+}
+
 export function approvalEnterAllowed(gate: ApprovalGate, shownId: string | null, now: number, graceMs = APPROVAL_ENTER_GRACE_MS): boolean {
   return shownId !== null && gate.id === shownId && now - gate.since >= graceMs;
 }
