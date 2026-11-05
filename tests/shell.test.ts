@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ModelView, WorkerStatus } from '../web/src/api.ts';
 import { presenceOf } from '../web/src/avatar.ts';
-import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, convMark, isChatGenerating, isChatRun, type RunContext } from '../web/src/conversation-state.ts';
+import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, classifyRun, convMark, isChatGenerating, type RunContext } from '../web/src/conversation-state.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { formatElapsed, formatRelativeCompact, setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
@@ -122,15 +122,18 @@ test('convMark: 承認の待ちは返事を作っている最中に起きるの�
   assert.equal(convMark([], [], 'c1'), null);
 });
 
-test('approvalTargetHash / isChatRun: 会話かタスクかは、一覧に載っているかではなく実行の種類で決める', () => {
+test('approvalTargetHash / classifyRun: 会話かタスクかは、一覧に載っているかではなく実行の種類で決める', () => {
   const context = (patch: Partial<RunContext> = {}): RunContext => ({ taskConversations: new Map([['task-conv', 't1']]), running: null, ...patch });
   assert.equal(approvalTargetHash({ conversationId: 'old-chat', runId: 'r1' }, context()), '#/c/old-chat', '一覧に載っていない古い会話でも会話へ');
   assert.equal(approvalTargetHash({ conversationId: 'task-conv', runId: 'r1' }, context()), '#/tasks/t1', 'タスクの実行の会話はタスクへ');
   assert.equal(approvalTargetHash({ conversationId: 'unknown', runId: 'r9' }, context({ running: { kind: 'task', taskId: 't2', runId: 'r9' } })), '#/tasks/t2', 'タスクの会話がまだ分からなくても、実行中の実行なら');
   assert.equal(approvalTargetHash({ conversationId: 'unknown', runId: 'r9' }, context({ running: { kind: 'review', taskId: null, runId: 'r9' } })), '#/c/unknown', '振り返りの実行はタスクへ送らない');
-  assert.equal(isChatRun('r1', 'old-chat', context()), true, '一覧に載っていない会話の返事も会話の返事');
-  assert.equal(isChatRun('r1', 'task-conv', context()), false, 'タスクの会話');
-  assert.equal(isChatRun('r5', 'x', context({ running: { kind: 'review', taskId: null, runId: 'r5' } })), false, '実行中の振り返り・タスク');
+  const listed = new Set(['listed-chat']);
+  assert.equal(classifyRun('r1', 'listed-chat', context(), listed), 'chat', '一覧（chat だけが載る）に載っている会話');
+  assert.equal(classifyRun('r1', 'old-chat', context(), listed), 'unknown', '一覧の外の会話は決めつけず、サーバーに会話の種類を尋ねる');
+  assert.equal(classifyRun('r1', 'task-conv', context(), listed), 'background', 'タスクの会話');
+  assert.equal(classifyRun('r5', 'x', context({ running: { kind: 'review', taskId: null, runId: 'r5' } }), listed), 'background', '実行中の振り返り・タスク');
+  assert.equal(classifyRun('r6', 'review-conv', context(), listed), 'unknown', '短い振り返りで worker の状態がまだ届いていないときは、会話として扱わない');
 });
 
 test('conversationCountLabel: 一覧は 100 件までなので、100 件に届いたら「100+」と出す', () => {

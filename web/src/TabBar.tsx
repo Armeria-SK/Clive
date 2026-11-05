@@ -14,6 +14,7 @@ interface Props {
   conversations: Conversation[];
   drafts: Draft[];
   approvals: Approval[];
+  chatTitles: Record<string, string>;
   panelOpen: boolean;
   onClose: (key: string) => void;
   onNewChat: () => void;
@@ -21,7 +22,7 @@ interface Props {
   onTogglePanel: () => void;
 }
 
-export function TabBar({ tabs, activeKey, conversations, drafts, approvals, panelOpen, onClose, onNewChat, onSearch, onTogglePanel }: Props) {
+export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chatTitles, panelOpen, onClose, onNewChat, onSearch, onTogglePanel }: Props) {
   const t = useT();
   const bar = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ x: 0, w: 0 });
@@ -44,7 +45,7 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, pane
     if (!isChatTab(tab)) return t(PAGE_META[pageOfTab(tab)].label);
     const id = chatIdOf(tab);
     if (!id) return t('tab.newChat');
-    return conversations.find(c => c.id === id)?.title ?? t('conversation.untitled');
+    return conversations.find(c => c.id === id)?.title ?? chatTitles[id] ?? t('conversation.untitled');
   };
   const kbd = `${modLabel()}/`;
   const panelTip = panelOpen ? t('panel.hide') : t('panel.show');

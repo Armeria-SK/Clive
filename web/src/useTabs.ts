@@ -3,13 +3,19 @@ import { api, ApiError, type Conversation } from './api.ts';
 import { routeHash, type Route } from './routes.ts';
 import { closeTab, dropChats, findGoneChats, loadTabs, openTab, saveTabs, toTab, unlistedChatIds, type ChatProbe, type Tab } from './tabs.ts';
 
-async function probeChat(id: string): Promise<ChatProbe> {
-  try { await api.messages(id); return 'exists'; } catch (error) { return error instanceof ApiError && error.status === 404 ? 'gone' : 'unknown'; }
+// 一覧（100 件まで）の外の会話は、題が一覧に無いので、確かめるついでに題も受け取って、タブの名前にする。
+async function probeChat(id: string, found: Record<string, string>): Promise<ChatProbe> {
+  try {
+    const r = await api.messages(id);
+    if (r.conversation.title) found[id] = r.conversation.title;
+    return 'exists';
+  } catch (error) { return error instanceof ApiError && error.status === 404 ? 'gone' : 'unknown'; }
 }
 
 // タブは「開いた経路の一覧」だけを持つ。今どれを開いているかは URL のハッシュが唯一の正で、タブはそれに従う。
 export function useTabs(route: Route, conversations: Conversation[], conversationsLoaded: boolean) {
   const [tabs, setTabs] = useState<Tab[]>(() => loadTabs());
+  const [titles, setTitles] = useState<Record<string, string>>({});
   const current = toTab(routeHash(route));
   const activeKey = useRef<string | null>(null);
   const append = useRef(false);
@@ -32,9 +38,13 @@ export function useTabs(route: Route, conversations: Conversation[], conversatio
     if (!conversationsLoaded || pruned.current) return;
     pruned.current = true;
     const keep = activeKey.current;
-    const candidates = unlistedChatIds(tabsNow.current, new Set(conversations.map(c => c.id)), keep);
+    const candidates = unlistedChatIds(tabsNow.current, new Set(conversations.map(c => c.id)), null);
     if (!candidates.length) return;
-    void findGoneChats(candidates, probeChat).then(gone => { if (gone.size) setTabs(prev => dropChats(prev, gone, keep)); });
+    const found: Record<string, string> = {};
+    void findGoneChats(candidates, id => probeChat(id, found)).then(gone => {
+      if (Object.keys(found).length) setTitles(found);
+      if (gone.size) setTabs(prev => dropChats(prev, gone, keep));
+    });
   }, [conversations, conversationsLoaded]);
 
   const close = useCallback((key: string) => {
@@ -49,5 +59,5 @@ export function useTabs(route: Route, conversations: Conversation[], conversatio
     location.hash = '#/';
   }, []);
 
-  return { tabs, activeKey: current?.key ?? null, close, openNewChat };
+  return { tabs, titles, activeKey: current?.key ?? null, close, openNewChat };
 }

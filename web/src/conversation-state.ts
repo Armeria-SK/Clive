@@ -41,7 +41,13 @@ export function approvalTargetHash(approval: { conversationId: string; runId: st
   return taskId ? `#/tasks/${encodeURIComponent(taskId)}` : chatHash(approval.conversationId);
 }
 
+export type RunGuess = 'chat' | 'background' | 'unknown';
+
 // ユーザーが会話で頼んだ実行か（タスクと振り返りの実行ではないか）。
-export function isChatRun(runId: string, conversationId: string, context: RunContext): boolean {
-  return !context.taskConversations.has(conversationId) && context.running?.runId !== runId;
+// 実行中のタスク・振り返り（worker.running）やタスクの会話は「background」、会話の一覧（chat だけが載る）に載っていれば「chat」。
+// どちらとも分からない（一覧の外の古い会話か、実行が短くて worker の状態がまだ届いていない振り返り）は「unknown」で、
+// 呼び出し側が会話の種類をサーバーに尋ねて決める。
+export function classifyRun(runId: string, conversationId: string, context: RunContext, listedChatIds: ReadonlySet<string>): RunGuess {
+  if (context.taskConversations.has(conversationId) || context.running?.runId === runId) return 'background';
+  return listedChatIds.has(conversationId) ? 'chat' : 'unknown';
 }

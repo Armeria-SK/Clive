@@ -6,7 +6,7 @@ import { Chat, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
 import { useEscapeLayer } from './hooks.ts';
 import { useT, type DictKey } from './i18n/index.ts';
-import { approvalTargetHash, isChatGenerating, isChatRun, type RunContext } from './conversation-state.ts';
+import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
@@ -91,6 +91,9 @@ export function App() {
     void api.profile().then(setProfile).catch(() => undefined);
   }, [refreshList, refreshApprovals, refreshWorker, refreshTasks, refreshMeta]);
   useEffect(() => { refreshNotifications(); }, [refreshNotifications]);
+  // 最初の読み込みに失敗していたら、吹き出しか通知のタブを開いたときにやり直す
+  const notificationsVisible = notifOpen || route.page === 'notifications';
+  useEffect(() => { if (notificationsVisible && notificationsFailed) refreshNotifications(); }, [notificationsVisible, notificationsFailed, refreshNotifications]);
   // 静かな時間帯や次に起きる時刻は時間とともに変わるので、ときどき取り直す
   useEffect(() => { const timer = setInterval(refreshWorker, 30_000); return () => clearInterval(timer); }, [refreshWorker]);
   useEffect(() => {
@@ -255,12 +258,21 @@ export function App() {
         if (!e.ok && e.errorKind !== 'cancelled') {
           addNotice(e.conversationId, { runId: e.runId, kind: 'error', message: t('notice.runFailed', e.errorMessage ?? e.errorKind ?? ''), hint: e.detail?.hint });
         }
-        if (e.ok && isChatRun(e.runId, e.conversationId, runContext()) && (document.hidden || currentRef.current !== e.conversationId)) {
-          const title = conversationsRef.current.find(c => c.id === e.conversationId)?.title ?? t('conversation.untitled');
-          toast({
-            kind: 'done', icon: 'msg', title: t('toast.replyReady'), body: title,
+        if (e.ok && (document.hidden || currentRef.current !== e.conversationId)) {
+          const replyReady = (title: string | null) => toast({
+            kind: 'done', icon: 'msg', title: t('toast.replyReady'), body: title ?? t('conversation.untitled'),
             action: { label: t('toast.open'), run: () => { location.hash = chatHash(e.conversationId); } },
           });
+          const listed = new Set(conversationsRef.current.map(c => c.id));
+          const guess = classifyRun(e.runId, e.conversationId, runContext(), listed);
+          if (guess === 'chat') replyReady(conversationsRef.current.find(c => c.id === e.conversationId)?.title ?? null);
+          else if (guess === 'unknown') {
+            // 一覧の外の古い会話か、短い振り返り。会話の種類（タスクと振り返りは chat 以外）をサーバーに尋ねる
+            void api.messages(e.conversationId).then(r => {
+              const conversation = r.conversation as Conversation & { kind?: string };
+              if (conversation.kind === 'chat') replyReady(conversation.title);
+            }).catch(() => undefined);
+          }
         }
         break;
       }
@@ -376,7 +388,7 @@ export function App() {
                 onSearch={openPalette} onNotifications={toggleNotifications} notificationsOpen={notifOpen} />
             : (
               <TabBar
-                tabs={tabState.tabs} activeKey={tabState.activeKey} conversations={conversations} drafts={drafts} approvals={approvals}
+                tabs={tabState.tabs} activeKey={tabState.activeKey} conversations={conversations} drafts={drafts} approvals={approvals} chatTitles={tabState.titles}
                 panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onSearch={openPalette} onTogglePanel={togglePanel}
               />
             )}
