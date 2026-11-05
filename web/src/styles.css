@@ -120,13 +120,6 @@ select { font: inherit; color: var(--text); background: var(--bg); border: 1px s
 .answer { border: 2px solid var(--warn); border-radius: var(--radius); padding: 12px 14px; margin: 16px 0; background: color-mix(in srgb, var(--warn) 7%, var(--panel)); }
 .task-transcript { margin-top: 24px; }
 .task-transcript summary { cursor: pointer; margin-bottom: 12px; }
-.presence { display: flex; gap: 20px; align-items: center; margin-bottom: 16px; }
-.presence h1 { margin: 0; }
-.presence p { margin: 4px 0 0; color: var(--muted); }
-.counts { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 8px; }
-.counts .count { display: flex; flex-direction: column; padding: 10px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); text-decoration: none; color: var(--text); min-width: 120px; }
-.counts .count strong { font-size: 1.5em; }
-.counts .count span { color: var(--muted); font-size: 0.88em; }
 .profile-editor { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .avatar-preview { display: flex; gap: 16px; align-items: center; }
 .shape-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 6px; margin: 12px 0; }

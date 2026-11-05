@@ -51,6 +51,7 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [waiting, setWaiting] = useState<Set<string>>(new Set());
   const [taskRevision, setTaskRevision] = useState(0);
+  const [runRevision, setRunRevision] = useState(0);
   const [notificationRevision, setNotificationRevision] = useState(0);
   const [celebrating, setCelebrating] = useState(false);
   const [modelName, setModelName] = useState<string | null>(null);
@@ -207,6 +208,7 @@ export function App() {
       case 'run.start':
         setDrafts(ds => [...ds.filter(d => d.runId !== e.runId), { runId: e.runId, conversationId: e.conversationId, modelId: e.modelId, text: '' }]);
         setRunStarts(starts => ({ ...starts, [e.runId]: Date.now() }));
+        setRunRevision(n => n + 1);
         refreshWorker();
         break;
       case 'model.switch':
@@ -252,6 +254,7 @@ export function App() {
       case 'run.end': {
         setDrafts(ds => ds.filter(d => d.runId !== e.runId));
         setRunStarts(({ [e.runId]: _ended, ...rest }) => rest);
+        setRunRevision(n => n + 1);
         bump(e.conversationId);
         refreshList();
         refreshWorker();
@@ -367,7 +370,9 @@ export function App() {
   const pane = (
     <ActivityPanel
       variant={narrow ? 'page' : 'side'} open={panelOpen} overlay={mode === 'mid'} profile={profile} presence={presence}
-      approvals={approvals.length} unread={unread} worker={worker} onWorker={setWorker} revision={taskRevision} onClose={() => showPanel(false)}
+      worker={worker} onWorker={setWorker} approvals={approvals.length} waitingCount={waiting.size} unread={unread}
+      taskRevision={taskRevision} runRevision={runRevision} runStartedAt={runningId ? runStarts[runningId] : undefined}
+      onOpenApproval={openApproval} onClose={() => showPanel(false)}
     />
   );
   const viewKey = route.page === 'chat' ? `chat:${current ?? 'new'}` : route.page;

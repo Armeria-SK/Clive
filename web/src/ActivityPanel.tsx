@@ -1,9 +1,9 @@
+import { ActivityBody } from './ActivityBody.tsx';
 import type { Profile, WorkerStatus } from './api.ts';
 import type { Runtime } from './avatar.ts';
 import { Icon } from './icons.tsx';
 import { useT } from './i18n/index.ts';
 import { WORKER_STATE_LABEL, workerState } from './pages.ts';
-import { Today } from './Today.tsx';
 
 interface Props {
   variant: 'side' | 'page';
@@ -11,22 +11,27 @@ interface Props {
   overlay: boolean;
   profile: Profile | null;
   presence: { runtime: Runtime; sleeping: boolean; line: string };
-  approvals: number;
-  unread: number;
   worker: WorkerStatus | null;
-  onWorker: (w: WorkerStatus) => void;
-  revision: number;
+  onWorker: (worker: WorkerStatus) => void;
+  approvals: number;
+  waitingCount: number;
+  unread: number;
+  taskRevision: number;
+  runRevision: number;
+  runStartedAt: number | undefined;
+  onOpenApproval: () => void;
   onClose: () => void;
 }
 
-// 右のパネル「いまの動き」の枠。中身は段階 6 で作り直すまで、今の「きょう」をそのまま入れる。
+// 右のパネル「いまの動き」。760px 未満では同じ中身が、左のメニューの「いまの動き」のページになる（variant="page"）。
 export function ActivityPanel(props: Props) {
   const t = useT();
   const state = workerState(props.worker);
   const body = (
-    <Today
-      profile={props.profile} presence={props.presence} approvals={props.approvals} unread={props.unread}
-      worker={props.worker} onWorker={props.onWorker} revision={props.revision}
+    <ActivityBody
+      profile={props.profile} presence={props.presence} worker={props.worker} onWorker={props.onWorker}
+      approvals={props.approvals} waitingCount={props.waitingCount} unread={props.unread}
+      taskRevision={props.taskRevision} runRevision={props.runRevision} runStartedAt={props.runStartedAt} onOpenApproval={props.onOpenApproval}
     />
   );
   if (props.variant === 'page') return <div className="activity-page">{body}</div>;

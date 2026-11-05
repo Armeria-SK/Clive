@@ -1,11 +1,12 @@
 import { getLanguage, getTimezone } from './state.ts';
 
-export type DateStyle = 'compact' | 'full' | 'precise';
+export type DateStyle = 'compact' | 'full' | 'precise' | 'time';
 
 const DATE_OPTIONS: Record<DateStyle, Intl.DateTimeFormatOptions> = {
   compact: { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' },
   full: { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' },
   precise: { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' },
+  time: { hour: '2-digit', minute: '2-digit' },
 };
 
 const DAY_MS = 86_400_000;
