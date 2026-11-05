@@ -95,7 +95,6 @@ test('shell: 表形式のプローブ', t => {
     ['echo hello > out.txt', 'allow'],
     ['rm -rf sub/old', 'allow'],
     [`cat ${f.ro}${sep}doc.md`, 'allow', '読み取り専用フォルダを読むのは通す'],
-    ['npm test', 'allow'],
     // 拒否
     [`echo x > ${f.ro}${sep}doc.md`, 'deny', '読み取り専用に書き込み'],
     [`rm ${f.ro}${sep}doc.md`, 'deny'],
@@ -115,6 +114,7 @@ test('shell: 表形式のプローブ', t => {
     ['cd .. && ls', 'ask', '外へ移動'],
     ['npm install left-pad', 'ask', 'パッケージの導入'],
     ['npx some-tool', 'ask'],
+    ['npm test', 'ask', 'package.json の scripts は Clive が書き換えられるので毎回確かめる（tests/code-guard.test.ts に表）'],
     ['git push origin main', 'ask', '外への送信'],
     ['curl -X POST https://example.com -d @data.json', 'ask'],
     ['python -c "import os; os.remove(1)"', 'ask', 'インタプリタへのコード直渡し'],

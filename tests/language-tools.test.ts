@@ -139,7 +139,12 @@ for (const language of ['ja', 'en'] as const) {
     const cmd = shellEdit.call('shell_run', { command: 'npm install left-pad' });
     const shellRequest = await decideNext(shellEdit.approvals, 'deny');
     assert.equal(shellRequest.title, pick(language, 'コマンドを実行する', 'Run a command'));
-    assert.deepEqual(shellRequest.reasons, [pick(language, '承認が必要な操作です: パッケージの導入・公開', 'This operation needs approval: Installing or publishing packages')]);
+    assert.deepEqual(shellRequest.reasons, [
+      pick(language,
+        'npm は作業フォルダのコード（package.json の scripts・テスト・Makefile など）を動かします。毎回確かめます',
+        'npm runs code in the working folder (package.json scripts, tests, a Makefile and the like). It is checked with you every time'),
+      pick(language, '承認が必要な操作です: パッケージの導入・公開', 'This operation needs approval: Installing or publishing packages'),
+    ]);
     assert.ok(shellRequest.details.length === 0 || shellRequest.details.every(d => typeof d === 'string'));
     await cmd;
   });
