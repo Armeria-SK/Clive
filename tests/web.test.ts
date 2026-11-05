@@ -238,3 +238,37 @@ test('API: まだ無い会話への最初の発言は UUID の形の id だけ�
   await s.app.engine.wait(((await fresh.json()) as any).runId);
   assert.equal(s.app.conversations.get('00000000-0000-4000-8000-0000000000aa')?.kind, 'chat');
 });
+
+test('API: 会話のアーカイブは PATCH の archived で戻せる。true と false 以外は 400 で、題の変更も一緒に取りやめる', async t => {
+  const s = await startApp(t);
+  const patch = (id: string, body: unknown) => s.api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  const listed = async () => ((await (await s.api('/api/conversations')).json()) as any).conversations.map((c: any) => c.id) as string[];
+  s.app.conversations.create({ id: 'keep', title: '残す会話' });
+  s.app.conversations.create({ id: 'hide', title: 'しまう会話' });
+  s.app.conversations.append('hide', { role: 'user', content: '大事な話' });
+  const lastAt = s.app.conversations.get('hide')!.last_message_at;
+  assert.deepEqual((await listed()).toSorted(), ['hide', 'keep']);
+
+  assert.equal((await patch('hide', { archived: true })).status, 200);
+  assert.deepEqual(await listed(), ['keep'], 'アーカイブすると一覧から消える');
+  assert.equal(s.app.conversations.messages('hide').length, 1, '中身は残る');
+
+  const restored = await patch('hide', { archived: false });
+  assert.equal(restored.status, 200);
+  assert.equal(((await restored.json()) as any).conversation.archived, 0);
+  assert.deepEqual((await listed()).toSorted(), ['hide', 'keep'], 'false で一覧に戻る');
+  assert.equal(s.app.conversations.get('hide')!.last_message_at, lastAt, '戻しても並びの元になる時刻は変えない');
+  assert.equal((await patch('hide', { archived: false })).status, 200, 'アーカイブしていない会話に false を送っても害は無い');
+
+  for (const bad of ['x', 'true', 1, 0, null, {}, []]) {
+    const refused = await patch('hide', { title: '書き換えない', archived: bad });
+    assert.equal(refused.status, 400, JSON.stringify(bad));
+    const body = (await refused.json()) as any;
+    assert.deepEqual([body.error, body.code, body.field], ['invalid_field', 'http.bad_bool', 'archived']);
+    assert.equal(s.app.conversations.get('hide')!.title, 'しまう会話', '断ったら題も変えない');
+  }
+  assert.equal(s.app.conversations.get('hide')!.archived, 0);
+  assert.equal((await patch('nothing', { archived: false })).status, 404);
+  assert.equal((await patch('hide', { title: '題だけ変える' })).status, 200, 'archived を送らなければ今まで通り');
+  assert.equal(s.app.conversations.get('hide')!.title, '題だけ変える');
+});

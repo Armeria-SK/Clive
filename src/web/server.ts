@@ -93,8 +93,12 @@ export function createWebServer(app: App): WebServer {
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     const body = requireObject(await readJson(req));
     const title = requireString(body, 'title', { optional: true, max: 200 });
+    if (body.archived !== undefined && typeof body.archived !== 'boolean') {
+      throw problem(400, 'invalid_field', 'bad_bool', { field: 'archived', params: { field: 'archived' } });
+    }
     if (title) app.conversations.rename(id, title);
     if (body.archived === true) app.conversations.archive(id);
+    if (body.archived === false) app.conversations.unarchive(id);
     sendJson(res, 200, { conversation: app.conversations.get(id) });
   });
   router.add('GET', '/api/conversations/:id/messages', ({ res, params }) => {

@@ -119,6 +119,7 @@ export const api = {
   conversations: () => call<{ conversations: Conversation[] }>('/api/conversations'),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
+  unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),
   messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   decide: (id: string, decision: 'once' | 'conversation' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),

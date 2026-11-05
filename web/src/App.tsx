@@ -255,7 +255,8 @@ export function App() {
   const onConversationChanged = useCallback((change: ConversationChange) => {
     refreshList();
     if (change.kind === 'archived') tabState.close(`chat:${change.id}`);
-  }, [refreshList, tabState.close]);
+    if (change.kind === 'unarchived') tabState.openChat(change.id);
+  }, [refreshList, tabState.close, tabState.openChat]);
   const addNotice = (conversationId: string, notice: RunNotice) =>
     setNotices(state => ({ ...state, [conversationId]: [...(state[conversationId] ?? []), notice].slice(-8) }));
   const bump = (conversationId: string) => setRevisions(state => ({ ...state, [conversationId]: (state[conversationId] ?? 0) + 1 }));

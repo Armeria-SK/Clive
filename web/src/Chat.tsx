@@ -32,7 +32,7 @@ export interface RunNotice {
   required?: number | undefined;
 }
 
-export type ConversationChange = { kind: 'renamed' | 'archived'; id: string };
+export type ConversationChange = { kind: 'renamed' | 'archived' | 'unarchived'; id: string };
 
 interface Props {
   conversationId: string | null;
@@ -186,12 +186,26 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   async function archive(): Promise<void> {
     setConfirmArchive(false);
     if (!conversationId) return;
+    const archivedId = conversationId;
     try {
-      await api.archiveConversation(conversationId);
-      toast({ kind: 'info', icon: 'archive', title: t('chat.archive.done'), ...(title ? { body: title } : {}) });
-      onConversationChanged({ kind: 'archived', id: conversationId });
+      await api.archiveConversation(archivedId);
+      toast({
+        kind: 'info', icon: 'archive', title: t('chat.archive.done'), ...(title ? { body: title } : {}),
+        action: { label: t('chat.archive.undo'), run: () => { void unarchive(archivedId); } },
+      });
+      onConversationChanged({ kind: 'archived', id: archivedId });
     } catch (error) {
       toast({ kind: 'info', icon: 'alert', title: t('chat.archive.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    }
+  }
+
+  async function unarchive(id: string): Promise<void> {
+    try {
+      await api.unarchiveConversation(id);
+      toast({ kind: 'info', icon: 'undo', title: t('chat.unarchive.done') });
+      onConversationChanged({ kind: 'unarchived', id });
+    } catch (error) {
+      toast({ kind: 'info', icon: 'alert', title: t('chat.unarchive.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
     }
   }
 
