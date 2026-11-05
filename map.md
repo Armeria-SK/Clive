@@ -35,7 +35,7 @@
 - 使うもの: `config` `db` `engine` `providers` `memory` `tasks` `tools` `curiosity` `notify` `uploads` `web`
 
 ### 設定 — `src/config`
-- 設定ファイルの形（`schema.ts`、TypeBox）と、読み書き（`store.ts`）。検証、書く前の `.bak`、壊れたときは直前の正しい設定で動き続ける仕組みを持つ。`server` の変更だけは再起動が要る（`RESTART_KEYS`）。
+- 設定ファイルの形（`schema.ts`、TypeBox）と、読み書き（`store.ts`）。検証、書く前の `.bak`、壊れたときは直前の正しい設定で動き続ける仕組みを持つ。`server` の変更だけは再起動が要る（`RESTART_KEYS`）。`language`（`ja` | `en`）は書かなくてもよい項目で、書かないときの Clive は日本語（`DEFAULT_LANGUAGE`）。「選んでいない」と「ja を選んだ」を区別できるよう、既定値は設定ファイルに書き足さない。再起動は要らない。
 - 入口: `src/config/store.ts`（`ConfigStore`）
 - 使うもの: `src/shared`（`url.ts`）、`@sinclair/typebox`
 
@@ -46,10 +46,11 @@
 
 ### 会話のエンジン — `src/engine`
 - `chat.ts`: `ChatEngine`。送信・やり直し・タスクの実行・振り返りの実行を受け持つ。モデルの並びを順に試し、再試行、予備のモデルへの切り替え、コンテキストへの収め方（`fit.ts`）、古い発言の要約、サーバー側の切り捨ての疑いの検知、道具呼び出しの繰り返しをここで行う。
-- 会話の system の文（ルール・SOUL・USER・記憶・スキル一覧）は、会話ごとに最初の 1 回で固定する。毎回変わる文（現在時刻・要約）は別に組み立てる（`workspace.ts` の `buildSnapshot` / `buildDynamic`）。`workspace.ts` は `SOUL.md` などの初期ファイルを置く役目も持つ。
-- ほか: `bus.ts`（出来事の履歴と作成中の下書き。SSE が読む）、`status.ts`（モデルごとのコンテキスト長の確認結果と休ませる状態）、`health.ts`（失敗が続いたら通知して、しばらく予備のモデルを先に使わせる）、`tokens.ts`（量の見積もり）、`toolcall-parse.ts`（本文に書かれた道具呼び出しを拾う）、`types.ts`（メッセージ・出来事・結果の型）。
+- 会話の system の文（ルール・SOUL・USER・記憶・スキル一覧）は、会話ごとに最初の 1 回で固定する。毎回変わる文（現在時刻・要約）は別に組み立てる（`workspace.ts` の `buildSnapshot` / `buildDynamic`）。`workspace.ts` は `SOUL.md` などの初期ファイルを置く役目も持つ。返事の言語の指示は、固定される system ではなく毎回組み立てる動的な部分（`buildDynamic`）に入れるので、すでにある会話にも言語を変えた次のリクエストから付く。それだけでは日本語で続く会話が英語に切り替わらなかったため、会話の始めに固定したときの言語（kv の `snapshot-language:<会話ID>`。記録が無い前からある会話は ja）と今の `language` が違う会話にだけ、送る写しの最後のユーザーの発言へ 1 行の注意を足す（`prompts.ts` の `withReplyReminder`。保存も表示もしない）。ルールと見出しは `language` に合う版で組み立てるが、固定されるのは新しい会話からだけ。
+- `prompts.ts`: 会話の要約の指示と、要約の見出しの言語別の文、言語を変えた会話の最後の発言に足す 1 行の注意。ルールと人格の初期値の読み方（日本語は `templates/` の直下、英語は `templates/en/`、無ければ日本語に戻る）と、起動のときの「無いファイルにだけ写す」も `workspace.ts` にある。
+- ほか: `bus.ts`（出来事の履歴と作成中の下書き。SSE が読む）、`status.ts`（モデルごとのコンテキスト長の確認結果と休ませる状態）、`health.ts`（失敗が続いたら通知して、しばらく予備のモデルを先に使わせる）、`tokens.ts`（量の見積もり）、`toolcall-parse.ts`（本文に書かれた道具呼び出しを拾う。`json_fallback` の道具の説明の文は言語別）、`types.ts`（メッセージ・出来事・結果の型）。
 - 入口: `src/engine/chat.ts`
-- 使うもの: `providers`（モデルの呼び出し）、`tools`（`pipeline` `registry` `policy`）、`memory`（`renderBooks`）、`uploads`（`stripAttachments`）、`db` `config` `tasks`（渡される）、`templates/`（`workspace.ts` 経由）
+- 使うもの: `providers`（モデルの呼び出し）、`tools`（`pipeline` `registry` `policy`）、`memory`（`renderBooks`）、`uploads`（`stripAttachments`）、`db` `config` `tasks`（渡される）、`templates/`（`workspace.ts` 経由）、`src/shared`（`language.ts`）
 
 ### モデルの提供元 — `src/providers`
 - Anthropic・OpenAI 互換・Ollama の 3 つが、共通の窓口（`ProviderAdapter`、`types.ts`）を実装する（`anthropic.ts` `openai-compatible.ts` `ollama.ts`）。返事をストリーミングで受け取ることと、`probe`（サーバーから実際のコンテキスト長を確かめる）を受け持つ。
@@ -58,13 +59,13 @@
 - 使うもの: `config`（型と `OLLAMA_DEFAULT_URL`）、`src/shared`（`url` `redaction`）、`@anthropic-ai/sdk`、`fetch`
 
 ### 記憶 — `src/memory`
-- 記憶 2 冊（`user` と `notes`）の保存・文字数の上限・変更履歴と取り消し（`store.ts`）、過去の会話の検索（`history.ts`、FTS5 trigram）、振り返りの待ち行列とモデルへの指示文（`review.ts`）。
+- 記憶 2 冊（`user` と `notes`）の保存・文字数の上限・変更履歴と取り消し（`store.ts`）、過去の会話の検索（`history.ts`、FTS5 trigram）、振り返りの待ち行列とモデルへの指示文（`review.ts`。指示文は言語別）。
 - 入口: `src/memory/store.ts`（`MemoryStore`）
 - 使うもの: `db`（`transaction`）、`src/shared`（`redaction`）
 
 ### タスクとワーカー — `src/tasks`
 - `store.ts`: タスクと経過の保存、状態の移り変わり、繰り返しの予定から実行用のタスクを作る。`schedule.ts`: 毎日・平日・毎週・毎時・N 分ごとの繰り返しを cron にして読み書きする（曜日の値は 月〜日）。
-- `worker.ts`: `Worker`。タスクを 1 件ずつ選んで `engine` で実行し、なければ振り返り、次に好奇心を見る。失敗の再試行、1 時間あたりの上限、静かな時間帯、一時停止、会話を優先した中断を受け持つ。
+- `worker.ts`: `Worker`。タスクを 1 件ずつ選んで `engine` で実行し、なければ振り返り、次に好奇心を見る。失敗の再試行、1 時間あたりの上限、静かな時間帯、一時停止、会話を優先した中断、画面から「止めた」タスクを 20 秒ほどで実行待ちに戻すことを受け持つ。タスクの実行の指示（`taskPrompt`）は `language` に合わせて書く。
 - 入口: `src/tasks/worker.ts`
 - 使うもの: `memory`（振り返りの指示文）、`db`、`croner`。`engine`（`ChatEngine`）・`notify`・`curiosity`・`config` は `App` から渡される
 
@@ -82,6 +83,7 @@
 
 ### 好奇心 — `src/curiosity`
 - 好奇心リストの保存と状態（`open` `researching` `done` `dropped`）、タスクにする、終わったタスクの結果を受け取る、`CURIOSITY.md` の一度だけの取り込み。
+- `text.ts`: 好奇心から作るタスクの題・本文・完了の条件の言語別の文。
 - 入口: `src/curiosity/store.ts`（`CuriosityStore`）
 - 使うもの: `node:sqlite` だけ
 
@@ -96,22 +98,23 @@
 - 使うもの: `src/shared`（`pdf-text`）、`node:fs`
 
 ### 共通の小道具 — `src/shared`
-- `url.ts`（ループバックの判定、`baseUrl` の検査）、`redaction.ts`（秘密の伏せ字）、`pdf-text.ts`（PDF から本文を取り出す）、`http-json.ts`（JSON を取る小さな関数。今はどこからも使われていない）。
+- `url.ts`（ループバックの判定、`baseUrl` の検査）、`redaction.ts`（秘密の伏せ字）、`pdf-text.ts`（PDF から本文を取り出す）、`http-json.ts`（JSON を取る小さな関数。今はどこからも使われていない）、`language.ts`（設定から Clive の言語を決める `languageOf`）。
 - 入口: 部品ごとに別（まとまった入口はない）
 - 使うもの: Node の標準だけ
 
 ### Web サーバー — `src/web`
 - `createWebServer(app)` が `node:http` のサーバーを作る。認証（`auth.ts`、Host・Origin・`Sec-Fetch-Site`・Tailscale のログイン名）、経路の表（`http.ts`）、SSE（`sse.ts`）、静的配信と CSP（`static.ts`。外部のスクリプトと外部のフォントは許さない）。
 - API の置き場所:
-  - `server.ts`: 会話・メッセージ・添付・実行の記録・承認・道具の記録・記憶・履歴・設定・モデルの確認。
+  - `server.ts`: 会話・メッセージ・添付・実行の記録・承認・道具の記録・記憶・履歴・設定・モデルの確認・言語ごとの初期値（`GET /api/templates/:language`。ルールと SOUL / USER / CURIOSITY を返すだけで、作業フォルダには写さない）。
   - `routes-tasks.ts`: タスク・ワーカー・通知・プロフィール（名前・形・色・動き）。
   - `routes-review.ts`: スキルとその下書き・好奇心・振り返りの記録。
 - 入口: `src/web/server.ts`
 - 使うもの: `App`、`config`、`memory`、`tasks`、`tools`（承認・スキル）、`curiosity`、`uploads`、`engine`（`bus`）、`src/shared`
 
 ### 初期ファイルとルール — `templates/`
-- `rules.ja.md`: Clive の基本ルール。新しい会話の最初に system へ入る。
-- `SOUL.md` `USER.md` `CURIOSITY.md`: 人格・ユーザーの情報・気になることの初期値。作業フォルダ（`data/workspace/`）に無いときだけ写される。`CURIOSITY.md` は好奇心リストへ一度だけ取り込まれ、以後は画面で編集する。
+- `rules.ja.md`: Clive の基本ルール（日本語）。新しい会話の最初に system へ入る。
+- `SOUL.md` `USER.md` `CURIOSITY.md`: 人格・ユーザーの情報・気になることの初期値（日本語）。作業フォルダ（`data/workspace/`）に無いときだけ写される。すでにあるファイルは言語を変えても上書きしない。`CURIOSITY.md` は好奇心リストへ一度だけ取り込まれ、以後は画面で編集する。
+- `en/`: 英語版（`rules.md` と、上と同じ 3 つ）。日本語版と同じ見出しの並びで、`language` が `en` のときに使う。ファイルが無ければ日本語の版に戻る。
 - 入口: `templates/rules.ja.md`
 - 使うもの: 読まれる側（`src/engine/workspace.ts` と `src/app.ts` が使う）
 
@@ -166,7 +169,7 @@
 - 使うもの: `node src/main.ts`、環境変数 `CLIVE_DATA_DIR`、`/etc/clive/env`
 
 ### テスト — `tests/`
-- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値・設定の遅れた読み込み）、`shell`（全体の枠の、画面を使わない部分: `routes` `tabs` `layout` `keys` `pages` `conversation-state` `palette` `notification-meta` `avatar` の様子の一言と、枠の辞書）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `memory` `providers` `review` `schedule` `shell` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
+- `node:test`（`npm test`）。サーバー側のテストが中心で、画面の部品の自動テストは無い。ただし画面の中の「画面を開かずに確かめられる部分」だけは、ここから直接読んで試す: `theme`（`web/src/theme.ts` と `web/public/theme-init.js`）、`contrast`（`web/src/styles/tokens.css` の値から文字の濃さを計算して 4.5:1 を割ったら落ちる）、`i18n`（`web/src/i18n/` の辞書・言語の決め方・タイムゾーンの変換・曜日の値・設定の遅れた読み込み）、`shell`（全体の枠の、画面を使わない部分: `routes` `tabs` `layout` `keys` `pages` `conversation-state` `palette` `notification-meta` `avatar` の様子の一言と、枠の辞書）。`language` はサーバーの言語（設定の既定値、テンプレートの読み分けと写し、返事の言語の指示、決まり文の英語に日本語が混ざらないこと）。分野ごとに 1 ファイル: `config` `contrast` `db` `engine` `engine-tools` `health` `i18n` `language` `memory` `providers` `review` `schedule` `shell` `shell-guard` `tasks` `theme` `toolcall-parse` `tools` `uploads` `web-tools` `web`。
 - `helpers.ts`: 一時フォルダ（`tempDir`）、偽のサーバー（`fakeServer`）、偽のモデル窓口（`FakeAdapter`）と返事の台本（`reply` `fail`）。
 - 入口: `tests/helpers.ts`
 - 使うもの: `src/` の各部品（`App` で組み立てるものが多い）

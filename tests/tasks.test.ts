@@ -300,6 +300,29 @@ test('実行中に画面から取り消したら、その状態を尊重する',
   assert.equal(s.app.tasks.get(task.id)!.status, 'cancelled');
 });
 
+test('画面の「止める」で止めたタスクは、20 秒ほど休んで実行待ちに戻る（取り消しではない）', async t => {
+  const s = await setup(t);
+  const task = s.userTask('止められる仕事');
+  s.adapter().scripts.push(hang());
+  const ticking = s.app.worker.tick();
+  await waitFor(() => s.adapter().calls.length === 1, '実行が始まる');
+  const stoppedAt = s.clock.now;
+  assert.ok(s.app.engine.stop(s.app.worker.status().running!.runId));
+  assert.equal(await ticking, 'ran');
+  const after = s.app.tasks.get(task.id)!;
+  assert.equal(after.status, 'ready');
+  assert.equal(after.run_at, stoppedAt + 20_000);
+  assert.equal(after.attempts, 0, '失敗として数えない');
+  const requeued = s.app.tasks.events(task.id).find(e => e.kind === 'requeued');
+  assert.match(requeued?.content ?? '', /止められた/u);
+  assert.doesNotMatch(requeued?.content ?? '', /1 時間/u);
+  assert.equal(await s.app.worker.tick(), 'idle', '20 秒たつまでは動かない');
+  s.adapter().scripts.push(toolCall('task_complete', { summary: '終わりました', notify: false }));
+  s.clock.now = stoppedAt + 20_000;
+  assert.equal(await s.app.worker.tick(), 'ran', '20 秒たてば動き出す');
+  assert.equal(s.app.tasks.get(task.id)!.status, 'done');
+});
+
 // ── 道具・通知・画面 ──
 
 test('会話の中で task_create を呼ぶと、メモ帳にタスクが増える（自発のものは承認制にできる）', async t => {

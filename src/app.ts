@@ -15,6 +15,7 @@ import { ModelStatus } from './engine/status.ts';
 import { estimateTextTokens, estimateToolTokens } from './engine/tokens.ts';
 import { buildDynamic, buildSnapshot, ensureWorkspace } from './engine/workspace.ts';
 import type { AppPaths } from './paths.ts';
+import { languageOf } from './shared/language.ts';
 import { EndpointLimiter } from './providers/limiter.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
@@ -91,9 +92,9 @@ export class App {
   constructor(options: AppOptions) {
     this.paths = options.paths;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
-    ensureWorkspace(this.paths);
     this.configStore = new ConfigStore(this.paths.config);
     const config = this.configStore.load();
+    ensureWorkspace(this.paths, languageOf(config));
     this.bootServer = structuredClone(config.server);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
     const now = options.now ?? Date.now;
@@ -212,10 +213,11 @@ export class App {
     const config = this.config();
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const memoryBudget = config.memory.userMaxChars + config.memory.notesMaxChars;
-    const memoryNow = this.memory ? estimateTextTokens(renderBooks(this.memory.list())) : 0;
+    const language = languageOf(config);
+    const memoryNow = this.memory ? estimateTextTokens(renderBooks(this.memory.list(), language)) : 0;
     const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat'))) : 0;
-    return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index() ?? '' }).text) + Math.max(memoryBudget, memoryNow) + tools
-      + estimateTextTokens(buildDynamic(config.timezone)) + 64;
+    return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + Math.max(memoryBudget, memoryNow) + tools
+      + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }
 
   async applyConfig(next: AppConfig): Promise<AppConfig> {

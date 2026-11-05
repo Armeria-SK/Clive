@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import { transaction } from '../db/database.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
 
@@ -32,7 +33,12 @@ export interface MemoryEvent {
 
 export class MemoryError extends Error {}
 
-export const BOOK_LABEL: Record<Book, string> = { user: 'ユーザーについての記憶', notes: 'Clive のメモと教訓' };
+export const BOOK_LABELS: Record<Language, Record<Book, string>> = {
+  ja: { user: 'ユーザーについての記憶', notes: 'Clive のメモと教訓' },
+  en: { user: 'Memories about the user', notes: "Clive's notes and lessons" },
+};
+export const BOOK_LABEL = BOOK_LABELS.ja;
+const MEMORY_HEADING: Record<Language, string> = { ja: '# 覚えていること（記憶）', en: '# What you remember (memory)' };
 
 const MAX_ITEM_CHARS = 600;
 
@@ -163,14 +169,14 @@ export class MemoryStore {
 
 export function prefix(book: Book): string { return book === 'user' ? 'u' : 'n'; }
 
-export function renderBooks(memories: readonly Memory[]): string {
+export function renderBooks(memories: readonly Memory[], language: Language = DEFAULT_LANGUAGE): string {
   const sections: string[] = [];
   for (const book of ['user', 'notes'] as const) {
     const items = memories.filter(m => m.book === book && m.status === 'active');
     if (!items.length) continue;
-    sections.push(`## ${BOOK_LABEL[book]}\n${items.map(m => `- [${prefix(book)}${m.id}] ${m.content}`).join('\n')}`);
+    sections.push(`## ${BOOK_LABELS[language][book]}\n${items.map(m => `- [${prefix(book)}${m.id}] ${m.content}`).join('\n')}`);
   }
-  return sections.length ? `# 覚えていること（記憶）\n\n${sections.join('\n\n')}` : '';
+  return sections.length ? `${MEMORY_HEADING[language]}\n\n${sections.join('\n\n')}` : '';
 }
 
 export function searchTerms(q: string): string[] {

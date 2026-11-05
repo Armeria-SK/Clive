@@ -1,5 +1,7 @@
 import type { App } from '../app.ts';
 import { CuriosityError, type CuriosityStatus } from '../curiosity/store.ts';
+import { curiosityText } from '../curiosity/text.ts';
+import { languageOf } from '../shared/language.ts';
 import { TRIGGER_LABEL } from '../memory/review.ts';
 import { SkillError } from '../tools/skills/store.ts';
 import { taskView } from '../tasks/store.ts';
@@ -86,9 +88,10 @@ export function registerReviewRoutes(router: Router, app: App): void {
     const item = app.curiosity.get(idOf(params[0]!));
     if (!item) throw new HttpProblem(404, { error: 'not_found', message: '項目がありません' });
     if (item.status === 'researching') throw new HttpProblem(409, { error: 'busy', message: '既に調べています' });
+    const text = curiosityText(languageOf(app.config()));
     const task = app.tasks.create({
-      title: `調べる: ${item.topic}`.slice(0, 200), body: item.why ? `気になった理由: ${item.why}` : '',
-      doneCriteria: '分かったことを task_complete の summary にまとめた', origin: 'curiosity', curiosityId: item.id, actor: 'user',
+      title: text.title(item.topic).slice(0, 200), body: item.why ? text.why(item.why) : '',
+      doneCriteria: text.doneCriteria, origin: 'curiosity', curiosityId: item.id, actor: 'user',
     });
     app.curiosity.update(item.id, { status: 'researching', taskId: task.id });
     app.worker.requestRun(task.id);
