@@ -268,7 +268,7 @@ const copyUse = (acc: Acc, p: ReturnType<typeof parseGnu>, kind: 'cp' | 'mv', re
   const use: CopyUse = { kind: 'copy', sources, dest, name: null, recursive, dirFlag: target !== null, noTargetDir: p.seen.has('-T') };
   acc.copies.push(use);
   for (const s of sources) { if (kind === 'cp') acc.read(s, recursive); else acc.write(s, recursive); }
-  if (dest) acc.write(dest, recursive);
+  if (dest) acc.write(dest);
 };
 gnu({ names: ['cp'], flags: '-r -R -a -f -n -v -p -u -T -t:x --preserve:s', pos: ['x…'] }, false, (p, acc) => {
   if (p.pos.length < (p.values.has('-t') ? 1 : 2)) formOnce(acc, 'cp', p.pos.map(w => w.text).join(' '));

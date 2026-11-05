@@ -285,7 +285,8 @@ test('V5: スキルのフォルダと .git への書き込みは、シェルな�
     const pending = s.call('file_write', { path, content: 'x' });
     const request = await decideNext(s, 'deny');
     assert.match(request.reasons.join(), reason, path);
-    assert.equal(request.onceOnly, false, '確かめはこれまでの承認と同じ（コードを動かす確かめではない）');
+    // .git はフックや設定というコードを書くことになるので会話の許可を越えて毎回確かめる。スキルは中身が引数にあるので、これまでの承認と同じ
+    assert.equal(request.onceOnly, /\.git/iu.test(path), path);
     assert.match((await pending).output.content, /拒否しました/u, path);
     assert.equal(existsSync(join(s.paths.workspace, path)) && readFileSync(join(s.paths.workspace, path), 'utf8') === 'x', false, `${path} に書かれてしまった`);
   }

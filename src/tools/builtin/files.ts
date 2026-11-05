@@ -28,6 +28,8 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   if (need === 'write' && placement.mode === 'read') return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.readonly', { root: placement.root })] } };
   if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.symlink')] } };
   const protectedKind = need === 'write' ? writeApprovalKind(abs, ctx.policy) : undefined;
+  // .git への書き込みはフックや設定というコードを書くことになるので、会話の許可を越えて毎回確かめる。人格・スキルは、中身が引数にあるので今までどおり
+  if (protectedKind === 'git') return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] } };
   if (protectedKind) return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])] } };
   return { abs, check: { decision: 'allow', reasons: [] } };
 }

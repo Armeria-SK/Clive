@@ -1,14 +1,15 @@
 import { homedir } from 'node:os';
-import { extname, parse as parsePath, sep } from 'node:path';
+import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
-import { classifyStatements, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
+import { classifyStatements, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
 import { codeFindings } from './code-guard.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
+import { containsDotGit, exists, expandGlob, isDirectory, protectedInside } from './path-expand.ts';
 import { expandPath, isInside, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy } from './scope.ts';
-import type { LexFail, ShellKind, Word } from './shell-lex.ts';
+import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
 
 export type Decision = 'allow' | 'ask' | 'deny';
 const RANK: Record<Decision, number> = { allow: 0, ask: 1, deny: 2 };
@@ -85,6 +86,13 @@ export function resolveWord(word: Word, base: string, windows: boolean, language
   const expanded = expandPath(text, base, process.env, language);
   if ('unresolved' in expanded) return expanded;
   return { path: windows ? windowsNames(expanded.path) : expanded.path };
+}
+
+// ワイルドカードを含む語の、絶対パスのパターン
+function patternOf(word: Word, base: string, windows: boolean): string {
+  const text = word.text.replace(/[$%`]/gu, '_');
+  const abs = text === '~' || text.startsWith('~/') || text.startsWith('~\\') ? join(homedir(), text.slice(2)) : resolve(base, text);
+  return windows ? windowsNames(abs) : abs;
 }
 
 const URLISH = /^[a-z][a-z0-9+.-]*:\/\//iu;
@@ -192,6 +200,24 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const allowEntries = (opts.allow ?? []).map(parseAllowEntry).filter((e): e is string[] => e !== null);
   let fetched = false;
 
+  // 1 つの絶対パスを、書く・読む・消すものとして調べる
+  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean): void => {
+    const placement = placePath(abs, opts.policy);
+    if (primary) paths.push({ input, path: abs, placement, write });
+    if (placement.kind === 'deny') { add('deny', placement.reason); return; }
+    if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', text('guard.irreversible', { path: abs })); return; }
+    if (placement.kind === 'outside') { add(opts.outsideRoots, text('guard.touches_outside', { path: abs })); return; }
+    if (write && placement.mode === 'read') { add('deny', text('guard.write_readonly', { path: abs })); return; }
+    if (!write) return;
+    const kind = writeApprovalKind(abs, opts.policy);
+    if (kind) addCode(text(WRITE_KEYS[kind], { path: abs }));
+  };
+  // フォルダごと書く・消すとき、その中に守る場所（人格・スキル・.git）まで届くなら今回だけ
+  const rangeCheck = (dir: string): void => {
+    if (protectedInside(dir, opts.policy)) addCode(text('list.write_ancestor', { path: dir }));
+  };
+  const dotfiles = isPowerShell(shell);
+
   const checkPath = (ref: PathRef, deletes: boolean): void => {
     const write = ref.mode === 'write';
     const input = ref.word.text;
@@ -208,15 +234,91 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if (write) addCode(text('list.write_dynamic', { input })); else add('ask', text('list.read_dynamic', { input }));
         continue;
       }
-      const placement = placePath(expanded.path, opts.policy);
-      if (primary) paths.push({ input, path: expanded.path, placement, write });
-      if (placement.kind === 'deny') { add('deny', placement.reason); continue; }
-      if (deletes && isCriticalTarget(expanded.path, opts.policy)) { add('deny', text('guard.irreversible', { path: expanded.path })); continue; }
-      if (placement.kind === 'outside') { add(opts.outsideRoots, text('guard.touches_outside', { path: expanded.path })); continue; }
-      if (write && placement.mode === 'read') { add('deny', text('guard.write_readonly', { path: expanded.path })); continue; }
-      if (!write) continue;
-      const kind = writeApprovalKind(expanded.path, opts.policy);
-      if (kind) addCode(text(WRITE_KEYS[kind], { path: expanded.path }));
+      const globbing = ref.word.glob && !ref.word.dynamic;
+      // ワイルドカードの手前のフォルダは、書く・消す対象ではない（当たるものだけが対象）。外・禁止のパスかどうかだけ見る
+      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary);
+      if (globbing) {
+        // ワイルドカード: 今あるもののうち当たるものを全部調べる。列挙しきれないときは、手前のフォルダを調べて確かめる
+        const globbed = expandGlob(patternOf(ref.word, base, windows), dotfiles);
+        if (globbed.complete) {
+          for (const match of globbed.matches) {
+            evalAbs(match, match, write, deletes, false);
+            if (write && (ref.recursive || deletes) && isDirectory(match)) rangeCheck(match);
+          }
+        } else if (write) rangeCheck(globbed.prefix);
+        else add('ask', text('list.wild_many', { input }));
+      } else if (write && ref.recursive && isDirectory(expanded.path)) rangeCheck(expanded.path);
+    }
+  };
+
+  // cp・mv・Copy-Item・Move-Item・Rename-Item・New-Item: 実際に書かれるパスを組み立てて調べる
+  const checkCopy = (use: CopyUse): void => {
+    for (const base of cwds) {
+      const unresolvedWord = (w: Word | null): boolean => w !== null && 'unresolved' in resolveWord(w, base, windows, language);
+      const dyn = (w: Word | null): void => { if (w) addCode(text('list.write_dynamic', { input: w.text })); };
+      if (use.kind === 'join') {
+        if (!use.name || use.name.dynamic || unresolvedWord(use.dest)) { dyn(use.name?.dynamic ? use.name : use.dest ?? use.name); continue; }
+        const dir = use.dest ? (resolveWord(use.dest, base, windows, language) as { path: string }).path : base;
+        evalAbs(windows ? windowsNames(resolve(dir, use.name.text)) : resolve(dir, use.name.text), use.name.text, true, false, false);
+        continue;
+      }
+      if (use.kind === 'rename') {
+        if (!use.name || use.name.dynamic) { dyn(use.name); continue; }
+        for (const source of use.sources) {
+          const r = resolveWord(source, base, windows, language);
+          if ('unresolved' in r) { dyn(source); continue; }
+          evalAbs(windows ? windowsNames(resolve(dirname(r.path), use.name.text)) : resolve(dirname(r.path), use.name.text), use.name.text, true, false, false);
+        }
+        continue;
+      }
+      // copy
+      if (unresolvedWord(use.dest) || !use.dest) { dyn(use.dest); continue; }
+      const dest = (resolveWord(use.dest, base, windows, language) as { path: string }).path;
+      const destIsDir = !use.noTargetDir && (use.dirFlag || use.sources.length > 1 || /[\\/]$/u.test(use.dest.text) || isDirectory(dest));
+      let unknownNames = false;
+      const names: string[] = [];
+      for (const source of use.sources) {
+        const r = resolveWord(source, base, windows, language);
+        if ('unresolved' in r || source.dynamic) { unknownNames = true; continue; }
+        if (/(?:^|[\\/])\.\.?$/u.test(source.text) || source.text === '~') {
+          unknownNames = true;
+          if (use.recursive && containsDotGit(r.path)) addCode(text('list.write_ancestor', { path: r.path }));
+          continue;
+        }
+        if (source.glob) {
+          const globbed = expandGlob(patternOf(source, base, windows), dotfiles);
+          if (!globbed.complete) { unknownNames = true; continue; }
+          names.push(...globbed.matches.map(m => basename(m)));
+          if (use.recursive) for (const m of globbed.matches) if (isDirectory(m) && containsDotGit(m)) addCode(text('list.write_ancestor', { path: m }));
+          continue;
+        }
+        names.push(basename(r.path));
+        if (use.recursive && isDirectory(r.path) && containsDotGit(r.path)) addCode(text('list.write_ancestor', { path: r.path }));
+      }
+      if (destIsDir) {
+        for (const name of names) {
+          const target = join(dest, name);
+          evalAbs(target, target, true, false, false);
+        }
+        if (unknownNames || (use.recursive && names.length === 0)) rangeCheck(dest);
+      } else {
+        evalAbs(dest, dest, true, false, false);
+        if (use.recursive && isDirectory(dest)) rangeCheck(dest);
+      }
+    }
+  };
+
+  // curl -O・wget の既定の名前: URL の最後の名前で、作業場所（または指定のフォルダ）に書く
+  const checkRemoteName = (url: Word, dir: Word | null): void => {
+    if (url.dynamic) return;
+    let name = '';
+    try { name = decodeURIComponent(new URL(url.text).pathname.split('/').filter(Boolean).pop() ?? ''); } catch { /* URL でなければ別の理由で止まっている */ }
+    name ||= 'index.html';
+    for (const base of cwds) {
+      const d = dir ? resolveWord(dir, base, windows, language) : { path: base };
+      if ('unresolved' in d) { addCode(text('list.write_dynamic', { input: dir?.text ?? '' })); continue; }
+      const target = windows ? windowsNames(resolve(d.path, name)) : resolve(d.path, name);
+      evalAbs(target, name, true, false, false);
     }
   };
 
@@ -246,6 +348,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (asked && !allowedByConfig) add('ask', text('guard.needs_approval', { reason: asked }));
 
     for (const ref of result.paths) checkPath(ref, result.deletes);
+    for (const use of result.copies) checkCopy(use);
+    for (const remote of result.remoteNames) checkRemoteName(remote.url, remote.dir);
     if (result.level === 'once' || result.level === 'deny') {
       for (const token of suspectPaths(st.words)) {
         const resolved = resolveWord({ text: token, dynamic: st.words.some(w => w.text === token && w.dynamic), glob: false, quoted: false, home: token === '~' || token.startsWith('~/'), kind: 'plain' }, cwd, windows, language);

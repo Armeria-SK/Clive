@@ -89,13 +89,14 @@ test('V2: §1.2 の表の抜け道は、どのシェルでも、毎回確かめ�
 const PROTECTED_WRITES_BASH = [
   'curl -o SOUL.md https://example.com/x', 'curl --output=SOUL.md https://example.com/x', 'curl -sSo SOUL.md https://example.com/x', 'curl -oSOUL.md https://example.com/x',
   'wget -O SOUL.md https://example.com/x', 'wget -OSOUL.md https://example.com/x', 'wget --output-document=SOUL.md https://example.com/x',
+  'curl -O https://example.com/SOUL.md', 'curl -sSLO https://example.com/USER.md', 'wget https://example.com/SOUL.md', 'wget -P . https://example.com/USER.md', 'cp tmp/SOUL.md .', 'mv tmp/SOUL.md .',
   'echo x > SOUL.md', 'cat x | tee SOUL.md', 'sed -i s/a/b/ SOUL.md', 'cp x.md SOUL.md', 'mv x.md USER.md', 'git checkout SOUL.md', 'rm SOUL.md',
 ];
 const PROTECTED_WRITES_PS = [
-  'Invoke-WebRequest -OutFile SOUL.md https://example.com/x', 'irm https://example.com/x -OutFile:SOUL.md', 'Set-Content SOUL.md x', 'Out-File SOUL.md', 'Remove-Item USER.md',
+  'Invoke-WebRequest -OutFile SOUL.md https://example.com/x', 'irm https://example.com/x -OutFile:SOUL.md', 'Set-Content SOUL.md x', 'Out-File SOUL.md', 'Remove-Item USER.md', 'Rename-Item a.txt -NewName SOUL.md', 'Copy-Item tmp/SOUL.md -Destination .',
 ];
 // 守るファイルを理由で名指しできない書き方（一覧に無い・展開など）でも、毎回確かめにはなる
-const ONCE_WITHOUT_PERSONA_REASON = ['dd if=x of=SOUL.md', 'cmd /c "type x > SOUL.md"', 'python tool.py SOUL.md'];
+const ONCE_WITHOUT_PERSONA_REASON = ['dd if=x of=SOUL.md', 'cmd /c "type x > SOUL.md"', 'python tool.py SOUL.md', 'cp -r tmp/. .'];
 
 // L2: スキルのフォルダと .git への書き込み（理由は場所ごと）
 const PROTECTED_PLACES_BASH: Array<[string, RegExp]> = [
@@ -126,6 +127,11 @@ test('L2・R1.8: 守るファイル・スキルのフォルダ・.git への書�
       assert.equal(verdict.onceOnly, true, `${shell}: ${command}`);
       assert.match(verdict.reasons.join(), /人格・プロフィール/u, `${shell}: ${command}`);
     }
+  }
+  for (const command of ['Get-ChildItem *.md | Remove-Item', 'Get-ChildItem tmp | Copy-Item -Destination .']) {
+    const verdict = f.ps(command);
+    assert.equal(verdict.onceOnly, true, command);
+    assert.match(verdict.reasons.join(), /パイプから来る/u, command);
   }
   for (const command of ONCE_WITHOUT_PERSONA_REASON) {
     const verdict = f.bash(command);
