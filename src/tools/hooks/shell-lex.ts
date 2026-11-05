@@ -15,6 +15,10 @@ export interface Word {
   kind: 'plain' | 'block' | 'hash' | 'splat' | 'paren';
   // PowerShell の -Name:値 の値（直前のパラメータにくっついている）
   attached?: boolean;
+  // PowerShell の -名前:値 を -名前 と 値 の 2 つの語に分けたときの、-名前 の側。外部のプログラムには、1 つの引数 -名前:値 として渡る
+  split?: boolean;
+  // カンマの並び（a, b）で、空白・改行・空の要素があるもの。外部のプログラムには別々の引数として渡り、空の要素は消える（きっちりつないだ a,b は 1 つの a,b）
+  loose?: boolean;
   // PowerShell のワイルドカードのエスケープ（バッククォート）を外した読み。名前の候補の 1 つで、秘密のパスに当たるかを調べるのに使う
   unescaped?: string;
   // スクリプトブロック（kind: 'block'）の中の文。同じ文は、全体の並びにも入っている
@@ -709,12 +713,16 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     if (word) {
       // a,b,c の配列は 1 つの語
       while (isP(peek(), ',')) {
+        const comma = peek()!;
         k++;
+        const newline = peek()?.t === 'p' && peek()!.v === '\n';
         skipNl();
+        const after = peek();
         const next = argument(depth, st);
         if (isFail(next)) return next;
         if (!next) return fail('unexpected', ',');
-        word = { ...word, text: `${word.text},${next.text}`, dynamic: word.dynamic || next.dynamic, glob: word.glob || next.glob };
+        const loose: boolean = word.loose === true || comma.sp || newline || after?.sp === true || word.text === '' || next.text === '';
+        word = { ...word, text: `${word.text},${next.text}`, dynamic: word.dynamic || next.dynamic, glob: word.glob || next.glob, ...(loose ? { loose: true } : {}) };
       }
     }
     return word;
@@ -729,7 +737,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         k++;
         const colon = t!.v.indexOf(':');
         if (colon > 0) {
-          st.words.push(plain(t!.v.slice(0, colon)));
+          st.words.push(plain(t!.v.slice(0, colon), { split: true }));
           const rest = t!.v.slice(colon + 1);
           const adj = peek();
           if (rest !== '') st.words.push(plain(rest, { attached: true, glob: /[*?[]/u.test(rest) }));

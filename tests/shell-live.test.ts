@@ -274,6 +274,28 @@ test('実機（Windows PowerShell 5.1・制限モード）: バッククォー�
   }
 });
 
+// 7 回目の審査（致命）: PowerShell 5.1 は外部のプログラムの空の引数を捨てる。`git grep -e '' -- '-O./x.sh'` は、git に `grep -e -- -O./x.sh` として渡り、x.sh が動いた
+test('実機（Windows PowerShell 5.1・制限モード）: git grep -e \'\' -- -O./x.sh は、素のシェルでは x.sh が動くが、Clive のシェルでは止まって動かない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  if (spawnSync('git', ['--version']).status !== 0) { t.skip('git が無い'); return; }
+  const s = setup(t, 'powershell');
+  const repo = s.paths.workspace;
+  const marker = join(repo, 'ran.txt');
+  spawnSync('git', ['init', '-q'], { cwd: repo });
+  writeFileSync(join(repo, 'a.txt'), 'dash -- here\n');
+  writeFileSync(join(repo, 'x.sh'), `#!/bin/sh\necho ran > "${marker.replaceAll('\\', '/')}"\ncat >/dev/null\n`, { mode: 0o755 });
+  spawnSync('git', ['add', 'a.txt'], { cwd: repo });
+  const command = `git grep -e '' -- '-O./x.sh'`;
+  spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: repo, encoding: 'utf8' });
+  assert.equal(existsSync(marker), true, '前提: 素の PowerShell 5.1 では、空の引数が捨てられて x.sh が動く');
+  rmSync(marker);
+  for (const c of [command, `git grep -e "" -- '-O./x.sh'`, `git grep -e '' '-O./x.sh'`]) {
+    const outcome = await s.call(c);
+    assert.equal(outcome.decision, 'deny', `${c}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, /引数/u, c);
+  }
+  assert.equal(existsSync(marker), false, 'Clive のシェルで x.sh が動いた');
+});
+
 const bashPath = which('bash');
 const bashAvailable = bashPath !== undefined && spawnSync(bashPath, ['--noprofile', '--norc', '-c', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
 

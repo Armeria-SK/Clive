@@ -225,9 +225,14 @@ cmd('invoke-webrequest iwr invoke-restmethod irm', WEB, 'uri', webExtra);
 
 // ── 外部のプログラム（Windows）に渡す引数（C7）──
 const WIDE = new Set(['git', 'rg', 'node', 'nodejs', 'python', 'python3', 'py']);
+// Windows PowerShell 5.1 が外部のプログラムに渡す引数は、ガードが読んだ語の並びと違うことがある。本物の 5.1 で測った表は tests/shell-ps-argv.test.ts（§11.13 の続き）:
+// 空の引数（'' や ""）は黙って消える（git grep -e '' -- -O./x.sh は、git に grep -e -- -O./x.sh として渡り、-O のフラグが動いた）・カンマの並びに空白か空の要素があると別々の引数になる・-名前:値 は 1 つの引数 -名前:値 のまま渡る。
+// ガードの読みと受け取る並びが違う引数は、止める
 export function winArgs(name: string, words: readonly Word[], ext: string, acc: Acc): void {
   const cmdFile = ext === '.cmd' || ext === '.bat';
   for (const w of words.slice(1)) {
+    const mangled = w.split ? `${w.text}:` : w.loose ? w.text : !w.dynamic && w.kind === 'plain' && w.text === '' ? "''" : '';
+    if (mangled) { acc.add('deny', 'list.winargs_ps', { detail: `${name}: ${mangled}` }, false); return; }
     if (w.dynamic) continue;
     const t = w.text;
     let detail = '';
