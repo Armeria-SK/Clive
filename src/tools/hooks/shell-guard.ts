@@ -240,12 +240,13 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (primary) paths.push({ input, path: abs, placement, write });
     if (placement.kind === 'deny') { add('deny', placement.reason); return; }
     if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', text('guard.irreversible', { path: abs })); return; }
+    // ツールの設定ファイルは、許可フォルダの外（ホームが許可フォルダの外なのが既定）でも、ふつうの確かめではなく今回だけ。外の確かめで戻る前に調べる
+    if (write && isToolConfigPath(abs, env)) addCode(text('list.tool_config', { path: abs }));
     if (placement.kind === 'outside') { add(opts.outsideRoots, text('guard.touches_outside', { path: abs })); return; }
     if (write && placement.mode === 'read') { add('deny', text('guard.write_readonly', { path: abs })); return; }
     if (!write) return;
     const kind = writeApprovalKind(abs, opts.policy);
     if (kind) addCode(text(WRITE_KEYS[kind], { path: abs }));
-    if (isToolConfigPath(abs, env)) addCode(text('list.tool_config', { path: abs }));
   };
   // フォルダごと書く・消すとき、その中に守る場所（人格・スキル・.git）まで届くなら今回だけ
   const rangeCheck = (dir: string): void => {

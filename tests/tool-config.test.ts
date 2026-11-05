@@ -29,7 +29,7 @@ test('ツールの設定ファイル: git・curl・wget・npm・シェルの起�
   const f = fixture(t);
   const yes = [
     '.gitconfig', '.gitattributes', '.config/git/config', '.config/git/attributes', '.config/git/ignore', '.curlrc', '_curlrc', '.config/curlrc', '.wgetrc', '.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmrc',
-    '.bashrc', '.bash_profile', '.profile', '.zshrc', '.zshenv', '.zprofile', '.inputrc', '.config/powershell/Microsoft.PowerShell_profile.ps1', 'Documents/WindowsPowerShell/profile.ps1',
+    '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.bash_aliases', '.profile', '.kshrc', '.zlogout', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.inputrc', '.config/powershell/Microsoft.PowerShell_profile.ps1', 'Documents/WindowsPowerShell/profile.ps1',
     'Documents/WindowsPowerShell/Modules/x/x.psm1', 'Documents/PowerShell/Microsoft.PowerShell_profile.ps1', 'OneDrive/Documents/WindowsPowerShell/profile.ps1', '.config/pip/pip.conf', '.pip/pip.conf',
     '.cargo/config.toml', '.docker/config.json', 'AppData/Roaming/_curlrc', 'AppData/Roaming/.curlrc', 'AppData/Roaming/npm/etc/npmrc', 'AppData/Roaming/pip/pip.ini', '.jq',
   ];
@@ -239,4 +239,55 @@ test('.curlrc・_curlrc・.wgetrc への書き込み・消すこと・名前の�
   assert.equal(f.bash('echo x > .curlrc.example').decision, 'allow');
   assert.equal(f.bash('echo x > sub/curlrc').decision, 'allow');
   assert.equal(f.ps('Set-Content .curlrc.bak x').decision, 'allow');
+});
+
+// 審査の指摘（深い審査）: ホームが許可フォルダの外（既定の配置）のとき、`echo x >> ~/.gitconfig` や `~/.bashrc` は、許可フォルダの外の「ふつうの確かめ」で止まるだけで、
+// ツールの設定ファイルの「今回だけ」の確かめまで届かなかった（外を調べる早い戻りが、設定の調べより先にあった）。ここまでの試験は、ホームを許可フォルダの中に置いていたので見えなかった
+function outsideHomeFixture(t: { after: (fn: () => void) => void }) {
+  const base = tempDir(t);
+  const home = realish(join(base, 'home'));
+  const ws = realish(join(base, 'workspace'));
+  mkdirSync(join(home, '.config', 'git'), { recursive: true });
+  mkdirSync(ws, { recursive: true });
+  const env = { HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: join(home, '.config') };
+  // 許可フォルダは作業フォルダだけ。ホームはその外
+  const policy: ScopePolicy = { roots: [{ path: ws, mode: 'write' }], deny: [], askOnWrite: [join(ws, 'SOUL.md')] };
+  const run = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', env });
+  return { home, ws, env, bash: (c: string) => run(c, 'bash'), ps: (c: string) => run(c, 'powershell') };
+}
+
+test('ホームが許可フォルダの外でも、ツールの設定ファイル（.gitconfig・.bashrc・.curlrc など）への書き込み・消すこと・名前の変更は、今回だけ', t => {
+  const f = outsideHomeFixture(t);
+  const h = f.home.replaceAll('\\', '/');
+  const bash = [
+    `echo x >> ${h}/.gitconfig`, `echo x >> ${h}/.bashrc`, `echo x > ${h}/.profile`, `echo x > ${h}/.zshrc`, `echo x > ${h}/.bash_profile`, `echo x >> ${h}/.curlrc`, `echo x >> ${h}/_curlrc`, `echo x >> ${h}/.wgetrc`,
+    `tee ${h}/.bashrc`, `cp a.txt ${h}/.gitconfig`, `mv a.txt ${h}/.curlrc`, `rm ${h}/.gitconfig`, `touch ${h}/.zshenv`, `echo x > ${h}/.config/git/config`, `mkdir -p ${h}/.config/git/hooks`,
+    `echo x > ${h}/Documents/WindowsPowerShell/profile.ps1`,
+  ];
+  const ps = [
+    `Add-Content '${join(f.home, '.curlrc')}' x`, `Set-Content '${join(f.home, '.gitconfig')}' x`, `Set-Content '${join(f.home, 'Documents', 'WindowsPowerShell', 'Microsoft.PowerShell_profile.ps1')}' x`,
+    `Copy-Item a.txt '${join(f.home, '.wgetrc')}'`, `Move-Item a.txt '${join(f.home, '_curlrc')}'`, `Remove-Item '${join(f.home, '.gitconfig')}'`, `Out-File '${join(f.home, '.bashrc')}'`,
+    `Set-Content '${join(f.home, 'Documents', 'PowerShell', 'profile.ps1')}' x`, `Set-Content '${join(f.home, 'AppData', 'Roaming', '_curlrc')}' x`,
+  ];
+  const wrong = [
+    ...bash.filter(c => !f.bash(c).onceOnly).map(c => `bash: ${c} → ${f.bash(c).decision}`),
+    ...ps.filter(c => !f.ps(c).onceOnly).map(c => `powershell: ${c} → ${f.ps(c).decision}`),
+  ];
+  assert.deepEqual(wrong, []);
+  assert.match(f.bash(`echo x >> ${h}/.gitconfig`).reasons.join(), /ツールの設定ファイル/u);
+  // 外の、ふつうのファイルは、これまでどおりふつうの確かめ（今回だけにはならない）。読むのも同じ
+  for (const c of [`echo x > ${h}/notes.txt`, `cp a.txt ${h}/Documents/x.txt`]) { const v = f.bash(c); assert.equal(v.decision, 'ask', c); assert.equal(v.onceOnly, false, c); }
+  assert.equal(f.bash(`cat ${h}/.gitconfig`).onceOnly, false);
+  assert.equal(f.bash(`cat ${h}/.gitconfig`).decision, 'ask');
+  // outsideRoots が deny のときも、止めることに変わりはない
+  const denyAll = checkShellCommand(`echo x >> ${h}/.gitconfig`, f.ws, { policy: { roots: [{ path: f.ws, mode: 'write' }], deny: [] }, outsideRoots: 'deny', shell: 'bash', windows: false, env: f.env });
+  assert.equal(denyAll.decision, 'deny');
+});
+
+test('ホームが外のとき、`~` で書いた設定ファイルへの書き込みも今回だけ', t => {
+  const f = outsideHomeFixture(t);
+  // ~ は本物のホームに展開される（isToolConfigPath は、環境のホームに加えて本物のホームも見る）
+  for (const c of ['echo x >> ~/.gitconfig', 'echo x >> ~/.bashrc', 'echo x >> ~/.curlrc', 'tee ~/.profile', 'cp a.txt ~/.zshrc']) assert.equal(f.bash(c).onceOnly, true, c);
+  for (const c of ['Add-Content ~\\.curlrc x', 'Set-Content ~\\.gitconfig x', 'Set-Content ~/.bashrc x', "Add-Content '~\\.wgetrc' x"]) assert.equal(f.ps(c).onceOnly, true, c);
+  assert.equal(f.bash('echo x > ~/notes.txt').onceOnly, false);
 });

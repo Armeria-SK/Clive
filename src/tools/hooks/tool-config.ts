@@ -12,7 +12,7 @@ export type Env = Readonly<Record<string, string | undefined>>;
 // ホームの下（ファイルは名前そのもの、フォルダは中すべて）
 const HOME_PATHS = [
   '.gitconfig', '.gitattributes', '.config/git', '.curlrc', '_curlrc', 'Application Data/.curlrc', 'Application Data/_curlrc', '.config/curlrc', '.wgetrc', '.npmrc', '.yarnrc', '.yarnrc.yml', '.pnpmrc', '.config/yarn', '.config/pnpm', '.config/pip', '.pip', '.pypirc',
-  '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.inputrc', '.config/fish', '.config/powershell', '.jq', '.ripgreprc', '.cargo/config', '.cargo/config.toml',
+  '.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.bash_aliases', '.profile', '.kshrc', '.zlogout', '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.inputrc', '.config/fish', '.config/powershell', '.jq', '.ripgreprc', '.cargo/config', '.cargo/config.toml',
   '.docker', '.ssh', '.gnupg', '.aws', '.kube',
   'Documents/WindowsPowerShell', 'Documents/PowerShell', 'OneDrive/Documents/WindowsPowerShell', 'OneDrive/Documents/PowerShell',
 ];
