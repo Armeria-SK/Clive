@@ -92,3 +92,10 @@ export function fail(error: Error, partial = ''): Script {
     throw error;
   };
 }
+
+// PowerShell の書くコマンドレット（別名つき）は、パスが決まっていても常に今回だけ（security-self-api.md §11.13）。
+// 書き込み先のパスの調べ（守る場所・禁止・外・ワイルドカード）だけを確かめるテストは、持ち主が tools.shell.allow に書いたものとして渡す。パイプを受けるものとリダイレクトは、書いていても今回だけ
+export const PS_WRITER_ALLOW: readonly string[] = [
+  'New-Item', 'ni', 'mkdir', 'md', 'Set-Content', 'Add-Content', 'ac', 'Clear-Content', 'clc', 'Out-File', 'Tee-Object', 'tee', 'Copy-Item', 'copy', 'cp', 'cpi',
+  'Move-Item', 'move', 'mv', 'mi', 'Rename-Item', 'ren', 'rni', 'Remove-Item', 'rm', 'del', 'erase', 'rd', 'rmdir', 'ri', 'Compress-Archive',
+];

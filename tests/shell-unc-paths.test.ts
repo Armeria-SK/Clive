@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { containsGitDir, expandGlob, isDirectory, listTree } from '../src/tools/hooks/path-expand.ts';
 import { expandPath, isRemotePath, placePath, realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
-import { tempDir } from './helpers.ts';
+import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
 // 再審査の指摘: `//localhost/D$/…/USER.md` や `//?/D:/…/USER.md` は、本物の Windows で人格 USER.md を書き換えたのに、許可フォルダの外のふつうの確かめだけで通った。
 // config.json・.env は、禁止（止める）がふつうの確かめに下がった。`\??\` は「cwd」に化けて、許可フォルダの中の書き込みとして通った。
@@ -32,7 +32,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
       `\\??\\${abs}`, `/??/${slash(abs)}`, `//?/UNC/localhost/${drive}$${rest}`, `\\\\?\\UNC\\localhost\\${drive}$${rest.replaceAll('/', '\\')}`, `\\/localhost/${drive}$${rest}`,
     ];
   };
-  const ps = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true });
+  const ps = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, allow: PS_WRITER_ALLOW });
   const bash = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'bash', windows: true });
   return { base, ws, policy, forms, ps, bash };
 }

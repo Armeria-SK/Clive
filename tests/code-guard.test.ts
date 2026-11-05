@@ -131,7 +131,7 @@ test('L2・R1.8: 守るファイル・スキルのフォルダ・.git への書�
   for (const command of ['Get-ChildItem *.md | Remove-Item', 'Get-ChildItem tmp | Copy-Item -Destination .']) {
     const verdict = f.ps(command);
     assert.equal(verdict.onceOnly, true, command);
-    assert.match(verdict.reasons.join(), /パイプから来る/u, command);
+    assert.match(verdict.reasons.join(), /パイプで流れてくる値/u, command);
   }
   for (const command of ONCE_WITHOUT_PERSONA_REASON) {
     const verdict = f.bash(command);
@@ -157,7 +157,8 @@ test('L2・R1.8: 守るファイル・スキルのフォルダ・.git への書�
   for (const command of ['curl -o notes.txt https://example.com/x', 'curl -O https://example.com/notes.txt', 'wget --max-redirect=0 -P sub https://example.com/a.txt', 'curl -o - https://example.com/x', 'wget --max-redirect=0 -O - https://example.com/x']) {
     assert.equal(f.bash(command).decision, 'allow', command);
   }
-  assert.equal(f.ps('iwr https://example.com/x -OutFile sub/a.html -MaximumRedirection 0').decision, 'allow');
+  assert.equal(f.ps('iwr https://example.com/x -MaximumRedirection 0').decision, 'allow');
+  assert.equal(f.ps('iwr https://example.com/x -OutFile sub/a.html -MaximumRedirection 0').onceOnly, true, 'PowerShell でファイルに書くものは、書き込み先が決まっていても毎回確かめる');
 });
 
 // ask.curl・ask.powershell・ask.git_push など、中身が文字に見える外への送信は、これまでどおり会話の許可で済ませてよい
@@ -293,11 +294,15 @@ const LEGIT_BASH = [
 const LEGIT_PS = [
   'ls', 'Get-ChildItem -Recurse -Filter *.js', 'cat put.js', 'Get-Content put.js', 'type put.js', 'git status', 'git log --oneline -5', 'git diff', 'git show HEAD', 'git branch', 'rg fetch put.js',
   'node --version', 'node -v', 'python -V', 'npm ls', 'npm --version', 'npm view left-pad version', 'go version', 'cargo --version',
-  '[DateTime]::Now', '[int]$x', '$x = 5', '$x = "a" + "b"', '(Get-Date).ToString("yyyy")', 'Get-Date', 'Write-Host hello', 'echo "see put.js"', 'Get-ChildItem -Name', 'Copy-Item put.js b.js', 'Move-Item put.js c.js',
-  'Remove-Item sub/old.js', 'New-Item -ItemType Directory sub2', 'New-Item new.js', 'iwr https://example.com -MaximumRedirection 0', 'Invoke-WebRequest https://example.com -OutFile page.html -MaximumRedirection 0', 'curl.exe https://example.com',
+  '[DateTime]::Now', '[int]$x', '$x = 5', '$x = "a" + "b"', '(Get-Date).ToString("yyyy")', 'Get-Date', 'Write-Host hello', 'echo "see put.js"', 'Get-ChildItem -Name', 'iwr https://example.com -MaximumRedirection 0', 'curl.exe https://example.com',
   'Get-Process | Sort-Object CPU -Descending | Select-Object -First 5', 'if (Test-Path put.js) { Write-Host yes }', 'if (Test-Path put.js) { Write-Host yes } else { Write-Host no }',
-  'Set-Content out.txt hi', 'Add-Content out.txt hi', 'echo hi > out.txt', 'Get-Content put.js | Select-String fetch', 'Get-Content put.js | Measure-Object -Line', 'git diff SOUL.md', 'cat SOUL.md',
+  'Get-Content put.js | Select-String fetch', 'Get-Content put.js | Measure-Object -Line', 'git diff SOUL.md', 'cat SOUL.md',
   '$env:PATH', '$env:PATH -split ";"', 'tar.exe tf a.tgz', 'Select-String foo put.js', 'Join-Path sub a.txt', 'Test-Path put.js', 'Set-Location sub; Get-ChildItem',
+];
+// PowerShell でファイルを書く・作る・移す・消すコマンドレットとリダイレクトは、パスが決まっていても毎回確かめる（§11.13）
+const ONCE_PS = [
+  'Copy-Item put.js b.js', 'Move-Item put.js c.js', 'Remove-Item sub/old.js', 'New-Item -ItemType Directory sub2', 'New-Item new.js', 'Invoke-WebRequest https://example.com -OutFile page.html -MaximumRedirection 0',
+  'Set-Content out.txt hi', 'Add-Content out.txt hi', 'echo hi > out.txt',
 ];
 // 第 2 版で「ふつうの確かめ」になるようにしたもの（会話の許可で越えられる）
 const ASKS_BASH = ['git add put.js', 'git commit -m "fix put.js"', 'git commit -c HEAD -m x'];
@@ -315,6 +320,11 @@ test('V2: 毎日使うコマンドは、誤って確かめにしない（シェ�
       assert.equal(verdict.decision, 'allow', `${shell}: ${command} が確かめになる: ${verdict.reasons.join(' / ')}`);
       assert.equal(verdict.onceOnly, false, `${shell}: ${command}`);
     }
+  }
+  for (const command of ONCE_PS) {
+    const verdict = f.ps(command);
+    assert.equal(verdict.decision, 'ask', command);
+    assert.equal(verdict.onceOnly, true, `${command}: ${verdict.reasons.join(' / ')}`);
   }
   for (const command of ASKS_BASH) {
     const verdict = f.bash(command);

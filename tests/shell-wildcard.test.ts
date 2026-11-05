@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { expandGlob } from '../src/tools/hooks/path-expand.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
-import { tempDir } from './helpers.ts';
+import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
 // 審査の指摘（深い審査）: PowerShell は、引用符で囲んだ -Path・-FilePath・位置で渡すパスのワイルドカード（* ? [ ]）も解決する（-LiteralPath だけが文字どおり）。
 // ガードは引用符つきの語を文字どおりのパスとして調べていたので、`Set-Content -Path 'SOUL.*'` が人格を書き換えても、確かめなしで通った。
@@ -25,7 +25,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
     askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md'), join(ws, 'skills')],
     skillsDir: join(ws, 'skills'),
   };
-  const ps = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true });
+  const ps = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, allow: PS_WRITER_ALLOW });
   const bash = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'bash', windows: false });
   return { base, ws, ps, bash };
 }

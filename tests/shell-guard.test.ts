@@ -139,7 +139,8 @@ test('shell: 表形式のプローブ（bash）', t => {
 test('shell: 表形式のプローブ（PowerShell）', t => {
   const f = fixture(t);
   const probes: Array<[string, Decision, string?]> = [
-    ['Remove-Item -Recurse -Force sub\\old', 'allow'],
+    ['Remove-Item -Recurse -Force sub\\old', 'ask', 'PowerShell の書くコマンドレットは、パスが決まっていても毎回確かめる'],
+    ['Get-ChildItem -Recurse sub', 'allow'],
     ['Get-Content C:\\Windows\\win.ini', 'ask'],
     ['del /s /q sub\\tmp', 'ask', 'PowerShell では /s /q も場所の引数。cmd のフラグではない'],
     ['Remove-Item -Path:C:\\Users', 'deny', 'ホームを含む場所を消す'],
@@ -241,7 +242,10 @@ test('Windows の別の名前: 末尾の . や空白、大文字小文字、代�
   assert.equal(ps("Set-Content 'SOUL.md::$DATA' x").decision, 'deny');
   assert.equal(ps("Set-Content 'SOUL.md:stream' x").decision, 'deny');
   assert.equal(ps('Set-Content NUL x').decision, 'deny');
-  assert.equal(ps('Set-Content notes.md. x').decision, 'allow', '守る場所でなければ、末尾の . は問題にしない');
+  const plain = ps('Set-Content notes.md. x');
+  assert.equal(plain.decision, 'ask', '書くコマンドレットとして確かめる');
+  assert.doesNotMatch(plain.reasons.join(' '), /人格・プロフィール/u, '守る場所でなければ、末尾の . で守る場所の理由は付かない');
+  assert.equal(ps('Get-Content notes.md.').decision, 'allow');
   if (process.platform === 'win32') {
     const short = realish(join(f.ws, 'SOUL~1.MD'));
     if (short === join(realish(f.ws), 'SOUL.md')) assert.equal(ps('Set-Content SOUL~1.MD x').onceOnly, true, '短い名前');

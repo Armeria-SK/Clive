@@ -7,6 +7,7 @@ import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { tempDir } from './helpers.ts';
 
+// （6 回目の審査で、書くコマンドレットはパイプの有無によらず今回だけに閉じた。shell-ps-closed.test.ts。ここでは読む側の、流れてくるファイルの一覧の調べを確かめる）
 // 審査の指摘（深い審査）: Set-Content・Add-Content・Clear-Content は、パスの引数が無いと、パイプで流れてきたファイルの PSPath を束縛する。
 // `Get-Item SOUL.md | Set-Content -Value pwned` や `Get-ChildItem -Recurse -File | Clear-Content` は、確かめなしで通り、本当に書き換えた。
 // 読む側も同じ: `Get-ChildItem -Force | Select-String -Pattern SECRET` は .env を読んだ。パイプで流れてくるファイルは、次のコマンドが書く・読むものとして調べる
@@ -38,14 +39,14 @@ test('パイプ: パスの引数が無い Set-Content・Add-Content・Clear-Cont
   assert.deepEqual(wrong, []);
 });
 
-test('パイプ: 書くパスの引数があるものは、これまでどおり。流れてくる文字を書く先は決まっている', t => {
+test('パイプ: 書き込み先が書いてあって、流れてくるのが文字だけでも、書くコマンドレットは今回だけ（パイプの値が引数に名前で結び付くため）', t => {
   const f = fixture(t);
   for (const command of [
     'Get-Content a.txt | Set-Content b.txt', 'Get-ChildItem | Select-Object Name | Set-Content names.txt', 'Get-Content a.txt | Out-File out.txt', 'Get-ChildItem sub | Out-String | Add-Content -Path log.txt',
     'Get-ChildItem sub | Set-Content -LiteralPath z2.txt', 'Get-Content a.txt | Tee-Object -FilePath t.txt',
   ]) {
     const v = f.ps(command);
-    assert.equal(v.decision, 'allow', `${command}: ${show(v)} ${v.reasons.join(' / ')}`);
+    assert.equal(once(v), true, `${command}: ${show(v)} ${v.reasons.join(' / ')}`);
   }
 });
 
@@ -55,7 +56,7 @@ test('パイプ: パスの引数が無い読むコマンドは、流れてくる
     'Get-ChildItem -Force | Select-String -Pattern SECRET', 'Get-ChildItem -Force | Get-Content', 'Get-ChildItem -Force | Import-Csv', 'Get-ChildItem -Force | Get-FileHash',
     'Get-ChildItem | Select-String SECRET', 'ls | cat', 'gci -Recurse | Select-String x', 'Get-ChildItem . | Get-FileHash', 'Get-ChildItem *.* | Get-Content', 'Get-ChildItem .e* | Get-Content',
     'Get-ChildItem | Where-Object { $_.Length -gt 0 } | Select-String x', 'Get-ChildItem | Sort-Object Name | Select-Object -First 3 | Get-Content', 'Get-Item .env | Get-Content', 'Get-Item .e* | Select-String S', 'Resolve-Path .env | Get-Content',
-    'Get-ChildItem -Name | Get-Content', 'Get-ChildItem -Recurse -Filter .env | Get-Content', 'Get-ChildItem -Recurse -Include .env | Get-Content',
+    'Get-ChildItem -Name | Get-Content', 'Get-ChildItem -Recurse -Include .env | Get-Content',
   ];
   const wrong = rows.filter(c => f.ps(c).decision !== 'deny').map(c => `${c} → ${show(f.ps(c))}`);
   assert.deepEqual(wrong, []);
@@ -70,6 +71,8 @@ test('パイプ: 流れてくるファイルが分からない読むコマンド
     'Get-Content a.txt | Get-Item', 'Get-Content a.txt | Get-ChildItem', 'Get-Content a.txt | Import-Csv', 'Get-ChildItem sub -Name | Get-Item', 'Get-ChildItem | Select-Object -ExpandProperty Name | Get-Content',
     'Get-ChildItem | Select-Object @{n="Path";e={$_.FullName}} | Get-Content', 'Get-Process | Get-FileHash', 'Get-ChildItem sub | Select-String z | Get-Content', '(Get-ChildItem) | Get-Content',
     'Get-ChildItem $d | Get-Content',
+    // -Filter は Windows のファイル検索の決まりで名前を選ぶので真似ない
+    'Get-ChildItem -Recurse -Filter .env | Get-Content', 'Get-ChildItem -Filter *.md | Select-String n', 'Get-ChildItem sub -Recurse -Filter *.txt | Get-Content',
   ];
   const wrong = rows.filter(c => !once(f.ps(c))).map(c => `${c} → ${show(f.ps(c))}`);
   assert.deepEqual(wrong, []);
@@ -79,8 +82,8 @@ test('パイプ: 流れてくるのが文字だけ、または秘密を含まな
   const f = fixture(t);
   for (const command of [
     'Get-Content a.txt | Select-String x', 'Get-Content a.txt | Select-Object -First 2', 'Get-ChildItem | Select-Object Name', 'Get-ChildItem sub | Select-String z', 'Get-ChildItem sub -Recurse | Select-String z',
-    'Get-ChildItem -Recurse sub | Where-Object { $_.Length -gt 0 } | Select-String z', 'Get-ChildItem *.md | Select-String n', 'Get-ChildItem -Filter *.md | Select-String n', 'Get-ChildItem -Recurse -Include *.md | Select-String n',
-    'Get-ChildItem sub -Recurse -Filter *.txt | Get-Content', 'Get-ChildItem -Include *.md -Recurse | Get-Content -Raw -Encoding UTF8 | Select-String x', 'Get-ChildItem sub | Get-Item', 'Get-Item notes.md | Get-Content', 'Get-Item a.txt | Get-FileHash', 'Resolve-Path a.txt | Get-Content', 'Get-ChildItem sub | Sort-Object Name | Select-String z',
+    'Get-ChildItem -Recurse sub | Where-Object { $_.Length -gt 0 } | Select-String z', 'Get-ChildItem *.md | Select-String n', 'Get-ChildItem -Recurse -Include *.md | Select-String n',
+    'Get-ChildItem -Include *.md -Recurse | Get-Content -Raw -Encoding UTF8 | Select-String x', 'Get-ChildItem sub | Get-Item', 'Get-Item notes.md | Get-Content', 'Get-Item a.txt | Get-FileHash', 'Resolve-Path a.txt | Get-Content', 'Get-ChildItem sub | Sort-Object Name | Select-String z',
     'Get-Content a.txt | Measure-Object -Line', 'Get-ChildItem | Measure-Object', 'Get-ChildItem | Format-Table Name', 'Get-ChildItem sub | ForEach-Object { $_.Name }', 'Get-ChildItem | Where-Object { $_.Name -like "n*" } | Select-Object Name',
     'Write-Output hello | Select-String h', 'echo hello | Select-String h', 'Get-ChildItem sub | Select-Object FullName', 'git status | Select-String modified', 'Get-Content a.txt | Out-String',
   ]) {

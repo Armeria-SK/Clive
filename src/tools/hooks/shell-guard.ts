@@ -318,8 +318,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const list = ref.list!;
     const heads = globbing ? expandGlob(patternOf(ref.word, base, windows), dotfiles) : { matches: [root], complete: true };
     let complete = heads.complete;
-    const wanted = (name: string): boolean => (list.filter.length === 0 || list.filter.some(p => wildcardMatches(name, p)))
-      && (list.include.length === 0 || list.include.some(p => wildcardMatches(name, p))) && !list.exclude.some(p => wildcardMatches(name, p));
+    const wanted = (name: string): boolean => (list.include.length === 0 || list.include.some(p => wildcardMatches(name, p))) && !list.exclude.some(p => wildcardMatches(name, p));
     for (const head of heads.matches) {
       if (list.items || !isDirectory(head)) { evalAbs(head, head, false, false, false); continue; }
       const tree = listTree(head, list.deep);

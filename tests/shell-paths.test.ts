@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { expandGlob, containsGitDir, protectedInside } from '../src/tools/hooks/path-expand.ts';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand, type ShellGuardOptions } from '../src/tools/hooks/shell-guard.ts';
-import { tempDir } from './helpers.ts';
+import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
 // security-self-api.md §11.4: 書き込み先の組み立て（cp・mv・Copy-Item・Rename-Item・New-Item・curl -O・wget）・ワイルドカードの列挙・守る場所の先祖への書き込み
 
@@ -21,7 +21,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   };
   const run = (command: string, shell: 'bash' | 'powershell', extra: Partial<ShellGuardOptions> = {}) =>
     checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', ...extra });
-  return { base, ws, policy, bash: (c: string, e: Partial<ShellGuardOptions> = {}) => run(c, 'bash', e), ps: (c: string, e: Partial<ShellGuardOptions> = {}) => run(c, 'powershell', e) };
+  return { base, ws, policy, bash: (c: string, e: Partial<ShellGuardOptions> = {}) => run(c, 'bash', e), ps: (c: string, e: Partial<ShellGuardOptions> = {}) => run(c, 'powershell', { allow: PS_WRITER_ALLOW, ...e }) };
 }
 
 const once = (v: { decision: string; onceOnly: boolean }): boolean => v.decision === 'ask' && v.onceOnly;

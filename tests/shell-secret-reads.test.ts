@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { expandGlob, GLOB_CAP, listTree } from '../src/tools/hooks/path-expand.ts';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
-import { tempDir } from './helpers.ts';
+import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
 // 再審査の指摘（低）: ワイルドカードに当たるものが 2,000 件を超えると、列挙しきれないので「ふつうの確かめ」にしていたが、その中に秘密のパスがあっても止めなかった。
 // PowerShell の -Path のワイルドカードのエスケープ（バッククォート）つきの、引用符で囲んだ秘密の名前（'.en`v'）も、判定できない（ふつうの確かめ）で止めなかった。
@@ -27,7 +27,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   const policy: ScopePolicy = {
     roots: [{ path: ws, mode: 'write' }], deny: [realish(join(base, 'config.json'))], askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md')], skillsDir: join(ws, 'skills'),
   };
-  const ps = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true });
+  const ps = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, allow: PS_WRITER_ALLOW });
   const bash = (command: string) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell: 'bash', windows: false });
   return { base, ws, ps, bash };
 }

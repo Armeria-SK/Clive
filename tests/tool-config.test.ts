@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { isToolConfigPath, wgetConfigFile } from '../src/tools/hooks/tool-config.ts';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
-import { tempDir } from './helpers.ts';
+import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
 // 審査で見つかった: git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンド（git status・curl）にコードを読み込ませられる。
 // 許可フォルダの外への書き込みは「ふつうの確かめ」で、会話の許可で通ってしまっていた。ホームを許可フォルダにした設定では、確かめにもならない
@@ -21,7 +21,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   const env = { HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: join(home, '.config') };
   // ホーム全体を許可フォルダにしている設定（作業フォルダはその中）
   const policy: ScopePolicy = { roots: [{ path: home, mode: 'write' }], deny: [], askOnWrite: [join(ws, 'SOUL.md')] };
-  const run = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', env });
+  const run = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', env, ...(shell === 'powershell' ? { allow: PS_WRITER_ALLOW } : {}) });
   return { base, home, ws, env, bash: (c: string) => run(c, 'bash'), ps: (c: string) => run(c, 'powershell') };
 }
 
@@ -252,7 +252,7 @@ function outsideHomeFixture(t: { after: (fn: () => void) => void }) {
   const env = { HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming'), XDG_CONFIG_HOME: join(home, '.config') };
   // 許可フォルダは作業フォルダだけ。ホームはその外
   const policy: ScopePolicy = { roots: [{ path: ws, mode: 'write' }], deny: [], askOnWrite: [join(ws, 'SOUL.md')] };
-  const run = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', env });
+  const run = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', env, ...(shell === 'powershell' ? { allow: PS_WRITER_ALLOW } : {}) });
   return { home, ws, env, bash: (c: string) => run(c, 'bash'), ps: (c: string) => run(c, 'powershell') };
 }
 

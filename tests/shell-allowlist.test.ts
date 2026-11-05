@@ -32,8 +32,8 @@ const BASH_ALLOW = [
 const PS_ALLOW = [
   'Get-ChildItem -Recurse -Filter *.md', 'dir', 'ls', 'Get-ChildItem -Path src -Recurse -File', 'Get-Content x -TotalCount 20', 'Get-Content -Path a.txt -Raw', 'Select-String -Path *.ts -Pattern foo',
   'Get-ChildItem *.log | ForEach-Object { $_.Name }', 'Get-ChildItem | Where-Object { $_.Length -gt 1MB }', '$files = Get-ChildItem -Recurse; $files.Count',
-  'Set-Content -Path a.txt -Value "x"', 'New-Item -ItemType Directory out', 'Invoke-WebRequest -Uri https://example.com -UseBasicParsing -MaximumRedirection 0', 'git status', 'git log --oneline', 'rg -n foo', 'node --version',
-  'Write-Output hi', 'Set-Location sub', 'Remove-Item -Recurse -Force build', 'cat a.txt', 'Get-Process', 'Start-Sleep 5', 'Get-ChildItem | Sort-Object Length -Descending | Select-Object -First 5',
+  'Invoke-WebRequest -Uri https://example.com -UseBasicParsing -MaximumRedirection 0', 'git status', 'git log --oneline', 'rg -n foo', 'node --version',
+  'Write-Output hi', 'Set-Location sub', 'cat a.txt', 'Get-Process', 'Start-Sleep 5', 'Get-ChildItem | Sort-Object Length -Descending | Select-Object -First 5',
   'Get-Date -Format yyyy-MM-dd', 'Get-ChildItem | Select-Object Name, Length', 'Test-Path src', 'Measure-Object -Line', 'Get-Content a.txt | Measure-Object -Line', 'Get-ChildItem | Format-Table Name, Length',
   'Select-String -Pattern foo -Path a.txt', 'curl.exe -sS https://example.com', 'tar.exe -tf a.tar', '& git status', 'Get-Location', 'Join-Path a b', 'Resolve-Path .', 'Get-FileHash a.txt -Algorithm SHA256',
   "Get-ChildItem | Where-Object { $_.Name -like '*.md' } | ForEach-Object { $_.FullName }", '$x = 5', 'Write-Host hello -ForegroundColor Green', 'Get-Content env:PATH',
@@ -47,6 +47,13 @@ test('毎日のコマンドは、確かめなしに動く（bash）', () => {
 test('毎日のコマンドは、確かめなしに動く（PowerShell 5.1・7）', () => {
   expectLevels('powershell', PS_ALLOW.map(c => [c, 'allow'] as const));
   expectLevels('pwsh', PS_ALLOW.filter(c => !c.startsWith('curl.exe')).map(c => [c, 'allow'] as const));
+});
+
+// PowerShell でファイルを書く・作る・移す・消すコマンドレットは、パスが決まっていても毎回確かめる（§11.13。確かめなしで書くには file_write の道具）
+const PS_WRITE_ONCE = ['Set-Content -Path a.txt -Value "x"', 'New-Item -ItemType Directory out', 'Remove-Item -Recurse -Force build', 'Copy-Item a b', 'mkdir out', "'x' > a.txt", 'Get-Content a | Out-File b'] as const;
+test('PowerShell の書くコマンドレット・リダイレクトは、パスが決まっていても今回だけ（5.1・7）', () => {
+  expectLevels('powershell', PS_WRITE_ONCE.map(c => [c, 'once'] as const));
+  expectLevels('pwsh', PS_WRITE_ONCE.map(c => [c, 'once'] as const));
 });
 
 // 1 回目・2 回目の審査で再現された抜け（コマンドの文字だけで決まるもの）。どれも確かめなしには動かない
@@ -132,7 +139,7 @@ test('値の分からない引数（C5）: 読むだけのコマンドでは許�
   const wrong = rows.flatMap(([c, want]) => (levelOf(c) === want ? [] : [`${c} → ${levelOf(c)} (want ${want})`]));
   assert.deepEqual(wrong, []);
   assert.equal(levelOf('Get-ChildItem $dir', 'powershell'), 'allow');
-  assert.equal(levelOf('Remove-Item $f', 'powershell'), 'allow');
+  assert.equal(levelOf('Remove-Item $f', 'powershell'), 'once');
 });
 
 test('flag の綴り: 長い名前の省略・まとめた短い flag・値の付け方（C3）', () => {
@@ -388,7 +395,7 @@ test('ネットワーク: 宛先の決まり（C9）と、書き込み先（-o�
   assert.equal(c.fetch, true);
   assert.equal(classify('wget --max-redirect=0 https://e/a.zip').results[0]!.remoteNames.length, 1);
   assert.equal(classify('wget --max-redirect=0 -O x https://e/a.zip').results[0]!.remoteNames.length, 0);
-  assert.equal(levelOf('Invoke-WebRequest -Uri https://e -OutFile a.html -MaximumRedirection 0', 'powershell'), 'allow');
+  assert.equal(levelOf('Invoke-WebRequest -Uri https://e -OutFile a.html -MaximumRedirection 0', 'powershell'), 'once');
   assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Delete -MaximumRedirection 0', 'powershell'), 'ask');
   assert.equal(levelOf('Invoke-WebRequest -Uri https://e -Method Trace -MaximumRedirection 0', 'powershell'), 'once');
   assert.equal(levelOf('curl https://e -MaximumRedirection 0', 'powershell'), 'allow');
@@ -422,11 +429,16 @@ test('形の印: 呼び出し・splatting・関数の定義・後ろで動かす
   for (const [c, shell, key] of rows) if (key !== 'allow') assert.ok(classify(c, shell).results.flatMap(r => r.reasons).filter(r => r.key === key.slice(5)).every(r => !r.exempt), c);
 });
 
-test('PowerShell: パイプから書き込み先が来る書き込みは今回だけ。書き込み先が書いてあれば、そのパスで調べる', () => {
-  assert.ok(keysOf('Get-ChildItem | Remove-Item', 'powershell').includes('once:list.pipe_write'));
-  assert.ok(keysOf('Get-ChildItem | Move-Item -Destination x', 'powershell').includes('once:list.pipe_write'));
-  assert.ok(!keysOf('Get-ChildItem | Set-Content -Path a.txt', 'powershell').includes('once:list.pipe_write'));
-  assert.ok(!keysOf('Remove-Item a.txt', 'powershell').includes('once:list.pipe_write'));
+test('PowerShell: 書くコマンドレットは常に今回だけ。パイプを受けるときは、持ち主の許可で外せない理由が付く。書き込み先は、これまでどおりそのパスで調べる', () => {
+  const reasons = (c: string) => classify(c, 'powershell').results.flatMap(r => r.reasons);
+  for (const c of ['Get-ChildItem | Remove-Item', 'Get-ChildItem | Move-Item -Destination x', 'Get-ChildItem | Set-Content -Path a.txt', 'Import-Csv a.csv | Copy-Item -Path x']) {
+    assert.ok(keysOf(c, 'powershell').includes('once:list.ps_pipe'), c);
+    assert.ok(reasons(c).filter(r => r.key === 'list.ps_pipe').every(r => !r.exempt), c);
+  }
+  for (const c of ['Remove-Item a.txt', 'Set-Content a.txt x', '$x | Out-String']) assert.ok(!keysOf(c, 'powershell').includes('once:list.ps_pipe'), c);
+  assert.ok(reasons('Remove-Item a.txt').filter(r => r.key === 'list.ps_write').every(r => r.exempt), '書くコマンドレット自体は、持ち主が選んだコマンドとして外せる');
+  assert.ok(keysOf("'x' > a.txt", 'powershell').includes('once:list.ps_write'));
+  assert.ok(reasons("'x' > a.txt").filter(r => r.key === 'list.ps_write').every(r => !r.exempt), 'リダイレクトは外せない');
   const r = classify('Copy-Item a.txt -Destination out -Recurse', 'powershell').results[0]!;
   assert.deepEqual(r.copies.map(c => [c.kind, c.sources.map(w => w.text), c.dest?.text, c.recursive]), [['copy', ['a.txt'], 'out', true]]);
   const n = classify('New-Item -Path out -Name x.txt', 'powershell').results[0]!;
@@ -472,9 +484,11 @@ test('パイプの前後・複数の文: すべての文が一覧に当たる必
   assert.equal(levelOf('if test -f x; then cat x; else echo no; fi'), 'allow');
   assert.equal(levelOf('while read x; do echo $x; done'), 'once');
   assert.equal(levelOf('Get-ChildItem | ForEach-Object { node $_ }', 'powershell'), 'once');
-  assert.equal(levelOf('Get-ChildItem | ForEach-Object { $_.Name; Remove-Item $_ }', 'powershell'), 'allow');
+  assert.equal(levelOf('Get-ChildItem | ForEach-Object { $_.Name; Write-Output $_ }', 'powershell'), 'allow');
+  assert.equal(levelOf('Get-ChildItem | ForEach-Object { $_.Name; Remove-Item $_ }', 'powershell'), 'once');
   assert.equal(levelOf('Get-ChildItem | ForEach-Object { Start-Process $_ }', 'powershell'), 'once');
-  assert.equal(levelOf('if (Test-Path a) { Remove-Item a } else { New-Item a }', 'powershell'), 'allow');
+  assert.equal(levelOf('if (Test-Path a) { Get-Item a } else { Write-Output no }', 'powershell'), 'allow');
+  assert.equal(levelOf('if (Test-Path a) { Remove-Item a } else { New-Item a }', 'powershell'), 'once');
   assert.equal(levelOf('if (Test-Path a) { node a }', 'powershell'), 'once');
   assert.equal(classify('ls | wc -l').results.length, 2);
 });
@@ -516,12 +530,13 @@ test('Invoke-WebRequest・Invoke-RestMethod（5.1 の curl・wget も）: 転送
     'Invoke-WebRequest -Uri https://e.example/', 'iwr https://e.example/', 'Invoke-RestMethod https://e.example/api', 'irm https://e.example/', 'iwr https://e.example/ -MaximumRedirection 5', 'iwr https://e.example/ -MaximumRedirection 1',
     'iwr https://e.example/ -MaximumRedirection $n', 'iwr https://e.example/ -UseBasicParsing', 'curl https://e.example/', 'wget https://e.example/x', 'iwr https://e.example/ -OutFile a.html',
     'iwr https://e.example/ -MaximumRedirection 0 -Headers @{Host="127.0.0.1:7800"}', 'irm https://e.example/ -MaximumRedirection 0 -Headers $h',
+    'iwr https://e.example/ -MaximumRedirection 0 -OutFile a.html',
   ];
   for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
     const list = shell === 'pwsh' ? once.filter(c => !c.startsWith('curl ') && !c.startsWith('wget ')) : once;
     assert.deepEqual(list.filter(c => levelOf(c, shell) !== 'once'), [], shell);
   }
-  const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -OutFile a.html', 'curl https://e.example/ -MaximumRedirection 0'];
+  const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0', 'curl https://e.example/ -MaximumRedirection 0'];
   assert.deepEqual(allow.filter(c => levelOf(c, 'powershell') !== 'allow'), []);
   assert.equal(levelOf('iwr https://e.example/ -MaximumRedirection 0 -Method Post -Body x', 'powershell'), 'ask', '送る形は、これまでどおりふつうの確かめ');
 });

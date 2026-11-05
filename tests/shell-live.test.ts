@@ -79,13 +79,9 @@ test('実機（Windows PowerShell 5.1・制限モード）: 一覧に当たる�
     ['Get-Content a.txt -TotalCount 2', /line1\s+line2/u],
     ['Get-ChildItem | Where-Object { $_.Length -gt 6 } | ForEach-Object { $_.Name }', /a\.txt/u],
     ['$files = Get-ChildItem -Recurse; $files.Count', /\b[0-9]+\b/u],
-    ['Set-Content -Path out.txt -Value "hello"; Get-Content out.txt', /hello/u],
-    ['New-Item -ItemType Directory -Path made | Out-Null; Test-Path made', /True/u],
-    ['mkdir madeby | Out-Null; Test-Path madeby', /True/u],
-    ['Copy-Item a.txt c.txt; (Get-Content c.txt).Count', /\b3\b/u],
     ['Select-String -Path *.txt -Pattern line2', /line2/u],
     ['Get-Date -Format yyyy', /20[0-9]{2}/u],
-    ['Remove-Item c.txt; Test-Path c.txt', /False/u],
+    ['Get-ChildItem -Path . -Recurse -Include *.txt | Select-String line3', /line3/u],
     ['Get-ChildItem *.md | ForEach-Object { $_.Name }', /notes\.md[\s\S]*SOUL\.md|SOUL\.md[\s\S]*notes\.md/u],
     ['[DateTime]::Now.Year', /20[0-9]{2}/u],
     ['"x".ToUpper()', /X/u],
@@ -106,9 +102,19 @@ test('実機（Windows PowerShell 5.1・制限モード）: 一覧に当たる�
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
-  assert.equal(readFileSync(s.files('out.txt'), 'utf8').trim(), 'hello');
-  assert.equal(existsSync(s.files('c.txt')), false);
   if (which('rg')) assert.match((await s.call('rg --version')).output.content, /ripgrep/u);
+});
+
+// 6 回目の審査の後: PowerShell でファイルを書く・作る・移す・消すコマンドレットとリダイレクトは、書き込み先が決まっていても毎回確かめる（§11.13）。拒否すれば何も起きない
+test('実機（Windows PowerShell 5.1・制限モード）: 書く・作る・移す・消すコマンドレットとリダイレクトは、パスが決まっていても確かめになり、拒否すれば何も起きない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  for (const command of [
+    'Set-Content -Path out.txt -Value "hello"', 'New-Item -ItemType Directory -Path made', 'mkdir madeby', 'Copy-Item a.txt c.txt', 'Move-Item a.txt moved.txt', 'Rename-Item notes.md -NewName renamed.md', 'Remove-Item a.txt',
+    'Get-Content a.txt | Out-File out2.txt', "'x' > out3.txt", 'Get-Content a.txt >> a.txt', 'Add-Content a.txt more', 'Clear-Content a.txt',
+  ]) await expectAsk(s, command);
+  for (const name of ['out.txt', 'made', 'madeby', 'c.txt', 'moved.txt', 'renamed.md', 'out2.txt', 'out3.txt']) assert.equal(existsSync(s.files(name)), false, `${name} ができた`);
+  assert.equal(readFileSync(s.files('a.txt'), 'utf8'), 'line1\nline2\nline3\n', 'a.txt が変わった');
+  assert.equal(readFileSync(s.files('notes.md'), 'utf8'), 'notes\n');
 });
 
 test('実機（Windows PowerShell 5.1・制限モード）: 組み立てた書き込み先・一覧に無いコード・入れるものは、確かめになり、拒否すれば動かない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
@@ -148,7 +154,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: パイプで流れ�
     assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
   }
   for (const [command, expected] of [
-    ['Get-Content a.txt | Select-String line2', /line2/u], ['Get-ChildItem sub | Select-String bee', /bee/u], ['Get-ChildItem -Filter *.txt | Select-String line3', /line3/u],
+    ['Get-Content a.txt | Select-String line2', /line2/u], ['Get-ChildItem sub | Select-String bee', /bee/u], ['Get-ChildItem -Recurse -Filter *.txt | Select-Object -ExpandProperty Name', /a\.txt/u],
     ['Get-ChildItem sub -Recurse | Get-Content', /bee/u], ['Get-ChildItem -Recurse -Include *.md | Select-String persona', /persona/u],
   ] as const) {
     const outcome = await s.call(command);
@@ -156,6 +162,66 @@ test('実機（Windows PowerShell 5.1・制限モード）: パイプで流れ�
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
+  // -Filter は Windows のファイル検索の決まりで名前を選ぶので、ファイルを読む次のコマンドに流すときは確かめになる
+  await expectAsk(s, 'Get-ChildItem -Filter *.txt | Select-String line3');
+});
+
+// 確かめになる（拒否すれば動かない）か、確かめにも進まず止まる。確かめなしで動いたら失敗
+async function expectBlocked(s: ReturnType<typeof setup>, command: string): Promise<void> {
+  let settled = false;
+  const pending = s.call(command).then(outcome => { settled = true; return outcome; });
+  for (let i = 0; i < 300 && !settled && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+  const request = s.approvals.pending()[0];
+  assert.ok(request || settled, `${command}: 確かめも拒否もなく動いている`);
+  if (request) {
+    assert.equal(request.onceOnly, true, `${command}: 今回だけの確かめでない`);
+    s.approvals.decide(request.id, 'deny');
+  }
+  const outcome = await pending;
+  assert.notEqual(outcome.decision, 'allow', command);
+  assert.equal(outcome.output.isError, true, command);
+  assert.doesNotMatch(outcome.output.content, /SECRET=1|PRIVATE-KEY/u, `${command}: 秘密が出た`);
+}
+
+// 6 回目の審査: `'{"Destination":"SOUL.md"}' | ConvertFrom-Json | Copy-Item -Path evil.txt -Force`（と Import-Csv・計算した列）は、確かめなしで通り、SOUL.md を上書きし .git/hooks/pre-commit を置いた。
+// `Get-ChildItem -Force -Recurse -Filter '.env?' | Select-String SECRET` は .env を表示した。本物の Windows PowerShell 5.1 で、素のシェルでは本当に起きること（前提）と、Clive のシェルでは確かめになるか止まり、拒否すれば何も起きないことを確かめる
+test('実機（Windows PowerShell 5.1・制限モード）: パイプの値の名前で書き込み先が決まる書き込みと、-Filter・-Include 越しの秘密の読み取りは、確かめになるか止まり、拒否すれば何も起きない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const plant = (dir: string): void => {
+    mkdirSync(join(dir, '.git', 'hooks'), { recursive: true });
+    for (const [name, text] of [['SOUL.md', 'persona'], ['.env', 'SECRET=1\n'], ['id_rsa', 'PRIVATE-KEY\n'], ['evil.txt', 'evil\n'], ['a.txt', 'a\n'], ['people.csv', 'Destination\nSOUL.md\n']] as const) writeFileSync(join(dir, name), text);
+  };
+  plant(s.paths.workspace);
+  const writes: Array<[string, (dir: string) => boolean]> = [
+    [`'{"Destination":"SOUL.md"}' | ConvertFrom-Json | Copy-Item -Path evil.txt -Force`, d => readFileSync(join(d, 'SOUL.md'), 'utf8') === 'evil\n'],
+    [`'{"Destination":".git/hooks/pre-commit"}' | ConvertFrom-Json | Copy-Item -Path evil.txt -Force`, d => existsSync(join(d, '.git', 'hooks', 'pre-commit'))],
+    [`'{"Destination":"SOUL.md"}' | ConvertFrom-Json | Move-Item -Path evil.txt -Force`, d => readFileSync(join(d, 'SOUL.md'), 'utf8') === 'evil\n'],
+    [`Import-Csv people.csv | Copy-Item -Path evil.txt -Force`, d => readFileSync(join(d, 'SOUL.md'), 'utf8') === 'evil\n'],
+    [`Import-Csv people.csv | Move-Item -Path evil.txt -Force`, d => readFileSync(join(d, 'SOUL.md'), 'utf8') === 'evil\n'],
+    [`Get-ChildItem a.txt | Select-Object @{n='Destination';e={'SOUL.md'}} | Copy-Item -Path evil.txt -Force`, d => readFileSync(join(d, 'SOUL.md'), 'utf8') === 'evil\n'],
+    [`Get-ChildItem a.txt | Select-Object @{n='Destination';e={'.git/hooks/pre-commit'}} | Copy-Item -Path evil.txt -Force`, d => existsSync(join(d, '.git', 'hooks', 'pre-commit'))],
+  ];
+  const scratch = join(s.paths.workspace, '..', 'premise');
+  for (const [command, happened] of writes) {
+    rmSync(scratch, { recursive: true, force: true });
+    plant(scratch);
+    spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: scratch, encoding: 'utf8' });
+    assert.equal(happened(scratch), true, `前提: 素の PowerShell では本当に書かれる: ${command}`);
+  }
+  for (const [command] of writes) await expectBlocked(s, command);
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '人格が書き換わった');
+  assert.equal(existsSync(s.files('.git/hooks/pre-commit')), false, '.git/hooks にフックが置かれた');
+  assert.equal(readFileSync(s.files('evil.txt'), 'utf8'), 'evil\n', '元のファイルが動いた');
+
+  const reads = [
+    `Get-ChildItem -Force -Recurse -Filter '.env?' | Select-String SECRET`, `Get-ChildItem -Force -Recurse -Filter '*.' | Select-String KEY`, `Get-ChildItem -Force -Recurse -Filter 'id_rsa?' | Select-String KEY`,
+    "Get-ChildItem -Force -Recurse -Include '.en`v' | Select-String SECRET", `Get-ChildItem -Force -Recurse -Filter '.env?' | Get-Content`,
+  ];
+  for (const command of reads) {
+    const raw = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' });
+    assert.match(raw.stdout, /SECRET=1|PRIVATE-KEY/u, `前提: 素の PowerShell は秘密を表示する: ${command}`);
+  }
+  for (const command of reads) await expectBlocked(s, command);
 });
 
 // 再審査の指摘: `//localhost/D$/…/USER.md`（管理共有）や `//?/D:/…`（デバイスのパス）は、本物の Windows で人格を書き換えたのに、許可フォルダの外のふつうの確かめだけで通った。

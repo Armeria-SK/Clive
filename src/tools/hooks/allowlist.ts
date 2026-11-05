@@ -46,7 +46,10 @@ function redirects(st: Statement, acc: Acc, ps: boolean): void {
     if (NULL_SINK.test(r.target.text) && !r.target.dynamic) continue;
     // PowerShell の > は Out-File -FilePath と同じで、引用符つきでもワイルドカードを解決する
     const target = ps ? withWildcard(r.target) : r.target;
-    if (r.op === '<') acc.read(target); else acc.write(target);
+    if (r.op === '<') { acc.read(target); continue; }
+    acc.write(target);
+    // PowerShell のリダイレクトは書き込みなので、持ち主の許可でも外せず毎回確かめる（§11.13）
+    if (ps) acc.add('once', 'list.ps_write', { cmd: r.op }, false);
   }
 }
 
@@ -75,7 +78,6 @@ function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx
     if (spec) {
       const p = parsePs(spec, words, acc, ctx);
       spec.extra?.(p, acc, ctx, st);
-      if (acc.pipeWrite) { if (st.pipedIn) acc.add('once', 'list.pipe_write', {}, false); else acc.pipeWrite = false; }
       pipeBound(spec, p, st, acc, ctx, isExternalText);
       return;
     }

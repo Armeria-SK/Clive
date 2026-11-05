@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { containsGitDir, protectedInside } from '../src/tools/hooks/path-expand.ts';
 import { realish, writeApprovalKind, type ScopePolicy } from '../src/tools/hooks/scope.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
-import { tempDir } from './helpers.ts';
+import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
 // 再審査の指摘: .git でない名前の裏のリポジトリ（git init --bare up）の hooks/ や config への書き込みは、ただの許可フォルダの中の書き込みとして通った。
 // 設定に remote としてその場所が書かれていれば、`git push up` がそのフックを動かす（ローカルの転送の子には、フックの上書きが届かない）。
@@ -28,7 +28,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   mkdirSync(join(ws, 'plain'), { recursive: true });
   mkdirSync(join(ws, 'sub'), { recursive: true });
   const policy: ScopePolicy = { roots: [{ path: ws, mode: 'write' }], deny: [], askOnWrite: [], skillsDir: join(ws, 'skills') };
-  const ps = (command: string, cwd = ws) => checkShellCommand(command, cwd, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true });
+  const ps = (command: string, cwd = ws) => checkShellCommand(command, cwd, { policy, outsideRoots: 'ask', shell: 'powershell', windows: true, allow: PS_WRITER_ALLOW });
   const bash = (command: string, cwd = ws) => checkShellCommand(command, cwd, { policy, outsideRoots: 'ask', shell: 'bash', windows: false });
   return { base, ws, policy, ps, bash };
 }

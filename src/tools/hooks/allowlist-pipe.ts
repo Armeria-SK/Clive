@@ -1,13 +1,14 @@
-// PowerShell のパイプで流れてくるファイルのパス（security-self-api.md の審査: パイプで渡るパス）。
-// Get-ChildItem・Get-Item が流すファイルのオブジェクトは PSPath を持ち、Set-Content・Select-String・Get-Content などは、パスの引数が無いとそれを束縛する。
-// 引数にパスが書かれていなくても、前のコマンドが流したファイルを、書き換える・読む。そのため、パスの引数が無くパイプで受けるコマンドは、前のコマンドが何を流すかで決める:
-// 書く・変えるコマンドは今回だけ。読むコマンドは、流れるのが文字だけなら許し、ファイルの一覧（パスが分かる Get-ChildItem など）なら、その一覧を読むものとして調べ、分からなければ今回だけ。
+// PowerShell のパイプで流れてくるファイルのパス（security-self-api.md の審査: パイプで渡るパス）。読むコマンドだけ。
+// Get-ChildItem・Get-Item が流すファイルのオブジェクトは PSPath を持ち、Select-String・Get-Content などは、パスの引数が無いとそれを束縛して読む。
+// 引数にパスが書かれていなくても、前のコマンドが流したファイルを読むので、パスの引数が無くパイプで受ける読むコマンドは、前のコマンドが何を流すかで決める:
+// 流れるのが文字だけなら許し、ファイルの一覧（パスが分かる Get-ChildItem など）なら、その一覧を読むものとして調べ（秘密のパスが含まれれば止める）、分からなければ今回だけ。
+// 書くコマンドは、ここでは決めない: 書き込み先の結び付き（パイプから名前で渡る -Destination など）は真似きれないので、allowlist-ps.ts でパイプの有無によらず毎回確かめる（§11.13）。
 
 import { Acc, type ListSpec, type MatchCtx } from './allowlist-core.ts';
 import { first, parsePs, pathWords, psCmdlet, type PsCmd, type PsParsed } from './allowlist-ps.ts';
 import type { Statement, Word } from './shell-lex.ts';
 
-const PATH_KEYS = ['path', 'literalpath', 'filepath'] as const;
+const PATH_KEYS = ['path', 'literalpath'] as const;
 // 流れてきた文字列が、そのままパスとして束縛されるもの（本物の PowerShell 5.1 で確かめた。Get-Content・Get-FileHash・Select-String は文字列をパスにしない）
 const BY_VALUE = new Set(['get-childitem', 'get-item', 'test-path', 'resolve-path', 'import-csv']);
 // 出力が文字や、パスを持たないもの
@@ -24,7 +25,13 @@ export type Flow =
 const TEXT_FLOW: Flow = { kind: 'text' };
 const UNKNOWN: Flow = { kind: 'unknown' };
 
-const literals = (words: readonly Word[]): string[] => (words.some(w => w.dynamic || w.kind !== 'plain') ? [] : words.flatMap(w => w.text.split(',').map(t => t.trim()).filter(Boolean)));
+// -Include / -Exclude の名前の絞り込み。* と ? だけの指定は、PowerShell と同じに名前に当てられる。[ ]・エスケープのバッククォートなどを含む指定・変数は真似ない（undefined）
+const SIMPLE_PATTERN = /^[\w.*?-]+$/u;
+function patterns(words: readonly Word[]): string[] | undefined {
+  if (words.some(w => w.dynamic || w.kind !== 'plain')) return undefined;
+  const list = words.flatMap(w => w.text.split(',').map(t => t.trim()).filter(Boolean));
+  return list.every(t => SIMPLE_PATTERN.test(t)) ? list : undefined;
+}
 
 // 文 u が流すもの
 export function flowOf(u: Statement | undefined, ctx: MatchCtx, external: (name: string) => boolean): Flow {
@@ -48,11 +55,13 @@ export function flowOf(u: Statement | undefined, ctx: MatchCtx, external: (name:
     if (given.length === 0 && u.pipedIn) return UNKNOWN;
     const roots: Word[] = given.length ? given : [{ text: '.', dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' }];
     if (roots.some(w => w.dynamic || w.kind !== 'plain')) return UNKNOWN;
+    // -Filter は Windows のファイル検索の決まり（末尾の ? が何にも当たらない・*. が拡張子のない名前に当たる・短い 8.3 の名前）で名前を選ぶので、真似ない
+    if (p.all.has('filter')) return UNKNOWN;
     const deep = id === 'get-childitem' && p.all.has('recurse');
-    const list: ListSpec = {
-      deep, items: id !== 'get-childitem', filter: literals(first(p, 'filter')),
-      include: deep ? literals(first(p, 'include')) : [], exclude: deep ? literals(first(p, 'exclude')) : [],
-    };
+    const include = patterns(first(p, 'include'));
+    // 分からない -Include は何が返るか分からない。分からない -Exclude は、引かずに多めに調べる
+    if (include === undefined) return UNKNOWN;
+    const list: ListSpec = { deep, items: id !== 'get-childitem', include: deep ? include : [], exclude: deep ? patterns(first(p, 'exclude')) ?? [] : [] };
     return { kind: 'files', lists: roots.map(word => ({ word, list })), names: p.all.has('name') };
   }
   return UNKNOWN;
@@ -62,10 +71,9 @@ export function flowOf(u: Statement | undefined, ctx: MatchCtx, external: (name:
 export function pipeBound(spec: PsCmd, p: PsParsed, st: Statement, acc: Acc, ctx: MatchCtx, external: (name: string) => boolean): void {
   if (!st.pipedIn) return;
   const id = spec.names[0]!;
-  if (id === 'set-location') return;
+  if (id === 'set-location' || spec.writes) return;
   const keys = PATH_KEYS.filter(k => spec.params.has(k));
   if (keys.length === 0 || keys.some(k => p.all.has(k))) return;
-  if ([...spec.params.values()].some(def => def.type === 'path-w')) { acc.add('once', 'list.pipe_write', {}, false); return; }
   const byValue = BY_VALUE.has(id);
   const flow = flowOf(st.upstream, ctx, external);
   if (flow.kind === 'text' && !byValue) return;

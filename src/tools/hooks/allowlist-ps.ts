@@ -3,7 +3,8 @@
 import { Acc, checkValue, flagMap, isFlagLike, literal, type FlagDef, type MatchCtx, type ValueType } from './allowlist-core.ts';
 import type { Statement, Word } from './shell-lex.ts';
 
-export interface PsCmd { names: readonly string[]; params: Map<string, FlagDef>; pos: readonly string[]; extra?: (p: PsParsed, acc: Acc, ctx: MatchCtx, st: Statement) => void }
+// writes: ファイルを書く・作る・移す・消すコマンドレット（毎回確かめる。パイプで受けるファイルの読みの判定 allowlist-pipe.ts は、読むコマンドだけを見る）
+export interface PsCmd { names: readonly string[]; params: Map<string, FlagDef>; pos: readonly string[]; extra?: (p: PsParsed, acc: Acc, ctx: MatchCtx, st: Statement) => void; writes?: boolean }
 export interface PsParsed { named: Map<string, Word[]>; positional: Word[]; all: Map<string, Word[]> }
 
 const ENC = 'ASCII|BigEndianUnicode|BigEndianUTF32|Byte|Default|OEM|String|Unicode|Unknown|UTF7|UTF8|UTF8BOM|UTF8NoBOM|UTF32';
@@ -13,9 +14,9 @@ const COLORS = 'Black|DarkBlue|DarkGreen|DarkCyan|DarkRed|DarkMagenta|DarkYellow
 const COMPARE = ['eq', 'ne', 'gt', 'ge', 'lt', 'le', 'like', 'notlike', 'match', 'notmatch', 'contains', 'notcontains', 'in', 'notin'].flatMap(o => [`${o}:s`, `c${o}:s`]).join(' ');
 
 const CMDS = new Map<string, PsCmd>();
-function cmd(names: string, params: string, pos: string, extra?: PsCmd['extra']): void {
+function cmd(names: string, params: string, pos: string, extra?: PsCmd['extra'], writes = false): void {
   const list = names.split(/\s+/u).filter(Boolean).map(n => n.toLowerCase());
-  const spec: PsCmd = { names: list, params: new Map([...COMMON, ...flagMap(params, true)]), pos: pos.split(/\s+/u).filter(Boolean).map(p => p.toLowerCase()), ...(extra ? { extra } : {}) };
+  const spec: PsCmd = { names: list, params: new Map([...COMMON, ...flagMap(params, true)]), pos: pos.split(/\s+/u).filter(Boolean).map(p => p.toLowerCase()), ...(extra ? { extra } : {}), ...(writes ? { writes } : {}) };
   for (const n of list) CMDS.set(n, spec);
 }
 export const psCmdlet = (name: string): PsCmd | undefined => CMDS.get(name);
@@ -156,46 +157,58 @@ cmd('set-location sl cd chdir push-location pushd', 'Path:path-r LiteralPath:pat
 });
 cmd('pop-location popd', '', '', (_p, acc) => { acc.cwd = { word: null }; });
 
-// ── 書く（A1: 許可フォルダの中の簡単なファイルの操作）──
+// ── 書く: 毎回確かめる（security-self-api.md §11.13）──
+// PowerShell のパラメータの結び付き（パイプで流れてくる値の名前から -Destination や -Path が決まる、など）はガードが真似しきれず、審査のたびに確かめなしの書き込みが見つかった。
+// ファイルを書く・作る・移す・消すコマンドレットは、書き込み先が決まっていても確かめなしにはしない（確かめなしで書くなら file_write の道具）。
+// 引数の読みとパスの調べは残す: 禁止の一覧・秘密のパスは止め、守る場所・許可フォルダの外は、持ち主が tools.shell.allow に書いても外せない。パイプを受けるものは外せない
+function writer(names: string, params: string, pos: string, extra?: PsCmd['extra']): void {
+  cmd(names, params, pos, (p, acc, ctx, st) => {
+    extra?.(p, acc, ctx, st);
+    pipedInput(acc, st);
+    acc.add('once', 'list.ps_write', { cmd: st.words[0]!.text }, true);
+  }, true);
+}
+// パイプを受ける文は、流れてくる値が引数（書き込み先・宛先）に名前で結び付くことがあるので、持ち主の許可でも外せない
+function pipedInput(acc: Acc, st: Statement): void {
+  if (st.pipedIn) acc.add('once', 'list.ps_pipe', { cmd: st.words[0]!.text }, false);
+}
 const joinName: PsCmd['extra'] = (p, acc) => {
   const name = first(p, 'name')[0];
   if (name) acc.copies.push({ kind: 'join', sources: [], dest: first(p, 'path')[0] ?? null, name, recursive: false, dirFlag: false, noTargetDir: false });
 };
-cmd('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', joinName);
-// 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数。毎日使われるので、同じ決まりで許す
-cmd('mkdir md', 'Path:path-w Name:s Force', 'path', joinName);
-cmd('set-content add-content ac', `Path:path-w LiteralPath:path-w Value:s Encoding:${ENC} NoNewline Force`, 'path value…');
-cmd('clear-content clc', 'Path:path-w LiteralPath:path-w Force', 'path');
-cmd('out-file', `FilePath:path-w LiteralPath:path-w Encoding:${ENC} Append NoNewline Width:n InputObject:s`, 'filepath');
-cmd('tee-object tee', 'FilePath:path-w LiteralPath:path-w Append Variable:var', 'filepath');
-cmd('copy-item copy cp cpi', 'Path:path-r LiteralPath:path-r Destination:path-w Recurse Force Container Filter:s Include:s Exclude:s', 'path destination', (p, acc) => {
+writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', joinName);
+// 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数
+writer('mkdir md', 'Path:path-w Name:s Force', 'path', joinName);
+writer('set-content add-content ac', `Path:path-w LiteralPath:path-w Value:s Encoding:${ENC} NoNewline Force`, 'path value…');
+writer('clear-content clc', 'Path:path-w LiteralPath:path-w Force', 'path');
+writer('out-file', `FilePath:path-w LiteralPath:path-w Encoding:${ENC} Append NoNewline Width:n InputObject:s`, 'filepath');
+writer('tee-object tee', 'FilePath:path-w LiteralPath:path-w Append Variable:var', 'filepath');
+writer('copy-item copy cp cpi', 'Path:path-r LiteralPath:path-r Destination:path-w Recurse Force Container Filter:s Include:s Exclude:s', 'path destination', (p, acc) => {
   const sources = pathWords(p);
-  if (sources.length === 0) { acc.pipeWrite = true; return; }
-  acc.copies.push({ kind: 'copy', sources, dest: first(p, 'destination')[0] ?? null, name: null, recursive: p.all.has('recurse'), dirFlag: false, noTargetDir: false });
+  if (sources.length > 0) acc.copies.push({ kind: 'copy', sources, dest: first(p, 'destination')[0] ?? null, name: null, recursive: p.all.has('recurse'), dirFlag: false, noTargetDir: false });
 });
-cmd('move-item move mv mi', 'Path:path-w LiteralPath:path-w Destination:path-w Force', 'path destination', (p, acc) => {
+writer('move-item move mv mi', 'Path:path-w LiteralPath:path-w Destination:path-w Force', 'path destination', (p, acc) => {
   const sources = pathWords(p);
-  if (sources.length === 0) { acc.pipeWrite = true; return; }
-  acc.copies.push({ kind: 'copy', sources, dest: first(p, 'destination')[0] ?? null, name: null, recursive: true, dirFlag: false, noTargetDir: false });
+  if (sources.length > 0) acc.copies.push({ kind: 'copy', sources, dest: first(p, 'destination')[0] ?? null, name: null, recursive: true, dirFlag: false, noTargetDir: false });
 });
-cmd('rename-item ren rni', 'Path:path-w LiteralPath:path-w NewName:s Force', 'path newname', (p, acc) => {
+writer('rename-item ren rni', 'Path:path-w LiteralPath:path-w NewName:s Force', 'path newname', (p, acc) => {
   const sources = pathWords(p);
-  if (sources.length === 0) { acc.pipeWrite = true; return; }
-  acc.copies.push({ kind: 'rename', sources, dest: null, name: first(p, 'newname')[0] ?? null, recursive: false, dirFlag: false, noTargetDir: false });
+  if (sources.length > 0) acc.copies.push({ kind: 'rename', sources, dest: null, name: first(p, 'newname')[0] ?? null, recursive: false, dirFlag: false, noTargetDir: false });
 });
-cmd('remove-item rm del erase rd rmdir ri', 'Path:path-w LiteralPath:path-w Recurse Include:s Exclude:s Filter:s Force', 'path', (p, acc) => {
+writer('remove-item rm del erase rd rmdir ri', 'Path:path-w LiteralPath:path-w Recurse Include:s Exclude:s Filter:s Force', 'path', (p, acc) => {
   acc.deletes = true;
-  if (pathWords(p).length === 0) acc.pipeWrite = true;
   if (p.all.has('recurse')) for (const ref of acc.paths) ref.recursive = true;
 });
-cmd('compress-archive', 'Path:path-r LiteralPath:path-r DestinationPath:path-w CompressionLevel:Optimal|NoCompression|Fastest Force Update', 'path destinationpath');
+writer('compress-archive', 'Path:path-r LiteralPath:path-r DestinationPath:path-w CompressionLevel:Optimal|NoCompression|Fastest Force Update', 'path destinationpath');
 cmd('expand-archive', 'Path:s LiteralPath:s DestinationPath:s Force', 'path destinationpath', (_p, acc) => { acc.add('once', 'list.expand', { cmd: 'Expand-Archive' }, false); });
 
 // ── ネットワーク（11.3.4）──
 const WEB = 'Uri:url UseBasicParsing Method:s TimeoutSec:n MaximumRedirection:n UserAgent:s OutFile:path-w Body:s InFile:path-r ContentType:s';
 export const WEB_NAMES = ['invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm'];
-const webExtra: PsCmd['extra'] = (p, acc) => {
+const webExtra: PsCmd['extra'] = (p, acc, _ctx, st) => {
   acc.fetch = true;
+  pipedInput(acc, st);
+  if (p.all.has('outfile')) acc.add('once', 'list.ps_write', { cmd: `${st.words[0]!.text} -OutFile` }, true);
   const method = first(p, 'method')[0];
   let sends = false;
   if (method) {
