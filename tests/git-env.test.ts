@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { parseGitConfig } from '../src/tools/hooks/git-repo.ts';
-import { gitEnvFor, gitVersionAtLeast, sanitizeGitConfig } from '../src/tools/shell/git-env.ts';
+import { gitVersionAtLeast, prepareGitRun, sanitizeGitConfig } from '../src/tools/shell/git-env.ts';
 import { tempDir } from './helpers.ts';
 
 // 審査で見つかった: ホームの ~/.gitconfig（と、Git for Windows の etc/gitconfig など）は、リポジトリの設定の検査に入っていなかった。
@@ -99,9 +99,11 @@ test('本物の git: ホームの ~/.gitconfig に仕込んだ core.fsmonitor �
   git(['status', '--short'], baseEnv);
   assert.equal(existsSync(marker), true, '前提: ホームの設定の core.fsmonitor は本物の git で動く');
   rmSync(marker);
-  const isolated = gitEnvFor({ dataDir: join(root, 'data'), env: baseEnv });
+  const run = prepareGitRun({ dataDir: join(root, 'data'), env: baseEnv });
+  const isolated = run.env;
   assert.equal(isolated.GIT_CONFIG_NOSYSTEM, '1');
-  assert.equal(isolated.GIT_CONFIG_GLOBAL, join(root, 'data', 'git-global', 'gitconfig'));
+  assert.equal(dirname(dirname(isolated.GIT_CONFIG_GLOBAL!)), join(root, 'data', 'git-run'));
+  assert.equal(basename(isolated.GIT_CONFIG_GLOBAL!), 'gitconfig');
   const env = { ...baseEnv, ...isolated };
   git(['status', '--short'], env);
   assert.equal(existsSync(marker), false, '洗い出した設定では、core.fsmonitor は動かない');
@@ -109,24 +111,59 @@ test('本物の git: ホームの ~/.gitconfig に仕込んだ core.fsmonitor �
   const listed = git(['config', '--list', '--show-origin'], env).stdout;
   assert.doesNotMatch(listed, /fsmonitor|evil/u);
   assert.match(readFileSync(isolated.GIT_CONFIG_GLOBAL!, 'utf8'), /Taro Yamada/u);
+  run.cleanup();
 });
 
 
-test('洗い出した設定のファイルは、書き換えられても、次に git を動かす前に作り直される', t => {
+// 審査の指摘: 決まった場所に置くと、確かめを許したあとの同じコマンドの中でそこへ書き込み、続けて動かす git status に読ませられた。毎回新しい置き場所に作り、終わったら消す
+test('洗い出した設定は、実行のたびに新しい置き場所に作られ、終わると消える。ホームの設定が変われば、次の実行の写しが変わる', t => {
   const root = tempDir(t);
   const home = join(root, 'home');
   mkdirSync(home);
   writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = Taro Yamada\n[core]\n\tfsmonitor = /evil/hook.sh\n');
   const env = { HOME: home, USERPROFILE: home };
-  const file = gitEnvFor({ dataDir: join(root, 'data'), env }).GIT_CONFIG_GLOBAL!;
-  const good = readFileSync(file, 'utf8');
-  assert.match(good, /Taro Yamada/u);
-  assert.doesNotMatch(good, /fsmonitor/u);
-  writeFileSync(file, '[core]\n\tfsmonitor = /evil/hook.sh\n');
-  gitEnvFor({ dataDir: join(root, 'data'), env });
-  assert.equal(readFileSync(file, 'utf8'), good);
-  // ホームの設定が変われば、写しも変わる
+  const data = join(root, 'data');
+  const first = prepareGitRun({ dataDir: data, env });
+  const second = prepareGitRun({ dataDir: data, env });
+  const a = first.env.GIT_CONFIG_GLOBAL!;
+  const b = second.env.GIT_CONFIG_GLOBAL!;
+  assert.notEqual(a, b, '2 回の実行が同じ置き場所を使う');
+  assert.match(a, /[\\/]git-run[\\/][0-9a-f-]{36}[\\/]gitconfig$/u);
+  assert.match(readFileSync(a, 'utf8'), /Taro Yamada/u);
+  assert.doesNotMatch(readFileSync(a, 'utf8'), /fsmonitor/u);
+  first.cleanup();
+  assert.equal(existsSync(a), false);
+  assert.equal(existsSync(dirname(a)), false, '置き場所のフォルダごと消える');
+  assert.equal(existsSync(b), true, '別の実行の置き場所は消えない');
+  second.cleanup();
+  assert.deepEqual(readdirSync(join(data, 'git-run')), []);
   writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = Hanako\n');
-  gitEnvFor({ dataDir: join(root, 'data'), env });
-  assert.match(readFileSync(file, 'utf8'), /Hanako/u);
+  const third = prepareGitRun({ dataDir: data, env });
+  assert.match(readFileSync(third.env.GIT_CONFIG_GLOBAL!, 'utf8'), /Hanako/u);
+  third.cleanup();
+});
+
+test('途中で止まった実行の残り（古い置き場所）は、次の実行が消す。新しいものは消さない', t => {
+  const root = tempDir(t);
+  const data = join(root, 'data');
+  const runs = join(data, 'git-run');
+  mkdirSync(join(runs, 'old-run'), { recursive: true });
+  mkdirSync(join(runs, 'fresh-run'), { recursive: true });
+  writeFileSync(join(runs, 'old-run', 'gitconfig'), '[core]\n');
+  const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
+  utimesSync(join(runs, 'old-run'), old, old);
+  const run = prepareGitRun({ dataDir: data, env: { HOME: join(root, 'h') } });
+  assert.equal(existsSync(join(runs, 'old-run')), false);
+  assert.equal(existsSync(join(runs, 'fresh-run')), true);
+  run.cleanup();
+});
+
+test('置き場所を作れなくても、無いファイルを指す（git は何も読まない）。cleanup は失敗しても例外にしない', t => {
+  const root = tempDir(t);
+  const blocker = join(root, 'data');
+  writeFileSync(blocker, 'ファイルがあるので、フォルダを作れない');
+  const run = prepareGitRun({ dataDir: blocker, env: { HOME: join(root, 'h') } });
+  assert.equal(existsSync(run.env.GIT_CONFIG_GLOBAL!), false);
+  assert.equal(run.env.GIT_CONFIG_NOSYSTEM, '1');
+  run.cleanup();
 });

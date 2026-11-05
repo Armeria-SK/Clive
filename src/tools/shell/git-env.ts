@@ -3,10 +3,13 @@
 // 調べていなかった。そこに core.fsmonitor・alias・core.sshCommand などがあれば、許可された `git status` で動く。
 // 選んだ方法: 見て判定する（Git for Windows のシステム設定は credential.helper など一覧外の項目が普通にあり、すべて今回だけになってしまう）のではなく、
 // 一覧に入る項目だけを写した設定を Clive のデータのフォルダに作り、GIT_CONFIG_GLOBAL でそれだけを読ませ、GIT_CONFIG_NOSYSTEM でシステム設定を読ませない（git 2.32 以上）。
-// 名前・メール・autocrlf・認証の補助（manager など）は残るので、commit や push は今までどおり使える
+// 名前・メール・autocrlf・認証の補助（manager など）は残るので、commit や push は今までどおり使える。
+// 洗い出した設定のファイルは、シェルを1回動かすごとに、データのフォルダの下の新しい（名前を当てられない）場所に作り、終わったら消す。
+// 決まった場所に置くと、確かめを許したあとの同じコマンドの中でそこへ書き込み、続けて動かす git status に読ませられる
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseGitConfig, unusualKey, type ConfigEntry } from '../hooks/git-repo.ts';
@@ -90,16 +93,41 @@ export function gitConfigSources(env: Env, gitExe?: string): string[] {
   return [...new Set([...system, ...xdg, ...homes.flatMap(h => [join(h, '.config', 'git', 'config'), join(h, '.gitconfig')])])];
 }
 
-// 子プロセスに足す環境変数。洗い出した設定を、データのフォルダに（変わったときだけ）書く
-export function gitEnvFor(options: { dataDir: string; env: Env; gitExe?: string }): Record<string, string> {
-  const file = join(options.dataDir, 'git-global', 'gitconfig');
-  const texts = gitConfigSources(options.env, options.gitExe).flatMap(source => readSmall(source) ?? []);
-  const next = sanitizeGitConfig(texts);
+const RUN_FOLDER = 'git-run';
+// 途中で止まった実行の残りを消す目安（実行は最長でも1時間）
+const STALE_MS = 6 * 60 * 60 * 1000;
+
+export interface GitRun {
+  // 子プロセスに足す環境変数
+  env: Record<string, string>;
+  // この実行の置き場所（洗い出した設定のファイルがある）を消す
+  cleanup: () => void;
+}
+
+function sweepStale(root: string): void {
+  let names: string[];
+  try { names = readdirSync(root); } catch { return; }
+  for (const name of names) {
+    try {
+      const path = join(root, name);
+      if (Date.now() - statSync(path).mtimeMs > STALE_MS) rmSync(path, { recursive: true, force: true });
+    } catch { /* 消せなければ残す */ }
+  }
+}
+
+// シェルを1回動かす分の、洗い出した設定とその環境変数。置き場所は毎回新しい。書けなければ、無いファイルを指すことになり、git は何も読まない（安全側）
+export function prepareGitRun(options: { dataDir: string; env: Env; gitExe?: string }): GitRun {
+  const root = join(options.dataDir, RUN_FOLDER);
+  const dir = join(root, randomUUID());
+  const file = join(dir, 'gitconfig');
   try {
-    if (!existsSync(file) || readFileSync(file, 'utf8') !== next) {
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, next, 'utf8');
-    }
-  } catch { /* 書けなければ、読めない設定を指すことになり、git は何も読まない（安全側） */ }
-  return { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1' };
+    mkdirSync(dir, { recursive: true });
+    sweepStale(root);
+    const texts = gitConfigSources(options.env, options.gitExe).flatMap(source => readSmall(source) ?? []);
+    writeFileSync(file, sanitizeGitConfig(texts), { encoding: 'utf8', mode: 0o600 });
+  } catch { /* 上のとおり */ }
+  return {
+    env: { GIT_CONFIG_GLOBAL: file, GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1' },
+    cleanup: () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* 残っても、次の実行が古いものを消す */ } },
+  };
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -262,5 +262,43 @@ for (const shell of ['powershell', 'bash'] as const) {
     const real = await s.call('git -C bare/dec status --short');
     assert.equal(real.decision, 'allow', real.output.content);
     assert.equal(real.decidedBy !== 'user', true, '本物のリポジトリで承認を求めた');
+  });
+}
+
+// 審査の指摘（洗い出した git の設定の書き換え）: 洗い出した設定のファイルは、データのフォルダの決まった場所にあり、そこへの書き込みはふつうの確かめだった。
+// 確かめを許したあと、同じコマンドの中で書き込んで git status を動かすと、書き込んだ設定のコードが動いた。本物の git で、動かないことを確かめる
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: 洗い出した git の設定の旧い置き場所に、確かめを許して書き込んでも、同じコマンドの git status では動かない`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const fwd = (p: string): string => p.replaceAll('\\', '/');
+    const marker = join(root, 'marker');
+    const hook = join(root, 'hook.sh');
+    writeFileSync(hook, `#!/bin/sh\necho ran > "${fwd(marker)}"\nprintf '\\0'\n`, { mode: 0o755 });
+    mkdirSync(join(root, 'gr'));
+    spawnSync('git', ['init', '-q'], { cwd: join(root, 'gr') });
+    // 洗い出した設定が置かれる決まった場所（これまでの置き場所）
+    const old = join(s.paths.data, 'git-global', 'gitconfig');
+    const command = shell === 'powershell'
+      ? `Set-Content -Path '${old}' -Value '[core]', 'fsmonitor = ${fwd(hook)}'; cd gr; git status`
+      : `printf '[core]\\nfsmonitor = ${fwd(hook)}\\n' > '${fwd(old)}' && cd gr && git status`;
+    const pending = s.call(command);
+    for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+    const request = s.approvals.pending()[0];
+    assert.ok(request, '書き込みが確かめにならず、承認の依頼が来ていない');
+    s.approvals.decide(request.id, 'once');
+    await pending;
+    assert.equal(existsSync(marker), false, '同じコマンドで書き換えた設定のコードが動いた');
+    // git が読む洗い出した設定の置き場所は、実行のたびに違い、終わると消える
+    const origin = async () => /file:(\S*gitconfig)/u.exec((await s.call('git config --list --show-origin')).output.content)?.[1];
+    const first = await origin();
+    const second = await origin();
+    assert.ok(first && second, '洗い出した設定の置き場所が git config --list --show-origin に出ない');
+    assert.notEqual(first, second, '2 回の実行が同じ置き場所を使う');
+    assert.equal(first.includes('git-global'), false, 'これまでの決まった置き場所を使っている');
+    for (const place of [first, second]) assert.equal(existsSync(place), false, `終わったのに残っている: ${place}`);
+    const left = join(s.paths.data, 'git-run');
+    assert.deepEqual(existsSync(left) ? readdirSync(left) : [], [], '置き場所が残っている');
   });
 }

@@ -12,7 +12,7 @@ import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand } from '../hooks/shell-guard.ts';
 import type { ShellKind } from '../hooks/shell-lex.ts';
-import { gitEnvFor, gitSupportsConfigOverride } from '../shell/git-env.ts';
+import { gitSupportsConfigOverride, prepareGitRun } from '../shell/git-env.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
@@ -41,13 +41,13 @@ function selfHostsOf(config: AppConfig): string[] {
   });
 }
 
-// 子プロセスの環境。git には、ホーム・システムの設定からコードを動かせる項目を落とした設定だけを読ませる（git-env.ts）。
+// 子プロセスの環境。git には、ホーム・システムの設定からコードを動かせる項目を落とした設定だけを読ませる（git-env.ts。実行のたびに新しい置き場所に作る）。
 // 洗い出せない git（2.32 より古い）、または作業フォルダの中の git は、その版を調べるために動かさず、洗い出していないものとして扱う
-function childEnvFor(shell: AppConfig['tools']['shell'], cwd: string, powershell: boolean, dataDir: string): { env: Record<string, string>; gitIsolated: boolean } {
+function childEnvFor(shell: AppConfig['tools']['shell'], cwd: string, powershell: boolean): { env: Record<string, string>; gitIsolated: boolean; gitExe?: string } {
   const base = scrubEnv(shell.envAllow);
   const gitExe = findExecutable('git', base, cwd, { powershell });
   if (gitExe && (isInside(cwd, gitExe) || !gitSupportsConfigOverride(gitExe))) return { env: base, gitIsolated: false };
-  return { env: { ...base, ...gitEnvFor({ dataDir, env: base, ...(gitExe ? { gitExe } : {}) }) }, gitIsolated: true };
+  return { env: base, gitIsolated: true, ...(gitExe ? { gitExe } : {}) };
 }
 
 interface Peeked { preview: PreviewFile; fingerprint: string; content?: string }
@@ -74,7 +74,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const shell = ctx.config.tools.shell;
   const spec = resolveShell(shell.shell);
   const powershell = spec.name === 'powershell' || spec.name === 'pwsh';
-  const { env: childEnv, gitIsolated } = childEnvFor(shell, cwd.cwd, powershell, ctx.paths.data);
+  const { env: childEnv, gitIsolated } = childEnvFor(shell, cwd.cwd, powershell);
   const verdict = checkShellCommand(input.command, cwd.cwd, {
     policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny, language,
     selfHosts: selfHostsOf(ctx.config), shell: spec.name as ShellKind, windows: process.platform === 'win32', dataDir: ctx.paths.data,
@@ -122,10 +122,15 @@ export const shellRun: ToolDef<ShellInput> = {
     const settings = ctx.config.tools.shell;
     const shell = resolveShell(settings.shell);
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
-    const result = await runProcess(shell.file, shell.args(input.command), {
-      cwd: cwd.cwd, env: childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh', ctx.paths.data).env, timeoutMs: timeoutSec * 1000, signal: ctx.signal,
-      maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
-    });
+    const child = childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh');
+    const gitRun = child.gitIsolated ? prepareGitRun({ dataDir: ctx.paths.data, env: child.env, ...(child.gitExe ? { gitExe: child.gitExe } : {}) }) : undefined;
+    let result;
+    try {
+      result = await runProcess(shell.file, shell.args(input.command), {
+        cwd: cwd.cwd, env: { ...child.env, ...gitRun?.env }, timeoutMs: timeoutSec * 1000, signal: ctx.signal,
+        maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
+      });
+    } finally { gitRun?.cleanup(); }
     if (result.spawnError) return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: result.spawnError }), isError: true };
     const parts = [`$ ${input.command}`, toolText(language, 'shell.header', { shell: shell.name, cwd: cwd.cwd, code: result.exitCode ?? '—', seconds: (result.durationMs / 1000).toFixed(1) })];
     if (result.stdout.trim()) parts.push(result.stdout.trimEnd());
