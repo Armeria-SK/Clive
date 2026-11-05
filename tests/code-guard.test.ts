@@ -445,3 +445,13 @@ test('確かめの理由は、種類（code）と、日本語・英語の文で�
   assert.match(en.reasons.join(), /not in a fixed form/u);
   assert.deepEqual(f.bash('ls').askKinds, []);
 });
+
+test('git の洗い出しができない環境（gitIsolated: false）では、git status も今回だけ。できる環境では許す', t => {
+  const f = fixture(t);
+  const off = f.bash('git status', { gitIsolated: false });
+  assert.equal(off.decision, 'ask');
+  assert.equal(off.onceOnly, true);
+  assert.match(off.reasons.join(), /2\.32/u);
+  assert.equal(f.bash('git status', { gitIsolated: true }).decision, 'allow');
+  assert.equal(f.bash('git status').decision, 'allow');
+});

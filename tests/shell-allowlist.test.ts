@@ -191,6 +191,18 @@ test('git のリポジトリの設定: ふつうでなければ git はすべて
   assert.deepEqual(asked, ['sub', undefined]);
 });
 
+test('git: ホーム・システムの設定を洗い出せない git（2.32 より古い）では、git はすべて今回だけ。--version と version は除く', () => {
+  for (const c of ['git status', 'git log -p', 'git diff', 'git branch', 'git add .', 'git push', 'git -C fake log -p', 'git config --list']) {
+    assert.equal(levelOf(c, 'bash', { gitIsolated: false }), 'once', c);
+    assert.ok(keysOf(c, 'bash', { gitIsolated: false }).includes('once:list.git_old'), c);
+    assert.equal(levelOf(c, 'bash', { gitIsolated: true }), c.includes('add') || c.includes('push') ? 'ask' : 'allow', c);
+  }
+  for (const c of ['git --version', 'git version']) assert.equal(levelOf(c, 'bash', { gitIsolated: false }), 'allow', c);
+  assert.equal(levelOf('git status', 'bash'), 'allow');
+  // 免除（tools.shell.allow）では消せない
+  assert.equal(classify('git status', 'bash', { gitIsolated: false }).results[0]!.reasons.every(r => r.exempt === false), true);
+});
+
 test('git: 前に置ける引数・サブコマンドごとの扱い', () => {
   const rows: Array<[string, Level]> = [
     ['git --no-pager log', 'allow'], ['git -C sub status', 'allow'], ['git -P diff', 'allow'], ['git --version', 'allow'], ['git version', 'allow'],

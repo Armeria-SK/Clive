@@ -22,6 +22,8 @@ export interface MatchCtx {
   // C2: 実際に起こされるファイルを調べる（無ければ調べない）
   external?: ((name: string) => { ok: boolean; ext: string; detail: string }) | undefined;
   selfHosts: readonly string[];
+  // git をホーム・システムの設定の洗い出しつきで動かせるか（git-env.ts。2.32 より古い git は false）。false なら git はすべて今回だけ
+  gitIsolated?: boolean | undefined;
 }
 
 export interface StatementResult {

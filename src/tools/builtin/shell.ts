@@ -9,9 +9,10 @@ import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
 import type { PreviewFile } from '../approvals.ts';
 import { selfTouchMarkers } from '../hooks/code-guard.ts';
-import { expandPath, placePath } from '../hooks/scope.ts';
+import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand } from '../hooks/shell-guard.ts';
 import type { ShellKind } from '../hooks/shell-lex.ts';
+import { gitEnvFor, gitSupportsConfigOverride } from '../shell/git-env.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv } from '../shell/runner.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
@@ -40,6 +41,15 @@ function selfHostsOf(config: AppConfig): string[] {
   });
 }
 
+// 子プロセスの環境。git には、ホーム・システムの設定からコードを動かせる項目を落とした設定だけを読ませる（git-env.ts）。
+// 洗い出せない git（2.32 より古い）、または作業フォルダの中の git は、その版を調べるために動かさず、洗い出していないものとして扱う
+function childEnvFor(shell: AppConfig['tools']['shell'], cwd: string, powershell: boolean, dataDir: string): { env: Record<string, string>; gitIsolated: boolean } {
+  const base = scrubEnv(shell.envAllow);
+  const gitExe = findExecutable('git', base, cwd, { powershell });
+  if (gitExe && (isInside(cwd, gitExe) || !gitSupportsConfigOverride(gitExe))) return { env: base, gitIsolated: false };
+  return { env: { ...base, ...gitEnvFor({ dataDir, env: base, ...(gitExe ? { gitExe } : {}) }) }, gitIsolated: true };
+}
+
 interface Peeked { preview: PreviewFile; fingerprint: string; content?: string }
 
 // 確かめの札で見せるファイルを読む。指紋は、承認のあとで中身が変わったかを調べるためのもの
@@ -63,11 +73,13 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   if ('problem' in cwd) return { decision: 'deny', reasons: [cwd.problem] };
   const shell = ctx.config.tools.shell;
   const spec = resolveShell(shell.shell);
-  const childEnv = scrubEnv(shell.envAllow);
+  const powershell = spec.name === 'powershell' || spec.name === 'pwsh';
+  const { env: childEnv, gitIsolated } = childEnvFor(shell, cwd.cwd, powershell, ctx.paths.data);
   const verdict = checkShellCommand(input.command, cwd.cwd, {
     policy: ctx.policy, outsideRoots: ctx.config.tools.outsideRoots, allow: shell.allow, ask: shell.ask, deny: shell.deny, language,
     selfHosts: selfHostsOf(ctx.config), shell: spec.name as ShellKind, windows: process.platform === 'win32', dataDir: ctx.paths.data,
-    which: name => findExecutable(name, childEnv, cwd.cwd, { powershell: spec.name === 'powershell' || spec.name === 'pwsh' }),
+    gitIsolated,
+    which: name => findExecutable(name, childEnv, cwd.cwd, { powershell }),
   });
   const details = verdict.paths.map(p => guardText(language, 'shell.detail', {
     input: p.input, path: p.path ?? guardText(language, 'shell.unresolved_path'),
@@ -111,7 +123,7 @@ export const shellRun: ToolDef<ShellInput> = {
     const shell = resolveShell(settings.shell);
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
     const result = await runProcess(shell.file, shell.args(input.command), {
-      cwd: cwd.cwd, env: scrubEnv(settings.envAllow), timeoutMs: timeoutSec * 1000, signal: ctx.signal,
+      cwd: cwd.cwd, env: childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh', ctx.paths.data).env, timeoutMs: timeoutSec * 1000, signal: ctx.signal,
       maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
     });
     if (result.spawnError) return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: result.spawnError }), isError: true };

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
 import { parseConfig } from '../src/config/store.ts';
@@ -540,4 +541,37 @@ test('ツールの設定ファイル（PowerShell のプロファイルなど）
   assert.equal(asked.onceOnly, true, '会話の許可があっても、また確かめる');
   assert.match((await second).output.content, /拒否しました/u);
   assert.equal((await s.call('file_write', { path: 'dot/notes.md', content: 'x' })).decision, 'allow');
+});
+
+// 洗い出せない git（2.32 より古い、または版を確かめられない）では、git は何であれ今回だけにする。作業フォルダの中の git は、版を調べるためにも動かさない
+async function withGitFirstOnPath<T>(dir: string, body: () => Promise<T>): Promise<T> {
+  const key = Object.keys(process.env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH';
+  const saved = process.env[key];
+  process.env[key] = `${dir}${delimiter}${saved ?? ''}`;
+  try { return await body(); } finally { if (saved === undefined) delete process.env[key]; else process.env[key] = saved; }
+}
+
+test('git が古い（2.32 より前）と、洗い出せないので git status も今回だけ。新しい git なら許す', async t => {
+  const s = setup(t);
+  const windows = process.platform === 'win32';
+  const fake = join(tempDir(t), 'bin');
+  mkdirSync(fake, { recursive: true });
+  writeFileSync(join(fake, windows ? 'git.cmd' : 'git'), windows ? '@echo off\r\necho git version 2.20.0\r\n' : '#!/bin/sh\necho git version 2.20.0\n', { mode: 0o755 });
+  const old = await withGitFirstOnPath(fake, async () => shellRun.preCheck!({ command: 'git status' }, s.ctx));
+  assert.equal(old.decision, 'ask');
+  assert.equal(old.onceOnly, true);
+  assert.match(old.reasons.join(), /2\.32/u);
+  const real = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (real.status === 0 && /git version (?:2\.(?:3[2-9]|[4-9]\d)|[3-9])/u.test(real.stdout)) assert.equal((await shellRun.preCheck!({ command: 'git status' }, s.ctx)).decision, 'allow');
+});
+
+test('作業フォルダの中の git は、洗い出せるかを調べるためにも動かさない', { skip: process.platform === 'win32' && '.cmd は起動できず、動いたかを見分けられない' }, async t => {
+  const s = setup(t);
+  const bin = join(s.paths.workspace, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const marker = join(s.paths.workspace, 'ran');
+  writeFileSync(join(bin, 'git'), `#!/bin/sh\ntouch "${marker}"\necho git version 2.54.0\n`, { mode: 0o755 });
+  const pre = await withGitFirstOnPath(bin, async () => shellRun.preCheck!({ command: 'git status' }, s.ctx));
+  assert.equal(pre.decision, 'ask');
+  assert.equal(existsSync(marker), false, '作業フォルダの git が動いた');
 });

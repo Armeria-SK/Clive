@@ -33,6 +33,8 @@ export interface ShellGuardOptions {
   dataDir?: string;
   // 子プロセスの環境変数（ツールの設定ファイルの場所に使う。既定は動いているプロセスのもの）
   env?: Env;
+  // git をホーム・システムの設定の洗い出しつきで動かせるか（既定は true。shell.ts は実際の git の版から渡す）
+  gitIsolated?: boolean;
 }
 
 export interface CheckedPath { input: string; path?: string; placement: Placement | { kind: 'unresolved'; reason: string }; write: boolean }
@@ -192,7 +194,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const target = resolveWord({ text: dashC, dynamic: false, glob: false, quoted: false, home: dashC === '~' || dashC.startsWith('~/'), kind: 'plain' }, cwd, windows, language);
     return 'path' in target ? inspectRepo(target.path) : { found: true, configOk: false, badKey: '-C', unreadable: false, hooksPath: false, hooksFiles: false };
   };
-  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts };
+  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true };
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {
     add('deny', text('lex.denied', { detail: lexDetail(language, classified.lex) }));

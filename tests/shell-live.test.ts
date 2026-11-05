@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -148,3 +148,41 @@ test('実機（bash）: 一覧に当たるコマンドは承認なしで動き�
   assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona');
   assert.equal(existsSync(s.files('tmp/SOUL.md')), true);
 });
+
+const gitAvailable = spawnSync('git', ['--version']).status === 0;
+
+// 審査で見つかった: ホームの ~/.gitconfig は、リポジトリの設定の検査に入っていなかった。そこに仕込まれた core.fsmonitor は、許可された `git status` で動く
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: ホームの ~/.gitconfig に仕込んだ core.fsmonitor は、許可された git status では動かない。名前・メールは残る`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const home = join(s.paths.workspace, '..', 'evil-home');
+    mkdirSync(home, { recursive: true });
+    const marker = join(home, 'marker');
+    const hook = join(home, 'hook.sh');
+    writeFileSync(hook, `#!/bin/sh\necho ran > "${marker.replaceAll('\\', '/')}"\nprintf '\\0'\n`);
+    writeFileSync(join(home, '.gitconfig'), `[user]\n\tname = Taro Yamada\n\temail = taro@example.com\n[core]\n\tfsmonitor = ${hook.replaceAll('\\', '/')}\n`);
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    t.after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    delete process.env.XDG_CONFIG_HOME;
+    spawnSync('git', ['init', '-q'], { cwd: root });
+    // 前提: 洗い出さない素の git では、ホームの設定のコードが動く
+    spawnSync('git', ['status', '--short'], { cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home } });
+    assert.equal(existsSync(marker), true, '前提: 本物の git は、ホームの core.fsmonitor を動かす');
+    rmSync(marker);
+    const outcome = await s.call('git status --short');
+    assert.equal(outcome.decision, 'allow', outcome.output.content);
+    assert.equal(outcome.output.isError, false, outcome.output.content);
+    assert.equal(existsSync(marker), false, 'ホームの設定のコードが動いた');
+    const name = await s.call('git config --get user.name');
+    assert.equal(name.decision, 'allow', name.output.content);
+    assert.match(name.output.content, /Taro Yamada/u, '名前は洗い出した設定に残る');
+    const email = await s.call('git config --get user.email');
+    assert.match(email.output.content, /taro@example\.com/u, 'メールも残る');
+    const hookSetting = await s.call('git config --get core.fsmonitor');
+    assert.doesNotMatch(hookSetting.output.content, /hook\.sh/u, 'コードを動かせる項目は残らない');
+  });
+}

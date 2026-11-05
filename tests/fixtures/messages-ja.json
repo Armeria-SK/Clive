@@ -179,6 +179,7 @@
     "list.install": "入れるものは、入れる途中でコードが動きます（{cmd}）",
     "list.git_config": "このリポジトリの設定に、コードを動かせる項目があります（{key}）",
     "list.git_unreadable": "このリポジトリの設定を読めません",
+    "list.git_old": "この git は古く（2.32 より前）、ホームやシステムの設定のコードを止められません",
     "list.git_hooks": "このリポジトリは、git のフックが動きうります",
     "list.git_net": "git の {cmd} は、コードを動かせる引数・雛形・フックがあるので、確かめます",
     "list.git_write": "git の書き込みの操作です（{cmd}）",

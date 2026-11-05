@@ -76,6 +76,7 @@ export function runGit(words: Word[], acc: Acc, ctx: MatchCtx): void {
   const sub = subWord.text;
   const rest = [words[0]!, ...args.slice(i + 1)];
   if (sub === 'version' && rest.length === 1) return;
+  if (ctx.gitIsolated === false) { acc.add('once', 'list.git_old', {}, false); return; }
   const repo = ctx.repo(dashC && !dashC.dynamic ? dashC.text : undefined);
   if (dashC?.dynamic) { acc.add('once', 'list.form', { cmd: 'git', detail: dashC.text }, true); return; }
   if (repo.unreadable) { acc.add('once', 'list.git_unreadable', {}, false); return; }
