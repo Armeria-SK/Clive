@@ -14,6 +14,7 @@ import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapsho
 import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
 import type { ChatMessage } from '../src/engine/types.ts';
 import { jsonFallbackInstructions, toJsonFallbackHistory } from '../src/engine/toolcall-parse.ts';
+import { shellRun } from '../src/tools/builtin/shell.ts';
 import { buildDynamic, buildSnapshot, defaultTexts, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { bookPressureText, reviewPrompt, transcriptOf, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
@@ -100,6 +101,13 @@ test('設定: language は保存して読み直せ、未選択のときは設定
 });
 
 // ── テンプレート ──
+
+test('テンプレート: PowerShell の制限モードで動かない書き方を避けるよう、日本語・英語の基本ルールとシェルの道具の説明に書いてある', t => {
+  const real = paths(t);
+  assert.match(readTemplate(real, 'rules', 'ja'), /## シェルを使うとき\r?\n\r?\n- Windows の PowerShell は制限モードで動く[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n\r?\n## やらないこと/u);
+  assert.match(readTemplate(real, 'rules', 'en'), /## When you use the shell\r?\n\r?\n- On Windows, PowerShell runs in constrained mode[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n\r?\n## What you do not do/u);
+  assert.match(shellRun.description, /制限モード[^。]*\[pscustomobject\]/u);
+});
 
 test('テンプレート: 言語ごとに読み分け、英語のファイルが無ければ日本語に戻る', t => {
   const real = paths(t);

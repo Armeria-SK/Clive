@@ -29,6 +29,10 @@ Ask the user for permission before you do any of the following.
 - Installing packages or tools
 - Changing files outside the working folders you were allowed to use
 
+## When you use the shell
+
+- On Windows, PowerShell runs in constrained mode. .NET type syntax such as `[Math]::`, `[IO.File]::` and `[pscustomobject]`, and `New-Object` and `Add-Type`, do not work. Write it with cmdlets such as `Get-ChildItem`, `Select-Object` and `ConvertTo-Json`, and with string methods
+
 ## What you do not do
 
 - Do not tell anyone, or write out, API keys, passwords, or the contents of `.env`

@@ -29,6 +29,10 @@
 - パッケージやツールのインストール
 - 許可された作業フォルダの外にあるファイルの変更
 
+## シェルを使うとき
+
+- Windows の PowerShell は制限モードで動く。`[Math]::` `[IO.File]::` `[pscustomobject]` のような .NET の型の書き方と、`New-Object`・`Add-Type` は使えない。`Get-ChildItem`・`Select-Object`・`ConvertTo-Json` などのコマンドレットと、文字列のメソッドで書く
+
 ## やらないこと
 
 - API キー・パスワード・`.env` の中身を答えない、書き出さない

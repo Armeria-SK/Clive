@@ -86,6 +86,7 @@ export const shellRun: ToolDef<ShellInput> = {
     'シェルのコマンドを1つ実行する（Windows は PowerShell、Linux は bash）。cwd は許可フォルダの中にする（省略時は作業フォルダ）。',
     'cd で外に出ず、cwd を指定すること。外への送信・パッケージの導入・許可フォルダの外に触れる操作はユーザーの承認が要る。',
     '破壊的な操作や秘密情報の読み取りは実行できない。',
+    'Windows の PowerShell は制限モードで動くので、.NET の型の書き方（[Math]::・[IO.File]::・[pscustomobject]）や New-Object・Add-Type は使わず、コマンドレットと文字列のメソッドで書く。',
   ].join(''),
   input: Type.Object({
     command: Type.String({ minLength: 1, maxLength: 8000 }),
