@@ -254,12 +254,15 @@ export function runFindstr(words: Word[], acc: Acc, ctx: MatchCtx): void {
   let recursive = false;
   for (const w of words.slice(1)) {
     if (w.dynamic) acc.add('once', 'list.dynamic', { cmd: 'findstr', detail: w.text }, true);
-    if (!(literal(w) && w.text.startsWith('/') && !w.quoted && /^\/[A-Za-z]/u.test(w.text))) { pos.push(w); continue; }
+    // findstr も、引用符を外した引数のスイッチを読む（'/f:list.txt' や "/s" もスイッチ）
+    if (!(literal(w) && /^\/[A-Za-z]/u.test(w.text))) { pos.push(w); continue; }
     const colon = w.text.indexOf(':');
     const key = (colon > 0 ? w.text.slice(0, colon) : w.text).toLowerCase();
     const def = flags.get(key);
     if (!def || (colon > 0) !== (def.type !== 'bool')) { acc.add('once', 'list.flag', { cmd: 'findstr', flag: w.text }, true); continue; }
     if (key === '/c' || key === '/g') pattern = true;
+    // /f:（読むファイルの一覧）と /g:（検索する文字の一覧）は、読むファイルが別のファイルの中身（/f:/ と /g:/ は標準入力）で決まる。常に今回だけ
+    if (key === '/f' || key === '/g') acc.add('once', 'list.file_list', { cmd: 'findstr', flag: w.text.slice(0, 2) }, false);
     if (key === '/s') recursive = true;
     if (key === '/d') for (const d of w.text.slice(colon + 1).split(';')) if (d) dirs.push({ ...w, text: d });
     if (colon > 0) checkValue(def.type as ValueType, { ...w, text: w.text.slice(colon + 1) }, acc, 'findstr', key, ctx);

@@ -253,4 +253,5 @@ export const walkAll = (acc: Acc, operands: readonly Word[], skipHidden = false)
 
 // コマンドの語が、決まった綴りかどうか（引用符・変数・展開が無い）
 export const literal = (w: Word | undefined): boolean => w !== undefined && w.kind === 'plain' && !w.dynamic && !w.glob && !w.home;
-export const isFlagLike = (w: Word): boolean => literal(w) && /^-./u.test(w.text) && !w.quoted;
+// 外部のプログラムは、引用符を外した引数を受け取るので、'-T' のように引用符で囲んでもフラグ（-- のあとだけは別。引用符つきの -- は、ガードは終わりとして扱わず、あとのフラグも調べる側に倒れる）
+export const isFlagLike = (w: Word): boolean => literal(w) && /^-./u.test(w.text);

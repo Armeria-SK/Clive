@@ -88,3 +88,30 @@ test('持ち主が curl の保存を tools.shell.allow に書くと、保存す�
   assert.equal(once(f.bash('curl -o page.html https://example.com/x -o SOUL.md https://example.com/y', { allow })), true, '守る場所への保存は外せない');
   assert.equal(f.bash('curl -o .env https://example.com/x', { allow: ['curl -o .env'] }).decision, 'deny', '秘密のパスは外せない');
 });
+
+test('findstr の /f:（読むファイルの一覧）と /g:（検索する文字の一覧）は今回だけ。stdin から読む /f:/ も', t => {
+  const f = fixture(t);
+  expectAll(f.ps, [
+    'findstr /f:list.txt SECRET', 'findstr /F:list.txt SECRET', 'findstr /f:/ SECRET', 'findstr /g:pats.txt a.txt', 'findstr /G:pats.txt a.txt', 'findstr /g:/ a.txt', 'findstr /i /f:list.txt x', 'findstr /s /f:list.txt x', 'findstr /g:pats.txt /f:list.txt',
+    "findstr /f:'list.txt' x", "findstr '/f:list.txt' x", 'findstr "/g:pats.txt" a.txt', "findstr '/f:/' x",
+  ], once, 'findstr');
+  expectAll(f.ps, ['findstr x a.txt', "findstr /c:'x y' a.txt", 'findstr /i /n x a.txt', 'findstr /r x a.txt'], v => v.decision === 'allow', 'ふつうの findstr');
+});
+
+test('ほかの一覧にある道具: 「ファイルを列挙したファイル」を渡す形は、一覧に無く今回だけ。パターンのファイル（grep -f）は、そのファイルを読む決まりのまま', t => {
+  const f = fixture(t);
+  expectAll(f.bash, [
+    'tar -cf o.tar -T list.txt', 'tar -T list.txt -cf o.tar', 'tar -cf o.tar -X list.txt a.txt', 'tar -cf o.tar --files-from=list.txt', 'xargs ls', 'git grep -f pats.txt x', 'git grep --file=pats.txt x', 'git ls-files -X list.txt', 'git ls-files --exclude-from=list.txt',
+    'rg --files-from=list.txt x', 'rg --ignore-file list.txt x', 'wc --files0-from=list.txt', 'du --files0-from=list.txt', 'sort --files0-from=list.txt', 'find . -files0-from list.txt', 'file -f list.txt', 'tree --fromfile list.txt', 'zip out.zip -@',
+    'zip -x@list.txt out.zip a.txt', 'curl -K list.txt', 'curl --config list.txt', 'md5sum -c list.txt', 'sha256sum -c list.txt', 'sha1sum --check list.txt', 'sha512sum --status -c list.txt', 'b2sum -c list.txt', 'cksum -c list.txt', 'sha256sum --quiet -c list.txt',
+    'diff --from-file list.txt a.txt', 'sed -f list.txt a.txt', 'cat list.txt | xargs cat',
+    // 引用符で囲んだフラグも、プログラムにはフラグとして渡る
+    "zip out.zip '-T' '-TT' ./p.sh sub", 'zip out.zip "-T" "-TT" ./p.sh sub', "zip '-@' out.zip", "curl '-K' list.txt", "wget '-i' list.txt", "tar '-cf' o.tar '-T' list.txt", "md5sum '-c' list.txt",
+  ], v => v.decision !== 'allow', 'bash');
+  expectAll(f.ps, ['tar -cf o.tar -T list.txt', 'rg --files-from=list.txt x', 'git grep -f pats.txt x', 'findstr /f:list.txt x', 'findstr /g:pats.txt x'], v => v.decision !== 'allow', 'PowerShell');
+  // パターンのファイルは、読むファイルとして調べる（秘密のパスなら止める）
+  assert.equal(f.bash('grep -f pats.txt a.txt').decision, 'allow');
+  assert.equal(f.bash('grep -f .env a.txt').decision, 'deny');
+  // ふつうの md5sum は、これまでどおり
+  expectAll(f.bash, ['md5sum a.txt', 'sha256sum a.txt list.txt', 'cksum a.txt'], v => v.decision === 'allow', 'チェックサムを出すだけ');
+});

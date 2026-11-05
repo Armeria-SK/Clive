@@ -68,7 +68,10 @@ gnu({ names: ['hostname'], ro: true, flags: '-f -s -I', pos: [] });
 gnu({ names: ['printenv'], flags: '', pos: ['s…'] });
 gnu({ names: ['which'], ro: true, flags: '-a', pos: ['s…'] });
 gnu({ names: ['type'], ro: true, flags: '-a -t -p', pos: ['s…'] }, true);
-gnu({ names: ['md5sum', 'sha1sum', 'sha256sum', 'sha512sum', 'b2sum', 'cksum'], ro: true, flags: '-c --quiet --status', pos: ['path-r…'] });
+// -c は、チェックサムの一覧のファイルに書かれたファイルを読んで照合する（どのファイルを読むかが、ファイルの中身で決まる）。一覧のファイルを読む形は常に今回だけ
+gnu({ names: ['md5sum', 'sha1sum', 'sha256sum', 'sha512sum', 'b2sum', 'cksum'], ro: true, flags: '-c', pos: ['path-r…'] }, false, (p, acc, _ctx, words) => {
+  if (p.seen.has('-c')) acc.add('once', 'list.file_list', { cmd: words[0]!.text, flag: '-c' }, false);
+});
 gnu({ names: ['xxd'], flags: '-l:n -s:n -c:n -g:n -u -p', pos: ['path-r'] });
 gnu({ names: ['od'], ro: true, flags: '-A:s -t:s -N:n -j:n -v -c -x', pos: ['path-r…'] });
 gnu({ names: ['hexdump'], ro: true, flags: '-C -n:n -s:n -v', pos: ['path-r…'] });

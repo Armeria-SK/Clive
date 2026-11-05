@@ -67,7 +67,7 @@ test('findstr（PowerShell）: ワイルドカードの引数は findstr が展�
   expectAll(f.ps, [
     ['findstr /s SECRET *'], ['findstr SECRET *'], ['findstr /s x *.txt'], ['findstr /s x a.txt'], ['findstr /s x hid\\*'], ['findstr x hid\\*'], ['findstr /s x sub\\* hid\\*'], ['findstr /i /s /n x *'], ["findstr /s /c:'x y' *"],
     ['findstr x .*'], ['findstr /s x ?.txt'], ['findstr SECRET *', 'clean'], ['findstr /d:..\\hid x *', 'plain'], ['findstr /s /d:..\\hid x a.txt', 'plain'], ['findstr x hid/*'], ['findstr /s x keys\\*.pem'], ['findstr /s x *', 'clean'],
-    ['findstr x *.', 'clean'], ['findstr x .env?', 'clean'],
+    ['findstr x *.', 'clean'], ['findstr x .env?', 'clean'], ["findstr '/s' x *"], ['findstr "/s" x a.txt'], ["findstr '/d:..\\hid' x *", 'plain'],
   ], denied, '秘密があれば止める');
   expectAll(f.ps, [
     ['findstr x a.txt'], ['findstr x sub\\z.txt'], ['findstr /s x sub\\*'], ['findstr x sub\\*'], ['findstr x plain\\*.txt'], ['findstr /s x plain\\*'], ['findstr /s x *', 'plain'], ['findstr x *.txt', 'plain'], ['findstr /s x *.txt', 'plain'],
