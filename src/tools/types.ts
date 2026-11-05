@@ -60,6 +60,8 @@ export interface ToolDef<I = any> {
   effect: ToolEffect;
   allowedIn: readonly RunKind[];
   preCheck?: (input: I, ctx: ToolContext) => PreCheck | Promise<PreCheck>;
+  // 外から読んだ内容（Web・添付）のあとで確認を求める道具。書き込み・実行の道具は、これが無くても確認する
+  escalateOnTaint?: boolean;
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext) => Promise<ToolOutput>;
 }

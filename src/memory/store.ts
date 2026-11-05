@@ -46,6 +46,8 @@ export const BOOK_LABEL = BOOK_LABELS.ja;
 const MEMORY_HEADING: Record<Language, string> = { ja: '# 覚えていること（記憶）', en: '# What you remember (memory)' };
 
 const MAX_ITEM_CHARS = 600;
+// 1 回の実行（モデルが道具で記憶する）で作れる記憶の数。外から読んだ内容に誘われて、記憶を際限なく作らせないため
+export const MAX_SAVES_PER_RUN = 5;
 
 export class MemoryStore {
   readonly #db: DatabaseSync;
@@ -78,6 +80,10 @@ export class MemoryStore {
     return text;
   }
 
+  #createdInRun(runId: string): number {
+    return (this.#db.prepare("SELECT COUNT(*) AS n FROM memory_events WHERE run_id = ? AND action = 'create'").get(runId) as { n: number }).n;
+  }
+
   #event(memoryId: number, action: MemoryEvent['action'], before: string | null, after: string | null, actor: Actor, runId?: string, reason?: string): number {
     const result = this.#db.prepare(`INSERT INTO memory_events (memory_id, action, before, after, actor, run_id, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(memoryId, action, before, after, actor, runId ?? null, reason ?? null, this.#now());
@@ -89,6 +95,7 @@ export class MemoryStore {
       const text = this.#check(input.content);
       const duplicate = this.#db.prepare("SELECT id FROM memories WHERE book = ? AND status = 'active' AND content = ?").get(input.book, text) as { id: number } | undefined;
       if (duplicate) throw new MemoryError('memory.duplicate', { ref: `${prefix(input.book)}${duplicate.id}` });
+      if (input.runId && input.actor !== 'user' && this.#createdInRun(input.runId) >= MAX_SAVES_PER_RUN) throw new MemoryError('memory.run_limit', { max: MAX_SAVES_PER_RUN });
       const now = this.#now();
       const result = this.#db.prepare(`INSERT INTO memories (book, content, origin, source_conversation_id, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(input.book, text, input.origin ?? (input.actor === 'user' ? 'user' : input.actor === 'review' ? 'review' : 'chat'), input.conversationId ?? null, input.messageId ?? null, now, now);

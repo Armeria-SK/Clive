@@ -59,7 +59,7 @@
 - 使うもの: `config`（型と `OLLAMA_DEFAULT_URL`）、`src/shared`（`url` `redaction`）、`@anthropic-ai/sdk`、`fetch`
 
 ### 記憶 — `src/memory`
-- 記憶 2 冊（`user` と `notes`）の保存・変更履歴と取り消し（`store.ts`。本の大きさに上限は無く、保存は断らない。1 件は 600 文字まで）、過去の会話の検索（`history.ts`、FTS5 trigram）、振り返りの待ち行列とモデルへの指示文（`review.ts`。指示文は言語別）。
+- 記憶 2 冊（`user` と `notes`）の保存・変更履歴と取り消し（`store.ts`。本の大きさに上限は無く、保存は断らない。1 件は 600 文字まで。ただし 1 回の実行〔`runId`〕でモデルが道具で作れるのは 5 件まで。画面からの追加は数えない）、過去の会話の検索（`history.ts`、FTS5 trigram）、振り返りの待ち行列とモデルへの指示文（`review.ts`。指示文は言語別）。
 - 会話の最初に固定する system へ入れる量には予算がある（`store.ts` の `planBooks` / `renderBooks`）: 新しく直した順（`updated_at`、同じなら id の大きい方）に、入らない 1 件で止めて入れ、入らなかった分は「ほか N 件。memory_search で探せます」の 1 行にする。予算（トークン）は `ChatEngine.memoryBudget()` が、チャットと裏方で使える（確認が通った）モデルのうち容量の分かるものの `available`（コンテキストの 95% − 最大出力）のいちばん小さい値の 12% で決める（容量の分かるモデルが無い・モデルが 0 個なら予算なし = 全部入れる）。モデルの「必要な長さ」（`status.ts` の `requiredContext`）は、起動直後で確認の結果がまだ無くても決まるよう、記憶の分を「そのモデル自身の available の 12% まで」として数える（他のモデルや確認の結果に左右されない。記憶の見積もりは `App.memoryTokens()`、`baseTokens()` は記憶を含まない）。12%・95% の割合と available の式は `engine/context-budget.ts`。整理の振り返り（`book_full`。記憶が予算を超えたら 1 日 1 回、`dedupKey` は `book:all:<日>`）の依頼文は、入りきらない記憶を古い順に、同じ予算まで挙げる。
 - 入口: `src/memory/store.ts`（`MemoryStore`）
 - 使うもの: `db`（`transaction`）、`src/shared`（`redaction`）、`engine/tokens.ts`（量の見積もりだけ）
@@ -72,7 +72,7 @@
 
 ### 道具 — `src/tools`
 - `types.ts`（道具の型。効果は `read` `write` `exec` `network` `meta`、使える場面は `chat` `task` `review`）、`registry.ts`（登録）、`policy.ts`（触れてよいフォルダと禁止パス）、`approvals.ts`（承認待ちの管理）。
-- `pipeline.ts`: 道具 1 回の流れ。引数の検査 → 事前の判定 → 外から読んだ内容のあとは確認を求める → 実行前フック → 承認 → 実行 → 実行後フック → `tool_calls` に記録。振り返りでは書き込み・実行・通信の道具を使わせない。
+- `pipeline.ts`: 道具 1 回の流れ。引数の検査 → 事前の判定 → 外から読んだ内容のあとは確認を求める（書き込み・実行の道具と、`escalateOnTaint` を持つ道具 = 記憶の追加 `memory_save`）→ 実行前フック → 承認 → 実行 → 実行後フック → `tool_calls` に記録。振り返りでは書き込み・実行・通信の道具を使わせない。
 - 中の部品:
   - `builtin/`: 組み込みの道具 24 個（`files` `shell` `web` `memory` `tasks` `curiosity` `skills`）。
   - `hooks/`: 実行前の判定（`parse-cmd.ts` コマンドの分解、`scope.ts` フォルダの範囲、`shell-guard.ts` シェルの判定、`command-hook.ts` 自分で用意した外部コマンド）。
@@ -192,7 +192,7 @@
 - **API のエラー（HTTP 4xx/5xx の JSON）**: `{ error, field?, message, code?, params? }`。
   - `code` が `http.*`: 入力の誤り・見つからない・形式。`http.required{field}` `http.too_long{field,max}` `http.bad_enum{field,values}` `http.bad_bool{field}` `http.bad_attachments{max}` `http.too_large_body{kb}` `http.too_large_file{mb}` `http.unknown_language{language,values}`。値の無いもの: `unsupported_media_type` `invalid_json` `invalid_body` `invalid_id` `skill_missing` `item_missing` `already_researching` `conversation_missing` `bad_priority` `bad_when` `bad_repeat` `task_missing` `not_waiting` `already_finished` `bad_ids` `empty_name` `bad_color` `attachment_missing` `no_vision` `approval_gone` `bad_book` `internal`（500）。
   - `code` が `task.error.*`（`error` は `task`）: `empty_title` `bad_cron{cron}` `not_found{id}` `not_proposal` `not_schedule` `running` `schedule_cannot_run` `waiting_answer` `previous_unfinished` `bad_when{when}` `bad_repeat{repeat}`。
-  - `code` が `store.*`: 記憶（`error` は `memory`）`store.memory.{empty,too_long{length,max},secret,more{n},duplicate{ref},not_found{id},unchanged,no_event,already_undone,gone,cannot_undo}`、スキルとその下書き・好奇心（`error` は `invalid`）`store.skill.{bad_name,empty_description,long_description{max},empty_body,long_body{max},not_found{name},too_many_drafts,not_pending}` `store.curiosity.{empty_topic,too_long,duplicate{id},too_many{max},not_found{id}}`、添付ファイル（`error` は `upload`）`store.upload.{empty,too_large{mb},image_too_large{mb},unsupported,pdf_not_pdf,pdf_encrypted,pdf_no_text,pdf_damaged}`。
+  - `code` が `store.*`: 記憶（`error` は `memory`）`store.memory.{empty,too_long{length,max},secret,more{n},run_limit{max},duplicate{ref},not_found{id},unchanged,no_event,already_undone,gone,cannot_undo}`、スキルとその下書き・好奇心（`error` は `invalid`）`store.skill.{bad_name,empty_description,long_description{max},empty_body,long_body{max},not_found{name},too_many_drafts,not_pending}` `store.curiosity.{empty_topic,too_long,duplicate{id},too_many{max},not_found{id}}`、添付ファイル（`error` は `upload`）`store.upload.{empty,too_large{mb},image_too_large{mb},unsupported,pdf_not_pdf,pdf_encrypted,pdf_no_text,pdf_damaged}`。
 - **返事の失敗**: SSE の `run.end` と、会話への送信の 409（`SendOutcome`）に `errorCode?`・`errorParams?` を添える（`errorKind`・`errorMessage` は今のまま。`errorMessage` は詳しい説明として小さく添える）。
   - プロバイダ由来は `provider.*`: `key.missing{env}` `http.{context_overflow,auth,rate_limit,not_found,server,rejected}`（`{status,suffix}`）`cancelled` `timeout` `connect` `connect.code{code}` `anthropic.{timeout,connect,busy}` `unexpected{detail}` `ollama.context_unset`。
   - エンジン由来は `engine.*`: `send.{busy_chat,busy,nothing_to_retry}` `no_usable` `run.{internal{detail},no_model,no_provider{id}}` `tool.invalid_streak{count}` `fit.overflow{required,available}`。

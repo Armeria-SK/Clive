@@ -18,6 +18,7 @@ const ja = {
   'pipeline.note_none': '続きは表示していません',
 
   'summary.file_write': 'ファイルに書き込む: {path}',
+  'summary.memory_save': '記憶する（{label}）',
   'summary.file_edit': 'ファイルを編集する: {path}',
   'summary.shell': 'コマンドを実行する',
   'summary.web_fetch': 'Web ページを読む',
@@ -154,6 +155,7 @@ const en: Record<keyof typeof ja, string> = {
   'pipeline.note_none': 'The rest is not shown',
 
   'summary.file_write': 'Write to a file: {path}',
+  'summary.memory_save': 'Save to memory ({label})',
   'summary.file_edit': 'Edit a file: {path}',
   'summary.shell': 'Run a command',
   'summary.web_fetch': 'Read a web page',

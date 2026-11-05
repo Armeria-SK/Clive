@@ -34,6 +34,8 @@ export const memorySave: ToolDef<{ book: Book; content: string }> = {
   input: Type.Object({ book: BookArg, content: Type.String({ minLength: 1, maxLength: 600 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
+  escalateOnTaint: true,
+  summarize: (input, language) => ({ title: toolText(language, 'summary.memory_save', { label: BOOK_LABELS[language][input.book] }), body: input.content }),
   async execute(input, ctx) {
     try {
       const s = services(ctx);
