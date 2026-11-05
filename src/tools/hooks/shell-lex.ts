@@ -48,6 +48,8 @@ export type LexResult = { ok: true; statements: Statement[] } | { ok: false; fai
 const CURLY = /[‘-‟′″]/u;
 const DASHES = /[‐-―−]/u;
 const ODD_SPACE = /[ ­  -‏‪-  -⁩﻿]/u;
+// PowerShell 5.1 は U+0085・U+2028・U+2029 を語の区切りに読む（本物の Parser で確かめた）。bash は語の一部に読む。C1 の制御文字は、まとめて止める
+const SEPARATOR_LIKE = /[\u0080-\u009f\u2028\u2029]/u;
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 const FULLWIDTH = /[！-～　]/u;
 const MAX_DEPTH = 4;
@@ -79,8 +81,13 @@ function precheck(src: string): LexFail | null {
   if (dash) return fail('dash', dash[0]);
   const space = ODD_SPACE.exec(src);
   if (space) return fail('space', hex(space[0]));
+  const separator = SEPARATOR_LIKE.exec(src);
+  if (separator) return fail('space', hex(separator[0]));
   const control = CONTROL.exec(src);
   if (control) return fail('control', hex(control[0]));
+  // PowerShell は CR 1 つ（LF が続かないもの）を文の区切りに読む。CRLF だけは LF と同じ 1 つの改行として読む
+  const lone = /\r(?!\n)/u.exec(src);
+  if (lone) return fail('control', hex('\r'));
   const wide = FULLWIDTH.exec(outsideQuotes(src));
   if (wide) return fail('fullwidth', wide[0]);
   return null;
@@ -89,8 +96,9 @@ function precheck(src: string): LexFail | null {
 export function lexShell(command: string, shell: ShellKind): LexResult {
   const early = precheck(command);
   if (early) return { ok: false, fail: early };
+  const normalized = command.replace(/\r\n/gu, '\n');
   const sink: Statement[] = [];
-  const failure = isPowerShell(shell) ? lexPowerShell(command, shell, sink) : lexBash(command, 0, sink);
+  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink);
   return failure ? { ok: false, fail: failure } : { ok: true, statements: sink };
 }
 

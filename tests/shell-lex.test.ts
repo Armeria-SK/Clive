@@ -212,3 +212,23 @@ test('字句 PowerShell: 添字 [0] [-1] [1..2] [$i] を読む（] は語の一�
   assert.deepEqual(read('[DateTime]::Now.Year', 'powershell').map(s => s.shapes), [[]]);
   assert.deepEqual(read('[DateTime]::Today.AddDays(1)', 'powershell').flatMap(s => s.shapes), ['method:AddDays']);
 });
+
+// 審査で見つかった: PowerShell 5.1 は CR 1 つを文の区切りに、U+0085・U+2028・U+2029 を語の区切りに読む（本物の Parser で確かめた）。
+// 字句の読み取りがこれらを読み飛ばす・語の中に入れると、本物のシェルと別の文・語になる。CRLF だけは LF と同じに読む
+test('字句 11.2.1: CR 1 つ・C1 の制御文字・U+2028・U+2029 は、どのシェルでも止める', () => {
+  const cases: Array<[string, LexCode]> = [
+    ['Write-Output a\rnode p.js', 'control'], ['Set-Content README.md\rx', 'control'], ['ls\r', 'control'], ['\rls', 'control'], ['echo a\r\rb', 'control'], ['echo a\r\n\rb', 'control'], ['echo "a\rb"', 'control'],
+    ['Set-Content README.md\u0085x', 'space'], ['echo a\u0085b', 'space'], ['echo a b', 'space'], ['echo a b', 'space'], ['echo "a\u0085b"', 'space'],
+    ['echo a\u0080b', 'space'], ['echo a\u0090b', 'space'], ['echo a\u009fb', 'space'],
+  ];
+  for (const shell of SHELLS) for (const [command, code] of cases) assert.equal(failure(command, shell), code, `${shell}: ${JSON.stringify(command)}`);
+});
+
+test('字句 11.2.1: CRLF は LF と同じ 1 つの改行。語に CR は入らない', () => {
+  for (const shell of SHELLS) {
+    const statements = read('ls -la\r\ncat a.txt\r\n', shell);
+    assert.deepEqual(statements.map(line), ['ls -la', 'cat a.txt'], shell);
+    assert.ok(statements.every(s => s.words.every(w => !w.text.includes('\r'))), `${shell}: 語に CR が残っている`);
+  }
+  assert.deepEqual(read('Get-ChildItem\r\n  -Path x', 'powershell').map(line).length > 0, true);
+});

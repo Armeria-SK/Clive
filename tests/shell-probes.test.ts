@@ -56,6 +56,8 @@ const HIGH_PS = [
   'pip install .', 'pip install -e .', 'npm install', 'npm install ./pkg', 'Set-Content .git/hooks/pre-commit x', 'Set-Content sub/.git/hooks/pre-commit x',
 ] as const;
 // 止める書き方
+// 審査で見つかった: 本物の PowerShell は CR 1 つを文の区切りに、U+0085・U+2028 を語の区切りに読む。ガードは止める
+const SEPARATOR_PS = ['Write-Output a\rnode p.js', 'Set-Content README.md\rx', 'Set-Content README.md\u0085x', 'Set-Content README.md\u2028x', 'Set-Content README.md\u2029x'];
 const BLOCKED_PS = ["``n`o`de --eval=1", 'ls --% x', 'Write-Output ‘x’', 'Get-ChildItem –Path x', 'Write-Output "$(ls)"'];
 
 test('審査で再現された抜けは、どれも確かめなしには動かない（本物のファイルがある作業フォルダで）', t => {
@@ -63,6 +65,7 @@ test('審査で再現された抜けは、どれも確かめなしには動か�
   const wrong: string[] = [];
   for (const command of HIGH_BASH) { const v = f.bash(command); if (!stopped(v)) wrong.push(`bash: ${command} → ${v.decision}${v.onceOnly ? '/once' : ''}`); }
   for (const command of HIGH_PS) { const v = f.ps(command); if (!stopped(v)) wrong.push(`powershell: ${command} → ${v.decision}${v.onceOnly ? '/once' : ''}`); }
+  for (const command of SEPARATOR_PS) { const v = f.ps(command); if (v.decision !== 'deny') wrong.push(`powershell: ${JSON.stringify(command)} → ${v.decision}（止めるはず）`); const b = f.bash(command); if (b.decision !== 'deny') wrong.push(`bash: ${JSON.stringify(command)} → ${b.decision}`); }
   for (const command of BLOCKED_PS) { const v = f.ps(command); if (v.decision !== 'deny') wrong.push(`powershell: ${command} → ${v.decision}（止めるはず）`); }
   assert.deepEqual(wrong, []);
 });

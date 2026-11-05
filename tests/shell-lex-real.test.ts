@@ -156,3 +156,30 @@ test('字句の読み取りが止める形は、PowerShell 7 でも bash でも�
   const rows = ['echo ‘a’', 'echo “a”', 'ls –la', 'echo a b', 'echo a​b', 'echo ＂a＂'];
   for (const shell of ['powershell', 'pwsh', 'bash', 'sh'] as ShellKind[]) for (const row of rows) assert.equal(lexShell(row, shell).ok, false, `${shell}: ${row}`);
 });
+
+const PS_COUNT_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$rows = $env:CLIVE_ROWS | ConvertFrom-Json
+foreach ($s in $rows) {
+  $errors = $null; $tokens = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($s, [ref]$tokens, [ref]$errors)
+  $cmds = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true))
+  Write-Output ("" + $cmds.Count + "|" + (($cmds | ForEach-Object { $_.CommandElements.Count }) -join ','))
+}
+`;
+
+// 審査で見つかった: CR 1 つは文の区切り、U+0085・U+2028・U+2029 は語の区切り。字句の読み取りは、どれも止める
+test('PowerShell 5.1: 本物の Parser が文や語を分ける文字（CR 1 つ・U+0085・U+2028・U+2029）を、字句の読み取りは止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const rows = ['Write-Output a\rnode p.js', 'Set-Content README.md\rx', 'Write-Output a\u0085b', 'Write-Output a b', 'Write-Output a b'];
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_COUNT_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS: JSON.stringify(rows) } });
+  assert.equal(real.status, 0, real.stderr);
+  const counts = real.stdout.split(/\r?\n/u).filter(l => /^\d+\|/u.test(l));
+  assert.deepEqual(counts, ['2|2,2', '2|2,1', '1|3', '1|3', '1|3'], '本物は CR で文を分け、U+0085 などで語を分ける');
+  for (const row of rows) for (const shell of ['powershell', 'pwsh', 'bash', 'sh'] as ShellKind[]) assert.equal(lexShell(row, shell).ok, false, `${shell}: ${JSON.stringify(row)} は止める`);
+  // CRLF は本物も 1 つの改行として読む
+  const crlf = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_COUNT_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS: JSON.stringify(['Write-Output a\r\nWrite-Output b']) } });
+  assert.match(crlf.stdout, /^2\|2,2$/mu);
+  const mine = lexShell('Write-Output a\r\nWrite-Output b', 'powershell');
+  assert.ok(mine.ok && mine.statements.length === 2 && mine.statements.every(s => s.words.length === 2));
+});
