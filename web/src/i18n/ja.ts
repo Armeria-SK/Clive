@@ -106,8 +106,6 @@ export const ja = {
   'chat.memory.undoFailed': '取り消せませんでした',
   'chat.fail.title': '返事を作れませんでした',
   'chat.fail.retry': 'もう一度送る',
-  'chat.fail.moreDetail': '詳しく',
-  'chat.fail.lessDetail': '閉じる',
   'chat.fail.fix': '直し方',
   'chat.send.failed': '送信できませんでした。サーバーが動いているか確認してください',
   'chat.send.failedTitle': '送れませんでした',

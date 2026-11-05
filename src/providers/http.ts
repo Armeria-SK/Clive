@@ -47,21 +47,22 @@ export async function readSnippet(response: Response, max = 2000): Promise<strin
 }
 
 export function classifyHttpFailure(status: number, snippet: string, headers?: Headers): ProviderError {
+  // 相手のサーバーの本文は、画面に出す文にも値にも入れない。実行ログ用に、秘密を伏せて短くした本文だけ upstream に持たせる
   const shown = redactSecrets(snippet).replace(/\s+/g, ' ').trim().slice(0, 200);
-  const suffix = shown ? `: ${shown}` : '';
+  const upstream = shown ? { upstream: shown } : {};
   const retryAfterMs = parseRetryAfter(headers?.get('retry-after'));
   if (CONTEXT_PATTERNS.test(snippet)) {
-    return providerError('context_overflow', 'http.context_overflow', { status, suffix }, {
-      retryable: false, status, detail: { reason: 'prompt_exceeds' },
+    return providerError('context_overflow', 'http.context_overflow', { status }, {
+      retryable: false, status, detail: { reason: 'prompt_exceeds' }, ...upstream,
     });
   }
-  if (status === 401 || status === 403) return providerError('auth', 'http.auth', { status, suffix }, { retryable: false, status });
-  if (status === 429) return providerError('rate_limit', 'http.rate_limit', { suffix }, { status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
-  if (status === 404) return providerError('provider_error', 'http.not_found', { suffix }, { retryable: false, status });
+  if (status === 401 || status === 403) return providerError('auth', 'http.auth', { status }, { retryable: false, status, ...upstream });
+  if (status === 429) return providerError('rate_limit', 'http.rate_limit', {}, { status, ...upstream, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+  if (status === 404) return providerError('provider_error', 'http.not_found', {}, { retryable: false, status, ...upstream });
   if (status === 408 || status === 409 || status >= 500) {
-    return providerError('provider_error', 'http.server', { status, suffix }, { retryable: true, status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+    return providerError('provider_error', 'http.server', { status }, { retryable: true, status, ...upstream, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
   }
-  return providerError('provider_error', 'http.rejected', { status, suffix }, { retryable: false, status });
+  return providerError('provider_error', 'http.rejected', { status }, { retryable: false, status, ...upstream });
 }
 
 export function classifyFetchError(error: unknown, signal: AbortSignal, timeoutSignal?: AbortSignal): ProviderError {

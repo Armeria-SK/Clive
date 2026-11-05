@@ -39,19 +39,6 @@ export function serverText(code: string | undefined | null, params: Params, lang
   return UNFILLED.test(text) ? null : text;
 }
 
-// 返事の失敗の文。相手のサーバーが返した本文（provider.http.* の params.suffix。Python の traceback などが入りうる）は文に入れず、
-// 短く切った本文だけを detail として別に返す（画面は「詳しく」を開いたときだけ出す）。実行ログには、サーバーが書いた全文が残る。
-export const FAILURE_DETAIL_MAX = 120;
-
-export function failureText(code: string | undefined | null, params: Params, language: Lang): { message: string; detail: string | null } | null {
-  const raw = params && typeof params === 'object' ? (params as Record<string, unknown>).suffix : undefined;
-  const suffix = typeof raw === 'string' ? raw : '';
-  const message = serverText(code, suffix ? { ...simple(params), suffix: '' } : params, language);
-  if (message === null) return null;
-  const body = suffix.replace(/^:\s*/u, '').replace(/\s+/gu, ' ').trim();
-  return { message, detail: body ? (body.length > FAILURE_DETAIL_MAX ? `${body.slice(0, FAILURE_DETAIL_MAX)}…` : body) : null };
-}
-
 // API のエラー（{ code?, params? }）と、返事の失敗の 409（{ errorCode?, errorParams? }）の本文から、画面の言語の文を作る。
 export function errorBodyText(body: unknown, language: Lang): string | null {
   if (body === null || typeof body !== 'object') return null;
@@ -72,7 +59,7 @@ export function warningText(warning: { code: string; message: string; params?: P
   if (!key) return warning.message;
   const params = warning.params && typeof warning.params === 'object' ? warning.params as Record<string, unknown> : {};
   if (warning.code === 'retrying') {
-    const reason = failureText(typeof params.errorCode === 'string' ? params.errorCode : null, params.errorParams as Params, language)?.message ?? (typeof params.detail === 'string' ? params.detail : null);
+    const reason = serverText(typeof params.errorCode === 'string' ? params.errorCode : null, params.errorParams as Params, language) ?? (typeof params.detail === 'string' ? params.detail : null);
     return reason === null ? warning.message : serverText(`engine.${key}`, { ...simple(params), message: reason }, language) ?? warning.message;
   }
   return serverText(`engine.${key}`, params, language) ?? warning.message;

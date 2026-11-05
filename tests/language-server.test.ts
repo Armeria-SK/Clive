@@ -300,12 +300,12 @@ test('モデルの確認: messageParams には言語で書いた文を入れず�
 
 test('プロバイダのエラー: 日本語の文は今までと同じで、コードと値を添え、英語では英語で書く', () => {
   const cases: Array<[ProviderError, string, string, string]> = [
-    [classifyHttpFailure(401, 'bad key'), '認証に失敗しました（HTTP 401: bad key）', 'Authentication failed (HTTP 401: bad key)', 'http.auth'],
+    [classifyHttpFailure(401, 'bad key'), '認証に失敗しました（HTTP 401）', 'Authentication failed (HTTP 401)', 'http.auth'],
     [classifyHttpFailure(429, ''), '利用制限に達しました（HTTP 429）', 'The usage limit was reached (HTTP 429)', 'http.rate_limit'],
     [classifyHttpFailure(404, ''), 'モデルまたは API が見つかりません（HTTP 404）', 'The model or API was not found (HTTP 404)', 'http.not_found'],
-    [classifyHttpFailure(503, 'down'), 'プロバイダ側のエラーです（HTTP 503: down）', 'The provider reported an error (HTTP 503: down)', 'http.server'],
+    [classifyHttpFailure(503, 'down'), 'プロバイダ側のエラーです（HTTP 503）', 'The provider reported an error (HTTP 503)', 'http.server'],
     [classifyHttpFailure(400, ''), 'リクエストが拒否されました（HTTP 400）', 'The request was rejected (HTTP 400)', 'http.rejected'],
-    [classifyHttpFailure(400, 'maximum context length exceeded'), '入力がモデルのコンテキスト長を超えました（HTTP 400: maximum context length exceeded）', 'The input exceeded the context length of the model (HTTP 400: maximum context length exceeded)', 'http.context_overflow'],
+    [classifyHttpFailure(400, 'maximum context length exceeded'), '入力がモデルのコンテキスト長を超えました（HTTP 400）', 'The input exceeded the context length of the model (HTTP 400)', 'http.context_overflow'],
     [classifyFetchError(Object.assign(new Error('x'), { cause: { code: 'ECONNREFUSED' } }), new AbortController().signal), 'プロバイダに接続できません（ECONNREFUSED）', 'Cannot connect to the provider (ECONNREFUSED)', 'connect.code'],
     [classifyFetchError(new Error('x'), new AbortController().signal), 'プロバイダに接続できません', 'Cannot connect to the provider', 'connect'],
   ];
@@ -315,7 +315,8 @@ test('プロバイダのエラー: 日本語の文は今までと同じで、コ
     assert.equal(error.text('en'), en);
     assert.equal(error.code, code);
   }
-  assert.deepEqual(cases[0]![0].params, { status: 401, suffix: ': bad key' });
+  assert.deepEqual(cases[0]![0].params, { status: 401 }, '相手のサーバーの本文は値にも入らない');
+  assert.equal(cases[0]![0].upstream, 'bad key', '実行ログ用の本文だけ別に持つ');
   assert.throws(() => requireApiKey(compatProvider('http://127.0.0.1:1/v1', { apiKeyEnv: 'NOPE_KEY' }), {}), (e: unknown) => {
     const error = e as ProviderError;
     return error.message === '環境変数 NOPE_KEY に API キーが設定されていません（.env か OS の環境変数に書いてください）'
@@ -391,22 +392,22 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
     };
 
     // 再試行 → 失敗
-    const down = () => fail(providerError('provider_error', 'http.server', { status: 503, suffix: '' }, { retryable: true, status: 503, retryAfterMs: 1 }));
+    const down = () => fail(providerError('provider_error', 'http.server', { status: 503 }, { retryable: true, status: 503, retryAfterMs: 1 }));
     s.adapter().scripts.push(down(), down());
     const failed = await send('c1', 'hi');
     assert.ok(!failed.ok);
     const retrying = events.find(e => e.type === 'warning' && e.code === 'retrying') as Extract<RunEvent, { type: 'warning' }>;
     assert.equal(retrying.message, pick('プロバイダ側のエラーです（HTTP 503）。1 秒後に再試行します（1/1）', 'The provider reported an error (HTTP 503). Retrying in 1 s (1/1)'));
-    assert.deepEqual(retrying.params, { seconds: 1, attempt: 1, retries: 1, errorCode: 'provider.http.server', errorParams: { status: 503, suffix: '' } }, 'language-written text is not in params');
+    assert.deepEqual(retrying.params, { seconds: 1, attempt: 1, retries: 1, errorCode: 'provider.http.server', errorParams: { status: 503 } }, 'language-written text is not in params');
     const end = events.findLast(e => e.type === 'run.end') as Extract<RunEvent, { type: 'run.end' }>;
     assert.equal(end.errorKind, 'provider_error');
     assert.equal(end.errorMessage, pick('プロバイダ側のエラーです（HTTP 503）', 'The provider reported an error (HTTP 503)'));
     assert.equal(end.errorCode, 'provider.http.server');
-    assert.deepEqual(end.errorParams, { status: 503, suffix: '' });
+    assert.deepEqual(end.errorParams, { status: 503 });
     if (!failed.ok) assert.equal(failed.errorCode, 'provider.http.server');
 
     // 途中まで書いて失敗
-    s.adapter().scripts.push(fail(providerError('provider_error', 'http.rejected', { status: 400, suffix: '' }, { retryable: false }), 'partial text'));
+    s.adapter().scripts.push(fail(providerError('provider_error', 'http.rejected', { status: 400 }, { retryable: false }), 'partial text'));
     await send('c2', 'hi');
     const discarded = events.find(e => e.type === 'warning' && e.code === 'partial_discarded') as Extract<RunEvent, { type: 'warning' }>;
     assert.equal(discarded.message, pick('返事の途中で失敗したため、途中までの内容は保存しませんでした', 'The reply failed partway, so the part written so far was not saved'));

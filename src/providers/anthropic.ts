@@ -66,7 +66,7 @@ export function classifyAnthropicError(error: unknown, signal: AbortSignal): Pro
     }
     return classifyHttpFailure(error.status, message, error.headers);
   }
-  return providerError('internal', 'unexpected', { detail: redactSecrets(String((error as Error)?.message ?? error)).slice(0, 200) }, { retryable: false });
+  return providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets(String((error as Error)?.message ?? error)).slice(0, 200) });
 }
 
 export class AnthropicAdapter implements ProviderAdapter {

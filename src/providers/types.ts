@@ -60,8 +60,10 @@ export class ProviderError extends Error {
   readonly detail: ContextDetail | undefined;
   readonly code: ProviderMessageKey | undefined;
   readonly params: MessageParams;
+  // 相手のサーバーが返した本文など。画面には出さず、実行ログにだけ残す（message・params には入れない）
+  readonly upstream: string | undefined;
   constructor(kind: EngineErrorKind, message: string, options: {
-    retryable?: boolean; retryAfterMs?: number; status?: number; detail?: ContextDetail; code?: ProviderMessageKey; params?: MessageParams;
+    retryable?: boolean; retryAfterMs?: number; status?: number; detail?: ContextDetail; code?: ProviderMessageKey; params?: MessageParams; upstream?: string;
   } = {}) {
     super(message);
     this.kind = kind;
@@ -71,12 +73,13 @@ export class ProviderError extends Error {
     this.detail = options.detail;
     this.code = options.code;
     this.params = options.params ?? {};
+    this.upstream = options.upstream;
   }
 
   text(language: Language): string { return this.code ? providerText(language, this.code, this.params) : this.message; }
 }
 
-export function providerError(kind: EngineErrorKind, code: ProviderMessageKey, params: MessageParams = {}, options: { retryable?: boolean; retryAfterMs?: number; status?: number; detail?: ContextDetail } = {}): ProviderError {
+export function providerError(kind: EngineErrorKind, code: ProviderMessageKey, params: MessageParams = {}, options: { retryable?: boolean; retryAfterMs?: number; status?: number; detail?: ContextDetail; upstream?: string } = {}): ProviderError {
   return new ProviderError(kind, providerText('ja', code, params), { ...options, code, params });
 }
 

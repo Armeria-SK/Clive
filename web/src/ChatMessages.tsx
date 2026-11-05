@@ -236,11 +236,10 @@ export function NumbersGrid({ items }: { items: Array<{ label: string; value: nu
   );
 }
 
-interface FailureProps { message: string; detail?: string | null | undefined; hint?: string | null | undefined; numbers?: { available: number; required: number } | null; onRetry?: (() => void) | undefined }
+interface FailureProps { message: string; hint?: string | null | undefined; numbers?: { available: number; required: number } | null; onRetry?: (() => void) | undefined }
 
-export function FailureCard({ message, detail, hint, numbers, onRetry }: FailureProps) {
+export function FailureCard({ message, hint, numbers, onRetry }: FailureProps) {
   const t = useT();
-  const [open, setOpen] = useState(false);
   return (
     <div className="chat-fail">
       <div className="chat-card" role="alert">
@@ -250,12 +249,6 @@ export function FailureCard({ message, detail, hint, numbers, onRetry }: Failure
           <span className="chat-card-reason">{message}</span>
           {numbers && <NumbersGrid items={[{ label: t('chat.num.available'), value: numbers.available }, { label: t('chat.num.required'), value: numbers.required, warn: true }]} />}
           {hint && <span className="chat-card-hint">{hint}</span>}
-          {detail && (
-            <>
-              <button type="button" className="chat-link chat-card-more" aria-expanded={open} onClick={() => setOpen(v => !v)}>{open ? t('chat.fail.lessDetail') : t('chat.fail.moreDetail')}</button>
-              {open && <span className="chat-card-detail">{detail}</span>}
-            </>
-          )}
         </div>
       </div>
       {onRetry && (
