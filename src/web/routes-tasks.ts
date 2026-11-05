@@ -23,6 +23,12 @@ function priorityOf(body: Record<string, unknown>): number | undefined {
   return body.priority;
 }
 
+function doneCriteriaOf(body: Record<string, unknown>): string | null | undefined {
+  if (body.doneCriteria === undefined) return undefined;
+  if (body.doneCriteria === null || (typeof body.doneCriteria === 'string' && !body.doneCriteria.trim())) return null;
+  return requireString(body, 'doneCriteria', { max: 500 })!.trim();
+}
+
 function whenOf(body: Record<string, unknown>): number | null | undefined {
   if (body.when === undefined) return undefined;
   if (body.when === null || body.when === '') return null;
@@ -87,12 +93,14 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const title = requireString(body, 'title', { optional: true, max: 200 });
     const text = requireString(body, 'body', { optional: true, max: 20_000 });
     const nextAction = body.nextAction === null ? null : requireString(body, 'nextAction', { optional: true, max: 2000 });
+    const doneCriteria = doneCriteriaOf(body);
     const priority = priorityOf(body);
     const when = whenOf(body);
     try {
       const updated = app.tasks.update(task.id, {
         ...(title !== undefined ? { title } : {}), ...(text !== undefined ? { body: text } : {}),
-        ...(nextAction !== undefined ? { nextAction } : {}), ...(priority !== undefined ? { priority } : {}),
+        ...(nextAction !== undefined ? { nextAction } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}),
+        ...(priority !== undefined ? { priority } : {}),
         ...(when !== undefined ? { runAt: when } : {}),
       }, 'user');
       app.tasks.event(task.id, 'edited', 'user');

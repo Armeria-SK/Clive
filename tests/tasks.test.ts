@@ -67,6 +67,18 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   return { app, adapter: () => adapter, clock, events, userTask };
 }
 
+async function serve(t: { after: (fn: () => void) => void }, s: Awaited<ReturnType<typeof setup>>) {
+  const web = createWebServer(s.app);
+  await new Promise<void>(resolve => web.server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(web.server.address() as AddressInfo).port}`;
+  web.setOrigins([origin]);
+  t.after(() => { web.server.closeAllConnections(); web.server.close(); });
+  return async (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
+    const res = await fetch(`${origin}${path}`, { method, headers: { Origin: origin, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    return { status: res.status, body: await res.json() as any };
+  };
+}
+
 // ── 予定と precheck ──
 
 test('偽の時計で 24 時間進めても、やることが無ければモデルを 1 回も呼ばない', async t => {
@@ -413,6 +425,37 @@ test('API: タスク・ワーカー・通知・プロフィール', async t => {
   assert.equal((await api('/api/profile', { shape: 'dragon' }, 'PATCH')).status, 400);
   assert.equal((await api('/api/profile', { color: 'red' }, 'PATCH')).status, 400);
   assert.equal(s.app.config().profile.shape, 'droplet');
+});
+
+test('API: 完了の条件を PATCH で直せる。空文字と null で「未設定」に戻り、501 文字は断る', async t => {
+  const s = await setup(t);
+  const api = await serve(t, s);
+  const id = s.userTask('本を返す', { doneCriteria: '返却の印をもらう' }).id;
+  assert.equal((await api(`/api/tasks/${id}`)).body.task.done_criteria, '返却の印をもらう');
+
+  const set = await api(`/api/tasks/${id}`, { doneCriteria: '  図書館の窓口で返却済みの印をもらった  ' }, 'PATCH');
+  assert.equal(set.status, 200);
+  assert.equal(set.body.task.done_criteria, '図書館の窓口で返却済みの印をもらった', '前後の空白は落とす');
+  assert.equal(s.app.tasks.get(id)!.done_criteria, '図書館の窓口で返却済みの印をもらった');
+  assert.equal(s.app.tasks.events(id)[0]!.kind, 'edited', '経過に「編集した」が残る');
+  assert.equal(set.body.task.title, '本を返す', 'ほかの項目は触らない');
+
+  const longest = 'あ'.repeat(500);
+  assert.equal((await api(`/api/tasks/${id}`, { doneCriteria: longest }, 'PATCH')).body.task.done_criteria, longest, '500 文字までは通る');
+  const tooLong = await api(`/api/tasks/${id}`, { doneCriteria: 'あ'.repeat(501) }, 'PATCH');
+  assert.equal(tooLong.status, 400);
+  assert.equal(tooLong.body.field, 'doneCriteria');
+  assert.equal(tooLong.body.code, 'http.too_long');
+  assert.equal(s.app.tasks.get(id)!.done_criteria, longest, '断ったら今の値のまま');
+  assert.equal((await api(`/api/tasks/${id}`, { doneCriteria: 5 }, 'PATCH')).status, 400, '文字列と null 以外は断る');
+
+  assert.equal((await api(`/api/tasks/${id}`, { doneCriteria: '   ' }, 'PATCH')).body.task.done_criteria, null, '空白だけは未設定に戻す');
+  await api(`/api/tasks/${id}`, { doneCriteria: 'また決めた' }, 'PATCH');
+  assert.equal((await api(`/api/tasks/${id}`, { doneCriteria: null }, 'PATCH')).body.task.done_criteria, null, 'null でも未設定に戻す');
+  assert.equal(s.app.tasks.get(id)!.done_criteria, null);
+
+  await api(`/api/tasks/${id}`, { doneCriteria: '残す' }, 'PATCH');
+  assert.equal((await api(`/api/tasks/${id}`, { nextAction: '図書館へ' }, 'PATCH')).body.task.done_criteria, '残す', '送らなければ変えない');
 });
 
 test('モデルが 0 個のあいだは、タスクも振り返りも選ばず、会話も通知も作らずに休む。モデルを足せば動く', async t => {
