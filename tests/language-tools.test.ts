@@ -122,6 +122,19 @@ for (const language of ['ja', 'en'] as const) {
       'You have just read content from the web or an attachment (A, B), so this is checked with you to be safe')]);
     await edit;
 
+    const outsideRead = setup(t, language);
+    const outsideAbs = resolve(outsideRead.ctx.workspace, '../out.txt');
+    const catPending = outsideRead.call('shell_run', { command: 'cat ../out.txt' });
+    const catRequest = await decideNext(outsideRead.approvals, 'deny');
+    assert.deepEqual(catRequest.reasons, [pick(language, `許可フォルダの外に触れます（${outsideAbs}）`, `It touches something outside the allowed folders (${outsideAbs})`)]);
+    assert.deepEqual(catRequest.details, [pick(language, `../out.txt → ${outsideAbs}：許可フォルダの外`, `../out.txt -> ${outsideAbs}: outside the allowed folders`)]);
+    await catPending;
+
+    const hardDenied = setup(t, language);
+    assert.equal((await hardDenied.call('shell_run', { command: 'mkfs' })).output.content, pick(language,
+      '実行しませんでした（拒否）:\n- ファイルシステムの作成は許可されていません（mkfs）\n別の方法を考えるか、ユーザーに相談してください',
+      'Not run (denied):\n- Creating a filesystem is not allowed (mkfs)\nThink of another way, or ask the user'));
+
     const shellEdit = setup(t, language);
     const cmd = shellEdit.call('shell_run', { command: 'npm install left-pad' });
     const shellRequest = await decideNext(shellEdit.approvals, 'deny');
@@ -166,6 +179,7 @@ async function appFor(t: { after: (fn: () => void | Promise<void>) => void }, la
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
   config.memory.userMaxChars = 200;
+  config.memory.notesMaxChars = 200;
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
@@ -196,9 +210,13 @@ for (const language of ['ja', 'en'] as const) {
       'The memories about the user would exceed the limit of 200 characters (now 100). Merge similar memories with memory_update, or delete ones you no longer need with memory_forget, and then save'));
     assert.equal((await run(memorySave, { book: 'user', content: 'a'.repeat(100) })).content, pick(language, '同じ内容が既にあります（[u1]）', 'The same content already exists ([u1])'));
     assert.equal(await text(memoryUpdate, { id: 'u1', content: 'short' }), pick(language, '書き直しました [u1]', 'Rewritten [u1]'));
+    const overNotes = await run(memorySave, { book: 'notes', content: 'n'.repeat(250) });
+    assert.equal(overNotes.content, pick(language,
+      'Clive のメモと教訓が上限 200 文字を超えます（今 0 文字）。似た記憶を memory_update でまとめるか、もう要らない記憶を memory_forget で消してから保存してください',
+      "Clive's notes and lessons would exceed the limit of 200 characters (now 0). Merge similar memories with memory_update, or delete ones you no longer need with memory_forget, and then save"));
     assert.equal(await text(memorySave, { book: 'notes', content: 'lesson' }), pick(language,
-      '記憶しました [n2]（Clive のメモと教訓: 6/3000 文字）。次の会話から使われます',
-      "Saved to memory [n2] (Clive's notes and lessons: 6/3000 characters). It will be used from the next conversation"));
+      '記憶しました [n2]（Clive のメモと教訓: 6/200 文字）。次の会話から使われます',
+      "Saved to memory [n2] (Clive's notes and lessons: 6/200 characters). It will be used from the next conversation"));
     assert.equal(await text(memoryUpdate, { id: 'u1', content: 'short' }), pick(language, '内容が変わっていません', 'The content has not changed'));
     assert.equal(await text(memoryUpdate, { id: 99, content: 'x' }), pick(language, '記憶 99 がありません', 'Memory 99 was not found'));
     assert.equal(await text(memorySearch, { query: 'zzzz' }), pick(language, '「zzzz」に当たる記憶はありません', 'No memory matches "zzzz"'));

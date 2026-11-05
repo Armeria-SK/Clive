@@ -19,8 +19,8 @@ export interface ContextFacts {
 
 const fmt = (n: number) => n.toLocaleString('en-US');
 
-export function probeText(language: Language, key: ProviderMessageKey, params: MessageParams = {}): Pick<ProbeResult, 'message' | 'messageCode' | 'messageParams'> {
-  return { message: providerText(language, key, params), messageCode: `provider.${key}`, messageParams: params };
+export function probeText(language: Language, key: ProviderMessageKey, params: MessageParams = {}, messageParams: MessageParams = params): Pick<ProbeResult, 'message' | 'messageCode' | 'messageParams'> {
+  return { message: providerText(language, key, params), messageCode: `provider.${key}`, messageParams };
 }
 
 export function evaluateContext(f: ContextFacts): ProbeResult {
@@ -49,17 +49,16 @@ export function evaluateContext(f: ContextFacts): ProbeResult {
   }
   const effective = Math.min(...candidates);
   if (effective < f.required) {
-    const source = f.measured !== undefined ? providerText(language, 'probe.source.measured', { n: fmt(f.measured) })
-      : f.declared !== undefined ? providerText(language, 'probe.source.declared', { n: fmt(f.declared) })
-        : providerText(language, 'probe.source.limit', { n: fmt(effective) });
+    const [sourceKind, sourceValue] = f.measured !== undefined ? ['measured', f.measured] as const : f.declared !== undefined ? ['declared', f.declared] as const : ['limit', effective] as const;
+    const source = providerText(language, `probe.source.${sourceKind}`, { n: fmt(sourceValue) });
     return {
       ...base, status: 'too_small', effective,
-      ...probeText(language, 'probe.too_small', { effective: fmt(effective), required: fmt(f.required), source }),
+      ...probeText(language, 'probe.too_small', { effective: fmt(effective), required: fmt(f.required), source }, { effective: fmt(effective), required: fmt(f.required), sourceKind, n: fmt(sourceValue) }),
       ...(f.hint === undefined ? {} : { hint: f.hint }),
     };
   }
   const note = f.measured === undefined && f.unmeasuredNote ? providerText(language, 'probe.note', { note: providerText(language, f.unmeasuredNote) }) : '';
-  return { ...base, status: 'ok', effective, ...probeText(language, 'probe.ok', { effective: fmt(effective), note }) };
+  return { ...base, status: 'ok', effective, ...probeText(language, 'probe.ok', { effective: fmt(effective), note }, { effective: fmt(effective), ...(note && f.unmeasuredNote ? { noteCode: `provider.${f.unmeasuredNote}` } : {}) }) };
 }
 
 type HintKind = 'ollama' | 'lmstudio' | 'llamacpp' | 'vllm' | 'tabbyapi' | 'generic' | 'hosted';

@@ -288,6 +288,17 @@ test('モデルの確認: 日本語の文は今までの出力と一字も違わ
   assert.equal(CONTEXT_HINTS.tabbyapi(65536), 'TabbyAPI の config.yml（model の max_seq_len）を 65,536 以上にしてモデルを読み込み直し、contextLength も合わせてください（cache_size も同じ以上に）');
 });
 
+test('モデルの確認: messageParams には言語で書いた文を入れず、小さなコードと値を入れる', () => {
+  const facts = { modelId: 'm', server: 'generic', required: 65536 };
+  for (const language of ['ja', 'en'] as const) {
+    assert.deepEqual(evaluateContext({ ...facts, language, declared: 8192, hint: 'x' }).messageParams, { effective: '8,192', required: '65,536', sourceKind: 'declared', n: '8,192' });
+    assert.deepEqual(evaluateContext({ ...facts, language, modelMax: 4096, hint: 'x' }).messageParams, { effective: '4,096', required: '65,536', sourceKind: 'limit', n: '4,096' });
+    assert.deepEqual(evaluateContext({ ...facts, language, declared: 70000 }).messageParams, { effective: '70,000' });
+    assert.deepEqual(evaluateContext({ ...facts, language, declared: 70000, unmeasuredNote: 'probe.note.use_config' }).messageParams, { effective: '70,000', noteCode: 'provider.probe.note.use_config' });
+    assert.deepEqual(evaluateContext({ ...facts, language, declared: 200000, modelMax: 131072 }).messageParams, { declared: '200,000', modelMax: '131,072' });
+  }
+});
+
 test('プロバイダのエラー: 日本語の文は今までと同じで、コードと値を添え、英語では英語で書く', () => {
   const cases: Array<[ProviderError, string, string, string]> = [
     [classifyHttpFailure(401, 'bad key'), '認証に失敗しました（HTTP 401: bad key）', 'Authentication failed (HTTP 401: bad key)', 'http.auth'],
@@ -338,6 +349,7 @@ test('モデルの確認（英語）: 接続先ごとの message / hint / code',
   assert.equal(tooSmall.status, 'too_small');
   assert.equal(tooSmall.message, 'The context length is too small: measured 2,048 < required 65,536 (measured 2,048)');
   assert.equal(tooSmall.messageCode, 'provider.probe.too_small');
+  assert.deepEqual(tooSmall.messageParams, { effective: '2,048', required: '65,536', sourceKind: 'measured', n: '2,048' }, 'messageParams hold a sub-code, not language-written text');
   assert.equal(tooSmall.hint, 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
 
   const missing = await new OllamaAdapter({ id: 'p', kind: 'ollama', baseUrl: gone.url, maxParallel: 1, timeoutMs: 10_000 }, {}).probe(probeModel(), 65536, 'en');
@@ -386,7 +398,7 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
     assert.ok(!failed.ok);
     const retrying = events.find(e => e.type === 'warning' && e.code === 'retrying') as Extract<RunEvent, { type: 'warning' }>;
     assert.equal(retrying.message, pick('プロバイダ側のエラーです（HTTP 503）。1 秒後に再試行します（1/1）', 'The provider reported an error (HTTP 503). Retrying in 1 s (1/1)'));
-    assert.deepEqual(retrying.params, { message: pick('プロバイダ側のエラーです（HTTP 503）', 'The provider reported an error (HTTP 503)'), seconds: 1, attempt: 1, retries: 1, errorCode: 'provider.http.server' });
+    assert.deepEqual(retrying.params, { seconds: 1, attempt: 1, retries: 1, errorCode: 'provider.http.server', errorParams: { status: 503, suffix: '' } }, 'language-written text is not in params');
     const end = events.findLast(e => e.type === 'run.end') as Extract<RunEvent, { type: 'run.end' }>;
     assert.equal(end.errorKind, 'provider_error');
     assert.equal(end.errorMessage, pick('プロバイダ側のエラーです（HTTP 503）', 'The provider reported an error (HTTP 503)'));

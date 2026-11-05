@@ -77,7 +77,7 @@ export type RunEvent =
   | { type: 'run.start'; runId: string; conversationId: string; modelId: string }
   | { type: 'model.switch'; runId: string; conversationId: string; from: string; to: string; reason: string }
   | { type: 'text.delta'; runId: string; conversationId: string; text: string }
-  | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: MessageParams }
+  | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: Record<string, string | number | MessageParams> }
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: ChatMessage['role'] }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
   | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string }
