@@ -368,11 +368,14 @@ gnu({ names: ['zcat'], flags: '', pos: ['path-r…'] });
 const SEND_METHODS = /^(?:post|put|patch|delete)$/iu;
 // 宛先を偽るのに使える（サーバーは Host・Origin・Sec-Fetch-*・Tailscale のヘッダで自分宛てか見分ける）ヘッダ。@ファイルは中身が分からない
 const SPOOF_HEADERS = /^(?:host|origin|sec-fetch-[a-z-]+|x-forwarded-[a-z-]+|forwarded|tailscale-[a-z-]+|x-real-ip|x-original-url|x-rewrite-url)$/iu;
-const CURL_FLAGS = flagMap('-s -S -L -I -i -f --fail -v -m:n --max-time:n --connect-timeout:n --retry:n -A:s --user-agent:s -H:s --header:s --compressed --http1.1 --http2 -X:s --request:s -o:path-w --output:path-w -O --remote-name --output-dir:path-w --create-dirs -d:s --data:s --data-raw:s --data-binary:s --data-urlencode:s -F:s --form:s --form-string:s -T:path-r --upload-file:path-r --json:s');
+const CURL_FLAGS = flagMap('-q -s -S -L -I -i -f --fail -v -m:n --max-time:n --connect-timeout:n --retry:n -A:s --user-agent:s -H:s --header:s --compressed --http1.1 --http2 -X:s --request:s -o:path-w --output:path-w -O --remote-name --output-dir:path-w --create-dirs -d:s --data:s --data-raw:s --data-binary:s --data-urlencode:s -F:s --form:s --form-string:s -T:path-r --upload-file:path-r --json:s');
 const CURL_SEND = new Set(['-d', '--data', '--data-raw', '--data-binary', '--data-urlencode', '-F', '--form', '--form-string', '-T', '--upload-file', '--json']);
 register(['curl'], (words, acc, ctx) => {
   const args = words.slice(1);
   const urls: Word[] = [];
+  // 設定ファイルを読ませないのは、最初の引数が -q のときだけ（それ以外の -q は、curl は効かせない）
+  const config = ctx.toolConfig?.('curl');
+  if (config !== undefined && !(args[0] && literal(args[0]) && args[0].text === '-q')) acc.add('once', 'list.tool_rc', { cmd: 'curl', path: config, flag: '-q' }, false);
   let dir: Word | null = null;
   let remoteName = false;
   let sends = false;
@@ -423,10 +426,12 @@ register(['curl'], (words, acc, ctx) => {
   }
   if (sends) acc.add('ask', 'ask.curl');
 });
-const WGET_FLAGS = flagMap('-q -S --spider --max-redirect:n -T:n --timeout:n -t:n --tries:n -U:s -O:path-w --output-document:path-w -P:path-w --directory-prefix:path-w --post-data:s --post-file:path-r --method:s --body-data:s --body-file:path-r');
+const WGET_FLAGS = flagMap('-q -S --no-config --spider --max-redirect:n -T:n --timeout:n -t:n --tries:n -U:s -O:path-w --output-document:path-w -P:path-w --directory-prefix:path-w --post-data:s --post-file:path-r --method:s --body-data:s --body-file:path-r');
 register(['wget'], (words, acc, ctx) => {
   const args = words.slice(1);
   const urls: Word[] = [];
+  const config = ctx.toolConfig?.('wget');
+  if (config !== undefined && !(args[0] && literal(args[0]) && args[0].text === '--no-config')) acc.add('once', 'list.tool_rc', { cmd: 'wget', path: config, flag: '--no-config' }, false);
   let dir: Word | null = null;
   let output = false;
   let sends = false;

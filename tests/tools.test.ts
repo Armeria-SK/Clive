@@ -318,7 +318,7 @@ test('V5: シェルでも、スキルのフォルダと .git への書き込み�
   mkdirSync(join(s.paths.workspace, 'skills'), { recursive: true });
   const asks: Array<[string, RegExp]> = [
     ['echo x > skills/a/SKILL.md', /スキルのフォルダに書き込みます/u],
-    ['Set-Content -Path .git/config -Value x', /git のフォルダ（.git）に書き込みます/u],
+    [process.platform === 'win32' ? 'Set-Content -Path .git/config -Value x' : 'echo x > .git/config', /git のフォルダ（.git）に書き込みます/u],
     ['cp notes.md skills/a/SKILL.md', /スキルのフォルダ/u],
     ['git clone https://example.com/x.git skills/x', /git の clone/u],
     ['python tool.py .git/hooks/pre-commit', /python/u],
@@ -329,7 +329,7 @@ test('V5: シェルでも、スキルのフォルダと .git への書き込み�
     assert.match(request.reasons.join(), reason, command);
     await pending;
   }
-  for (const command of ['Get-Content skills/a/SKILL.md', 'ls skills', 'git log --oneline -1', 'Get-ChildItem -Force .git']) {
+  for (const command of process.platform === 'win32' ? ['Get-Content skills/a/SKILL.md', 'ls skills', 'git log --oneline -1', 'Get-ChildItem -Force .git'] : ['cat skills/a/SKILL.md', 'ls skills', 'git log --oneline -1', 'ls -a .git']) {
     const outcome = await s.call('shell_run', { command });
     assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
   }

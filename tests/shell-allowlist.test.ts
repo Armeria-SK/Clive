@@ -191,6 +191,26 @@ test('git のリポジトリの設定: ふつうでなければ git はすべて
   assert.deepEqual(asked, ['sub', undefined]);
 });
 
+test('curl・wget: 設定ファイルがあれば今回だけ（最初の -q・--no-config を除く）。無ければ、これまでどおり', () => {
+  const has = { toolConfig: (tool: 'curl' | 'wget') => `/h/.${tool}rc` };
+  const rows: Array<[string, ShellKind, Level]> = [
+    ['curl https://example.com/', 'bash', 'once'], ['curl -sS https://example.com/', 'bash', 'once'], ['curl -q https://example.com/', 'bash', 'allow'], ['curl -q -sS https://example.com/', 'bash', 'allow'],
+    ['curl -sS -q https://example.com/', 'bash', 'once'], ['curl -qs https://example.com/', 'bash', 'once'], ['curl -L -q https://example.com/', 'bash', 'once'],
+    ['wget --max-redirect=0 https://example.com/', 'bash', 'once'], ['wget --no-config --max-redirect=0 https://example.com/', 'bash', 'allow'], ['wget --max-redirect=0 --no-config https://example.com/', 'bash', 'once'],
+    ['curl.exe -sS https://example.com/', 'powershell', 'once'], ['curl.exe -q -sS https://example.com/', 'powershell', 'allow'],
+  ];
+  assert.deepEqual(rows.flatMap(([c, shell, want]) => (levelOf(c, shell, has) === want ? [] : [`${c} (${shell}) → ${levelOf(c, shell, has)} (want ${want})`])), []);
+  const reasons = classify('curl https://example.com/', 'bash', has).results.flatMap(r => r.reasons);
+  assert.deepEqual(reasons.map(r => [r.key, r.level, r.exempt]), [['list.tool_rc', 'once', false]]);
+  // 設定ファイルが無ければ、これまでどおり（-q・--no-config は付けても付けなくてもよい）
+  for (const [c, shell] of [['curl https://example.com/', 'bash'], ['curl -q https://example.com/', 'bash'], ['wget --max-redirect=0 https://example.com/', 'bash'], ['wget --no-config --max-redirect=0 https://example.com/', 'bash'], ['curl.exe -sS https://example.com/', 'powershell']] as const) {
+    assert.equal(levelOf(c, shell), 'allow', c);
+    assert.equal(levelOf(c, shell, { toolConfig: () => undefined }), 'allow', c);
+  }
+  // 免除（tools.shell.allow）では消せない
+  assert.equal(classify('curl https://example.com/', 'bash', has).results[0]!.reasons.every(r => r.exempt === false), true);
+});
+
 test('git: ホーム・システムの設定を洗い出せない git（2.32 より古い）では、git はすべて今回だけ。--version と version は除く', () => {
   for (const c of ['git status', 'git log -p', 'git diff', 'git branch', 'git add .', 'git push', 'git -C fake log -p', 'git config --list']) {
     assert.equal(levelOf(c, 'bash', { gitIsolated: false }), 'once', c);

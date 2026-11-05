@@ -161,7 +161,7 @@ for (const shell of ['powershell', 'bash'] as const) {
     mkdirSync(home, { recursive: true });
     const marker = join(home, 'marker');
     const hook = join(home, 'hook.sh');
-    writeFileSync(hook, `#!/bin/sh\necho ran > "${marker.replaceAll('\\', '/')}"\nprintf '\\0'\n`);
+    writeFileSync(hook, `#!/bin/sh\necho ran > "${marker.replaceAll('\\', '/')}"\nprintf '\\0'\n`, { mode: 0o755 });
     writeFileSync(join(home, '.gitconfig'), `[user]\n\tname = Taro Yamada\n\temail = taro@example.com\n[core]\n\tfsmonitor = ${hook.replaceAll('\\', '/')}\n`);
     const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
     t.after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });

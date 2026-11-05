@@ -89,7 +89,7 @@ test('本物の git: ホームの ~/.gitconfig に仕込んだ core.fsmonitor �
   mkdirSync(repo);
   const marker = join(root, 'marker');
   const hook = join(root, 'hook.sh');
-  writeFileSync(hook, `#!/bin/sh\necho ran > "${slash(marker)}"\nprintf '\\0'\n`);
+  writeFileSync(hook, `#!/bin/sh\necho ran > "${slash(marker)}"\nprintf '\\0'\n`, { mode: 0o755 });
   writeFileSync(join(home, '.gitconfig'), `[user]\n\tname = Taro Yamada\n\temail = taro@example.com\n[core]\n\tfsmonitor = ${slash(hook)}\n`);
   const baseEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), GIT_TERMINAL_PROMPT: '0' };
   delete (baseEnv as Record<string, string | undefined>).GIT_CONFIG_GLOBAL;

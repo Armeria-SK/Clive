@@ -8,7 +8,7 @@ import { codeFindings } from './code-guard.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsDotGit, exists, expandGlob, isDirectory, protectedInside } from './path-expand.ts';
-import { containsToolConfig, isToolConfigPath, type Env } from './tool-config.ts';
+import { containsToolConfig, curlConfigFile, isToolConfigPath, wgetConfigFile, type Env } from './tool-config.ts';
 import { expandPath, isInside, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
 
@@ -194,7 +194,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const target = resolveWord({ text: dashC, dynamic: false, glob: false, quoted: false, home: dashC === '~' || dashC.startsWith('~/'), kind: 'plain' }, cwd, windows, language);
     return 'path' in target ? inspectRepo(target.path) : { found: true, configOk: false, badKey: '-C', unreadable: false, hooksPath: false, hooksFiles: false };
   };
-  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true };
+  const toolConfig: MatchCtx['toolConfig'] = tool => (tool === 'curl' ? curlConfigFile(env, cwdKnown ? cwd : undefined) : wgetConfigFile(env));
+  const ctx: MatchCtx = { shell, windows, repo: repoFor, external, selfHosts, gitIsolated: opts.gitIsolated ?? true, toolConfig };
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {
     add('deny', text('lex.denied', { detail: lexDetail(language, classified.lex) }));
