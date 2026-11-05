@@ -186,10 +186,12 @@ writer('tee-object tee', 'FilePath:path-w LiteralPath:path-w Append Variable:var
 writer('copy-item copy cp cpi', 'Path:path-r LiteralPath:path-r Destination:path-w Recurse Force Container Filter:s Include:s Exclude:s', 'path destination', (p, acc) => {
   const sources = pathWords(p);
   if (sources.length > 0) acc.copies.push({ kind: 'copy', sources, dest: first(p, 'destination')[0] ?? null, name: null, recursive: p.all.has('recurse'), dirFlag: false, noTargetDir: false });
+  if (p.all.has('recurse')) for (const w of sources) acc.walk(w);
 });
 writer('move-item move mv mi', 'Path:path-w LiteralPath:path-w Destination:path-w Force', 'path destination', (p, acc) => {
   const sources = pathWords(p);
   if (sources.length > 0) acc.copies.push({ kind: 'copy', sources, dest: first(p, 'destination')[0] ?? null, name: null, recursive: true, dirFlag: false, noTargetDir: false });
+  for (const w of sources) acc.walk(w);
 });
 writer('rename-item ren rni', 'Path:path-w LiteralPath:path-w NewName:s Force', 'path newname', (p, acc) => {
   const sources = pathWords(p);

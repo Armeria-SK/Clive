@@ -397,7 +397,7 @@ test('実機（Windows PowerShell 5.1・制限モード）: findstr /f: は素�
   seedSecrets(s);
   writeFileSync(s.files('list.txt'), '.env\n');
   const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
-  for (const command of ['findstr /f:list.txt SECRET', "findstr '/f:list.txt' SECRET"]) {
+  for (const command of ['findstr /f:list.txt SECRET=', "findstr '/f:list.txt' SECRET="]) {
     assert.match(raw(command), /SECRET=root/u, `前提: 素のシェルでは一覧のファイルが読まれる: ${command}`);
     await expectAsk(s, command);
   }

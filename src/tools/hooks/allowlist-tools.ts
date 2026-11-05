@@ -278,7 +278,8 @@ const copyUse = (acc: Acc, p: ReturnType<typeof parseGnu>, kind: 'cp' | 'mv', re
   const dest = target ?? p.pos.at(-1) ?? null;
   const use: CopyUse = { kind: 'copy', sources, dest, name: null, recursive, dirFlag: target !== null, noTargetDir: p.seen.has('-T') };
   acc.copies.push(use);
-  for (const s of sources) { if (kind === 'cp') acc.read(s, recursive); else acc.write(s, recursive); }
+  // 元のフォルダを丸ごと動かす・写す形は、フォルダの下の秘密のパスをそのまま持っていくので、tar -c・zip と同じに歩いて調べる
+  for (const s of sources) { if (kind === 'cp') acc.read(s, recursive); else acc.write(s, recursive); if (recursive) acc.walk(s); }
   if (dest) acc.write(dest);
 };
 gnu({ names: ['cp'], flags: '-r -R -a -f -n -v -p -u -T -t:x --preserve:s', pos: ['x…'] }, false, (p, acc) => {

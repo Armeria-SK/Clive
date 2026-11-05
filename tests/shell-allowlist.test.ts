@@ -451,7 +451,9 @@ test('PowerShell: 書くコマンドレットは常に今回だけ。パイプ�
 test('調べるパス: 読む・書く・組み立て・消す・cd', () => {
   const cp = classify('cp -r a b c/').results[0]!;
   assert.deepEqual(cp.copies.map(c => [c.sources.map(w => w.text), c.dest?.text, c.recursive]), [[['a', 'b'], 'c/', true]]);
-  assert.deepEqual(cp.paths.map(p => [p.word.text, p.mode]), [['a', 'read'], ['b', 'read'], ['c/', 'write']]);
+  assert.deepEqual(cp.paths.map(p => [p.word.text, p.mode]), [['a', 'read'], ['a', 'read'], ['b', 'read'], ['b', 'read'], ['c/', 'write']], '再帰して写す元のフォルダは、読む 1 つと、下を歩く 1 つ');
+  assert.deepEqual(cp.paths.map(p => p.list !== undefined), [false, true, false, true, false]);
+  assert.deepEqual(classify('cp a b').results[0]!.paths.map(p => p.list !== undefined), [false, false], '再帰しない cp は歩かない');
   const mv = classify('mv -t out a b').results[0]!;
   assert.deepEqual(mv.copies.map(c => [c.sources.map(w => w.text), c.dest?.text, c.dirFlag]), [[['a', 'b'], 'out', true]]);
   const rm = classify('rm -rf build').results[0]!;

@@ -110,9 +110,10 @@ test('curl -O・wget の既定の名前: URL の最後の名前で作業場所�
 
 test('.git を含むフォルダを丸ごと書く・動かす・消すのは今回だけ（フックが書かれる）', t => {
   const f = fixture(t);
-  for (const command of ['cp -r proj docs', 'cp -r proj/. docs', 'mv proj docs', 'rm -rf proj', 'cp -r . docs2', 'cp -r proj/* docs', 'cp -a proj docs/']) {
+  for (const command of ['cp -r proj docs', 'cp -r proj/. docs', 'mv proj docs', 'rm -rf proj', 'cp -r proj/* docs', 'cp -a proj docs/']) {
     assert.equal(once(f.bash(command)), true, command);
   }
+  assert.equal(f.bash('cp -r . docs2').decision, 'deny', 'ルートに .env があるので、元のフォルダの下を歩いて止まる');
   assert.equal(f.bash('cp -r proj/src docs').decision, 'allow');
   assert.equal(f.bash('rm -rf proj/src').decision, 'allow');
 });

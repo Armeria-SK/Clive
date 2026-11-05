@@ -16,7 +16,7 @@ const SECRET_PATTERNS = [
   /(?:^|\/)\.env(?:\.[^/]*)?$/iu,
   /\.(?:pem|key|p12|pfx|keystore|jks)$/iu,
   /(?:^|\/)id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/iu,
-  /(?:^|\/)secrets?\//iu,
+  /(?:^|\/)secrets?(?:\/|$)/iu,
   /(?:^|\/)\.(?:ssh|aws|gnupg|docker|kube)(?:\/|$)/iu,
   /(?:^|\/)\.(?:netrc|npmrc|pypirc|git-credentials)$/iu,
 ];

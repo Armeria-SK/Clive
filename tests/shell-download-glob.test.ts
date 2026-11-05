@@ -92,7 +92,7 @@ test('持ち主が curl の保存を tools.shell.allow に書くと、保存す�
 test('findstr の /f:（読むファイルの一覧）と /g:（検索する文字の一覧）は今回だけ。stdin から読む /f:/ も', t => {
   const f = fixture(t);
   expectAll(f.ps, [
-    'findstr /f:list.txt SECRET', 'findstr /F:list.txt SECRET', 'findstr /f:/ SECRET', 'findstr /g:pats.txt a.txt', 'findstr /G:pats.txt a.txt', 'findstr /g:/ a.txt', 'findstr /i /f:list.txt x', 'findstr /s /f:list.txt x', 'findstr /g:pats.txt /f:list.txt',
+    'findstr /f:list.txt TOKEN', 'findstr /F:list.txt TOKEN', 'findstr /f:/ TOKEN', 'findstr /g:pats.txt a.txt', 'findstr /G:pats.txt a.txt', 'findstr /g:/ a.txt', 'findstr /i /f:list.txt x', 'findstr /s /f:list.txt x', 'findstr /g:pats.txt /f:list.txt',
     "findstr /f:'list.txt' x", "findstr '/f:list.txt' x", 'findstr "/g:pats.txt" a.txt', "findstr '/f:/' x",
   ], once, 'findstr');
   expectAll(f.ps, ['findstr x a.txt', "findstr /c:'x y' a.txt", 'findstr /i /n x a.txt', 'findstr /r x a.txt'], v => v.decision === 'allow', 'ふつうの findstr');
