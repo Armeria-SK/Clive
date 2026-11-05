@@ -150,7 +150,7 @@ test('初期値の写し: 言語に合う版を、無いファイルにだけ写
   ensureWorkspace(existing, 'en');
   assert.equal(readFileSync(join(existing.workspace, 'SOUL.md'), 'utf8'), '# 私の SOUL\n皮肉屋', '書かれた SOUL.md はそのまま');
   assert.equal(readFileSync(join(existing.workspace, 'USER.md'), 'utf8'), '# 私の USER\n猫が好き', '書かれた USER.md はそのまま');
-  assert.match(readFileSync(join(existing.workspace, 'CURIOSITY.md'), 'utf8'), /^# CURIOSITY\r?\n\r?\nThings you are curious about/u, '無かったファイルだけ英語の初期値が入る');
+  assert.match(readFileSync(join(existing.workspace, 'CURIOSITY.md'), 'utf8'), /^# CURIOSITY\r?\n\r?\nThings that sparked curiosity/u, '無かったファイルだけ英語の初期値が入る');
 });
 
 test('起動: language が en の新しい作業フォルダには英語の初期値が入り、すでにある SOUL.md / USER.md は変わらない', async t => {
@@ -357,6 +357,171 @@ test('決まり文: 言語を渡さない呼び出しは日本語のまま', () 
   assert.match(renderBooks(memories), /^# 覚えていること（記憶）\n\n## ユーザーについての記憶\n- \[u1\] 紅茶$/u);
   assert.match(reviewPrompt({ trigger: 'idle', forgotten: [] }), /^\[振り返り\] きっかけ: 会話が途切れた。/u);
   assert.match(jsonFallbackInstructions([{ name: 'a', description: 'b', inputSchema: {} }]), /^# 使える道具/u);
+});
+
+// ── 日本語の決まり文は、段階 12a の前（0250344）の出力と一字も変えない ──
+
+const JA_TASK_HEAD = [
+  '[タスクの実行] あなたは今、自分のメモ帳のタスクを進めています（ユーザーとの会話ではありません。返事は記録に残ります）。',
+  '',
+  '# タスク',
+];
+const JA_TASK_HOW = [
+  '',
+  '# 進め方',
+  '- 道具を使って進める。1回の実行でやりすぎない',
+  '- 終わったら task_complete（結果の要約）。ユーザーに知らせることが無ければ notify=false で静かに終える',
+  '- 続きを後でやる・何かを待つなら task_checkpoint（試したこと・結果・次の一手・何分後に再開するか）',
+  '- ユーザーに確かめないと進められないことだけ ask_user で尋ねる',
+];
+const JA_REVIEW_POLICY = [
+  '',
+  '# 方針',
+  '- 残すのは「次に役立つ教訓と事実」。出来事のログは残さない',
+  '- 既に記憶にあることは足さない。重なっている記憶は memory_update で1つにまとめ、要らなくなった方は memory_forget',
+  '- 矛盾したら新しい方を残す',
+  '- 拾い漏れたユーザーについての事実（好み・予定・関係・環境）は memory_save（book=user）。自分の教訓は book=notes',
+  '- 1つの記録から足すのは多くても3件',
+  '- 繰り返し使えそうな手順が見つかったら skill_draft（ユーザーが承認するまで使われない）。新しく作るより、既存のスキルを直すほうを優先する',
+  '- 気になったが調べていないことがあれば curiosity_add',
+  '- することがなければ、道具を使わずに「変更なし」とだけ返す',
+  '- 最後に、何をしたかを1〜2文で返す',
+];
+const jaReviewIntro = (trigger: string) => `[振り返り] きっかけ: ${trigger}。下の記録を読んで、記憶を整える（ユーザーとの会話ではありません。返事は記録に残るだけです）。`;
+
+test('日本語の固定文: タスクの実行の指示は 0250344 の出力と一字も違わない', () => {
+  const task = { id: 'abcdef12-0000', title: '請求書をまとめる', origin: 'user', body: '詳細です', next_action: '集計する', done_criteria: '送った' } as any;
+  const events = [
+    { kind: 'note', content: 'メモ', created_at: Date.parse('2026-11-04T20:00:00Z') },
+    { kind: 'run', content: null, created_at: Date.parse('2026-11-04T20:01:00Z') },
+  ];
+  const expectedFull = [
+    ...JA_TASK_HEAD,
+    'ID: abcdef12',
+    'タイトル: 請求書をまとめる',
+    '出どころ: ユーザーの依頼',
+    '詳細:',
+    '詳細です',
+    '次の一手: 集計する',
+    '完了の条件: 送った',
+    '',
+    '# これまでの経過（新しい順）',
+    '- 2026/11/5 5:00:00 note: メモ',
+    ...JA_TASK_HOW,
+  ].join('\n');
+  assert.equal(taskPrompt(task, events, 'Asia/Tokyo'), expectedFull);
+  assert.equal(taskPrompt(task, events, 'Asia/Tokyo', 'ja'), expectedFull);
+
+  const bare = { id: 'abcdef12-0000', title: 'T', origin: 'schedule', body: '', next_action: null, done_criteria: null } as any;
+  assert.equal(taskPrompt(bare, [], 'UTC'), [...JA_TASK_HEAD, 'ID: abcdef12', 'タイトル: T', '出どころ: 予定', ...JA_TASK_HOW].join('\n'));
+  const origins = { user: 'ユーザーの依頼', self: '自分で決めたこと', curiosity: '好奇心から', schedule: '予定' };
+  for (const [origin, label] of Object.entries(origins)) {
+    assert.ok(taskPrompt({ ...bare, origin }, [], 'UTC').split('\n').includes(`出どころ: ${label}`), origin);
+  }
+});
+
+test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字も違わない', () => {
+  assert.equal(reviewPrompt({ trigger: 'book_full', forgotten: ['忘れた記憶'], bookPressure: 'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字' }), [
+    jaReviewIntro('記憶が上限に近い'),
+    ...JA_REVIEW_POLICY,
+    '',
+    '# ユーザーが消した記憶（同じ内容を覚え直さない）',
+    '- 忘れた記憶',
+    '',
+    '# 記憶の量',
+    'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字。重なりをまとめて減らすことを優先する',
+  ].join('\n'));
+
+  assert.equal(reviewPrompt({
+    trigger: 'task', forgotten: [], task: { title: 'T', status: 'done', result_summary: '結果', body: 'メモ本文' },
+    taskEvents: [{ kind: 'note', content: '経過' }, { kind: 'x', content: null }],
+  }), [
+    jaReviewIntro('タスクが終わった'),
+    ...JA_REVIEW_POLICY,
+    '',
+    '# 終わったタスク',
+    'タイトル: T',
+    '結果: done — 結果',
+    'メモ:',
+    'メモ本文',
+    '経過:',
+    '- note: 経過',
+  ].join('\n'));
+
+  const stored = [
+    { id: 1, role: 'user', text: 'こんにちは', message: { role: 'user' } },
+    { id: 2, role: 'assistant', text: '返事', message: { role: 'assistant' } },
+    { id: 3, role: 'tool', text: 'tool out', message: { role: 'tool', name: 'file_list' } },
+  ] as any;
+  assert.equal(reviewPrompt({ trigger: 'idle', forgotten: [], transcript: transcriptOf(stored) }), [
+    jaReviewIntro('会話が途切れた'),
+    ...JA_REVIEW_POLICY,
+    '',
+    '# 会話の記録',
+    '【ユーザー】こんにちは',
+    '【Clive】返事',
+    '【道具 file_list】tool out',
+  ].join('\n'));
+
+  const triggers = { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が上限に近い', manual: '手動' };
+  for (const [trigger, label] of Object.entries(triggers)) {
+    assert.equal(reviewPrompt({ trigger: trigger as ReviewTrigger, forgotten: [] }).split('\n')[0], jaReviewIntro(label), trigger);
+  }
+  const long = [
+    { id: 1, role: 'user', text: 'あ'.repeat(3100), message: { role: 'user' } },
+    { id: 2, role: 'tool', text: 'い'.repeat(310), message: { role: 'tool', name: 'file_list' } },
+  ] as any;
+  assert.equal(transcriptOf(long), `【ユーザー】${'あ'.repeat(3000)}…（略）\n【道具 file_list】${'い'.repeat(300)}…（略）`);
+  assert.equal(bookPressureText({ user: { used: 10, max: 20 }, notes: { used: 5, max: 30 } }), 'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字');
+});
+
+test('日本語の固定文: json_fallback の説明・スキル一覧・好奇心のタスクの文は 0250344 の出力と一字も違わない', t => {
+  const specs = [
+    { name: 'file_list', description: '一覧', inputSchema: { type: 'object' } },
+    { name: 'memory_save', description: '記憶する', inputSchema: { type: 'object', properties: { body: { type: 'string' } } } },
+  ];
+  const expectedFallback = [
+    '# 使える道具',
+    '道具を使うときは、返事の中に次の形式で書いてください（1回の返事で1つまで）。',
+    '<tool_call>{"name": "道具の名前", "arguments": { ... }}</tool_call>',
+    '道具の結果は次のメッセージで渡します。道具を使わないときは、普通に返事を書いてください。',
+    '- file_list: 一覧',
+    '  引数（JSON Schema）: {"type":"object"}',
+    '- memory_save: 記憶する',
+    '  引数（JSON Schema）: {"type":"object","properties":{"body":{"type":"string"}}}',
+  ].join('\n');
+  assert.equal(jsonFallbackInstructions(specs), expectedFallback);
+  assert.equal(jsonFallbackInstructions(specs, 'ja'), expectedFallback);
+  assert.equal(jsonFallbackInstructions([]), '');
+  assert.deepEqual(toJsonFallbackHistory([
+    { role: 'user', content: 'a' },
+    { role: 'assistant', content: 'b', toolCalls: [{ id: '1', name: 'file_list', arguments: {} }] },
+    { role: 'tool', name: 'file_list', content: 'x', isError: true, toolCallId: '1' },
+    { role: 'tool', name: 'file_list', content: 'y', isError: false, toolCallId: '2' },
+  ]), [
+    { role: 'user', content: 'a' },
+    { role: 'assistant', content: 'b\n<tool_call>{"name":"file_list","arguments":{}}</tool_call>' },
+    { role: 'user', content: '[道具「file_list」の結果（エラー）]\nx\n\n[道具「file_list」の結果]\ny' },
+  ]);
+
+  const p = paths(t);
+  mkdirSync(p.workspace, { recursive: true });
+  const db = openDatabase(':memory:', MIGRATIONS);
+  t.after(() => db.close());
+  const skills = new SkillStore(db, join(p.workspace, 'skills'));
+  assert.equal(skills.index(), '');
+  skills.write({ name: 'weekly-report', description: '週報を書くとき', body: '手順' });
+  skills.write({ name: 'deploy', description: 'デプロイするとき', body: '手順' });
+  const expectedSkills = ['# スキル（手順書）', '次の作業をするときは、先に skill_view で手順を読んでから従う。', '- deploy: デプロイするとき', '- weekly-report: 週報を書くとき'].join('\n');
+  assert.equal(skills.index(), expectedSkills);
+  assert.equal(skills.index('ja'), expectedSkills);
+
+  const text = curiosityText('ja');
+  assert.equal(text.title('X'), '調べる: X');
+  assert.equal(text.why('Y'), '気になった理由: Y');
+  assert.equal(text.summarize, '調べて分かったことを、ユーザーに役立つ形で短くまとめる。');
+  assert.equal(text.doneCriteria, '分かったことを task_complete の summary にまとめた');
+  assert.equal(text.doneCriteriaQuiet, '分かったことを task_complete の summary にまとめた（知らせる価値が無ければ notify=false）');
 });
 
 // ── 実際の流れ ──

@@ -1,8 +1,8 @@
 # CURIOSITY
 
-Things you are curious about and things you want to try. They give Clive a reason to act on its own.
+Things that sparked curiosity and things worth trying. They give Clive a reason to act on its own.
 
-## Things I'm curious about
+## Things of interest
 
-## Things I want to try
+## Things to try
 

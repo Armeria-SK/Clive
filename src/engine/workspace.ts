@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
@@ -20,7 +20,9 @@ export function ensureWorkspace(paths: AppPaths, language: Language = DEFAULT_LA
   for (const name of WORKSPACE_FILES) {
     const target = join(paths.workspace, name);
     const source = templatePath(paths, name, language);
-    if (!existsSync(target) && source) copyFileSync(source, target);
+    if (!source) continue;
+    try { copyFileSync(source, target, constants.COPYFILE_EXCL); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
   }
 }
 
