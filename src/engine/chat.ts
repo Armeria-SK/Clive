@@ -77,7 +77,7 @@ type Route = { model: ModelConfig; provider: ProviderConfig };
 type Failure = { kind: EngineErrorKind; message: string; code?: string; params?: MessageParams; retryable: boolean; detail?: ContextDetail; route?: Route };
 
 type CallResult =
-  | { ok: true; index: number; text: string; toolCalls: ToolCall[]; usage: Usage; stop: StopReason; estimate: number }
+  | { ok: true; index: number; text: string; toolCalls: ToolCall[]; usage: Usage; stop: StopReason; estimate: number; language: Language }
   | { ok: false; cancelled: boolean; partial: string; failure: Failure; route?: Route };
 
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -281,7 +281,9 @@ export class ChatEngine {
         if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;
       }
     };
+    let replyLanguage: Language | undefined;
     const finishOk = (text: string, stop: StopReason): EngineResult => {
+      if (replyLanguage && this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop };
@@ -308,8 +310,7 @@ export class ChatEngine {
       // 考える部分を別に返すモデル（Qwen3 など）は、答えの頭に空行が付く。保存する前に落とす
       call.text = call.text.replace(/^\s+/u, '');
 
-      const replyLanguage = languageOf(d.config());
-      if (this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
+      replyLanguage = call.language;
       const saved = d.conversations.append(conversationId, { role: 'assistant', content: call.text, ...(call.toolCalls.length ? { toolCalls: call.toolCalls } : {}) }, runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
       if (!call.toolCalls.length) return finishOk(call.text, call.stop);
@@ -439,7 +440,7 @@ export class ChatEngine {
           }
         }
         this.#checkTruncation(p.runId, p.conversationId, model, fitted.estimate, usage, capacity, p.flags);
-        return { ok: true, index, text, toolCalls, usage, stop: toolCalls.length ? 'tool_use' : stop, estimate: fitted.estimate.tokens };
+        return { ok: true, index, text, toolCalls, usage, stop: toolCalls.length ? 'tool_use' : stop, estimate: fitted.estimate.tokens, language };
       }
     }
     return { ok: false, cancelled: false, partial: '', failure: last };

@@ -18,13 +18,13 @@ import { buildDynamic, buildSnapshot, defaultTexts, ensureWorkspace, readTemplat
 import { bookPressureText, reviewPrompt, transcriptOf, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
-import type { ModelRequest } from '../src/providers/types.ts';
+import { ProviderError, type ModelRequest } from '../src/providers/types.ts';
 import { languageOf } from '../src/shared/language.ts';
 import { taskPrompt } from '../src/tasks/worker.ts';
 import { SkillStore } from '../src/tools/skills/store.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { fakeServer, FakeAdapter, reply, sse, tempDir } from './helpers.ts';
+import { fail, fakeServer, FakeAdapter, reply, sse, tempDir, type Script } from './helpers.ts';
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
 const JA_DIRECTIVE = '返事は日本語で書く';
@@ -603,6 +603,45 @@ test('返事の言語の注意: en で始めた会話を ja に変え、また e
   const backAgain = await say(s, 'c3', 'again');
   assert.deepEqual(contents(backAgain).slice(-1), ['again'], '直前の返事が英語になれば、また付かない');
   assert.deepEqual(s.app.conversations.messages('c3').map(m => m.text), ['Hello', 'ok', 'こんにちは', 'ok', 'もう一度', 'ok', 'Hi', 'ok', 'again', 'ok']);
+});
+
+test('返事の言語の注意: 道具を何度も呼ぶ1回の実行では、最後の返事までモデルを呼ぶたびに付き、実行が成功してから記録する', async t => {
+  const s = await startApp(t);
+  const toolCall = (n: number): Script => async function* () {
+    yield { type: 'tool_call', call: { id: `call_${n}`, name: 'file_write', arguments: { path: `note${n}.md`, content: String(n) } } };
+    yield { type: 'done', stop: 'tool_use' };
+  };
+  const lastUser = (call: ModelRequest) => call.messages.filter(m => m.role === 'user').at(-1)!.content as string;
+
+  await say(s, 'c1', 'one');
+  await s.setLanguage('en');
+  await say(s, 'c1', 'Hello');
+  assert.equal(s.app.kv.get(replyLanguageKey('c1')), 'en');
+  await s.setLanguage('ja');
+
+  s.adapter().scripts.push(fail(new ProviderError('auth', 'bad key', { retryable: false })));
+  const failedOutcome = s.app.engine.send('c1', 'oops');
+  assert.ok(failedOutcome.ok);
+  assert.equal((await s.app.engine.wait(failedOutcome.runId))?.ok, false);
+  assert.equal(s.app.kv.get(replyLanguageKey('c1')), 'en', '失敗した実行は、返事の言語を記録しない');
+
+  const before = s.adapter().calls.length;
+  s.adapter().scripts.push(toolCall(1), toolCall(2), reply('done'));
+  const outcome = s.app.engine.send('c1', 'three');
+  assert.ok(outcome.ok);
+  assert.ok((await s.app.engine.wait(outcome.runId))?.ok);
+  const run = s.adapter().calls.slice(before);
+  assert.equal(run.length, 3, '道具を2回呼んでから返事を書く3回のモデル呼び出し');
+  assert.deepEqual(run.map(call => call.messages.filter(m => m.role === 'tool').length), [0, 1, 2], '2 回目以降は道具の結果が履歴に入っている');
+  for (const [i, call] of run.entries()) {
+    assert.match(lastUser(call), JA_REMINDER, `${i + 1} 回目のモデル呼び出しにも、直前の返事が英語だったことへの注意が付く`);
+    assert.match(lastUser(call), /^three/u);
+  }
+  assert.equal(s.app.kv.get(replyLanguageKey('c1')), 'ja', '成功して終わったときに、日本語で返したと記録する');
+
+  const next = await say(s, 'c1', 'four');
+  assert.equal(lastUser(next), 'four', '次の実行には付かない');
+  assert.doesNotMatch(JSON.stringify(s.app.conversations.messages('c1').map(m => m.text)), /システムからの注意/u, '保存された発言に注意は入らない');
 });
 
 test('返事の言語の注意: 言語を記録していない前からある会話は、日本語で始まったものとして扱う', async t => {
