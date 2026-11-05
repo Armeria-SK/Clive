@@ -35,6 +35,8 @@ const ja = {
   'not_chat_conversation': 'この会話にはここから送れません（タスクや振り返りの会話です）',
   'persona_unsafe': 'このファイルはリンクなどで、通常のファイルではないので書き換えません（{file}）',
   'persona_empty': '書き込む項目がありません（userName・callMe・botName・style・styleNote のどれかを送ってください）',
+  'unknown_model': 'モデル「{id}」は設定にありません',
+  'bad_effort': 'effort「{effort}」は、このモデルでは選べません（選べる値: {values}）',
   'internal': '内部エラーが発生しました（ログを確認してください）',
 } as const;
 
@@ -73,6 +75,8 @@ const en: Record<keyof typeof ja, string> = {
   'not_chat_conversation': 'You cannot send to this conversation from here (it belongs to a task or a review)',
   'persona_unsafe': 'This file is a link or not a regular file, so it was not changed ({file})',
   'persona_empty': 'Nothing to write (send at least one of userName, callMe, botName, style and styleNote)',
+  'unknown_model': 'The model "{id}" is not in the settings',
+  'bad_effort': 'The effort "{effort}" cannot be used with this model (available: {values})',
   'internal': 'An internal error occurred (check the log)',
 };
 

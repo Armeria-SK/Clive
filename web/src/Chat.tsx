@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type Approval, type ContextUsage, type Message, type ModelView, type Profile, type UploadView } from './api.ts';
+import { api, ApiError, type Approval, type ContextUsage, type Message, type ModelChoice, type ModelView, type Profile, type UploadView } from './api.ts';
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
@@ -7,6 +7,7 @@ import {
   type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
+import { ModelMenu, OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
 import {
   AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
 } from './ChatMessages.tsx';
@@ -32,12 +33,14 @@ export interface RunNotice {
   required?: number | undefined;
 }
 
-export type ConversationChange = { kind: 'renamed' | 'archived' | 'unarchived'; id: string };
+export type ConversationChange = { kind: 'renamed' | 'archived' | 'unarchived' | 'model'; id: string };
 
 interface Props {
   conversationId: string | null;
   profile: Profile | null;
+  // 会話で選んでいないときに使うモデル（設定の順番の先頭の使えるもの）
   modelName: string | null;
+  defaultModelId: string | null;
   usage: ContextUsage | null;
   drafts: Draft[];
   runStarts: Record<string, number>;
@@ -50,7 +53,7 @@ interface Props {
   onConversationChanged: (change: ConversationChange) => void;
 }
 
-interface Failure extends SendFailure { card: ContextCardData | null }
+interface Failure extends SendFailure { card: ContextCardData | null; alternative?: { id: string; label: string } | undefined }
 
 let runsRequest: Promise<ChatRunRow[]> | null = null;
 
@@ -82,7 +85,7 @@ function noteIcon(notice: RunNotice): IconName {
   return notice.code === 'retrying' ? 'clock' : 'alert';
 }
 
-export function Chat({ conversationId, profile, modelName, usage, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
+export function Chat({ conversationId, profile, modelName, defaultModelId, usage, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
   const t = useT();
   const [messages, setMessages] = useState<Message[]>([]);
   const [title, setTitle] = useState<string | null>(null);
@@ -94,6 +97,9 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   const [uploading, setUploading] = useState(false);
   const [models, setModels] = useState<ModelView[]>([]);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [modelId, setModelId] = useState<string | null>(null);
+  const [effort, setEffort] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const thread = useRef<HTMLDivElement>(null);
@@ -112,6 +118,8 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
       const result = await api.messages(conversationId);
       setMessages(result.messages);
       setTitle(result.conversation.title);
+      setModelId(result.conversation.model_id ?? null);
+      setEffort(result.conversation.effort ?? null);
       setLoaded(true);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) { setMessages([]); setLoaded(true); }
@@ -120,6 +128,35 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
 
   useEffect(() => { void load(); }, [load, revision]);
   useEffect(() => { void api.models().then(r => setModels(r.models)).catch(() => undefined); }, []);
+  useEffect(() => {
+    const open = () => setMenuOpen(true);
+    addEventListener(OPEN_MODEL_MENU_EVENT, open);
+    return () => removeEventListener(OPEN_MODEL_MENU_EVENT, open);
+  }, []);
+  // 入力欄に出すモデル: 会話で選んだもの。選んでいなければ（自動）設定の順番の先頭
+  const chosenModel = models.find(m => m.id === (modelId ?? defaultModelId));
+  const shownModel = modelId ? chosenModel?.model ?? modelId : modelName;
+  const efforts = chosenModel?.efforts ?? [];
+
+  // モデルとエフォートの選び方。会話がまだ無いときは、最初の発言と一緒に送る（ここでは覚えるだけ）。あるときはその場で会話に覚える
+  async function choose(choice: ModelChoice): Promise<void> {
+    setMenuOpen(false);
+    if (!conversationId) {
+      if (choice.modelId !== undefined) { setModelId(choice.modelId); if (choice.effort === undefined) setEffort(null); }
+      if (choice.effort !== undefined) setEffort(choice.effort);
+      return;
+    }
+    try {
+      const result = await api.chooseModel(conversationId, choice);
+      setModelId(result.conversation.model_id ?? null);
+      setEffort(result.conversation.effort ?? null);
+      const label = result.conversation.model_id ? models.find(m => m.id === result.conversation.model_id)?.label ?? result.conversation.model_id : t('model.auto');
+      toast({ kind: 'info', icon: 'cpu', title: t(choice.modelId !== undefined ? 'model.switched' : 'model.effortSwitched'), body: result.effortReset ? `${label} · ${t('model.effortReset')}` : label });
+      onConversationChanged({ kind: 'model', id: conversationId });
+    } catch (error) {
+      toast({ kind: 'info', icon: 'alert', title: t('model.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    }
+  }
 
   const lastIsUser = messages.at(-1)?.role === 'user';
   const errorNotice = notices.find(n => n.kind === 'error');
@@ -146,13 +183,15 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   async function fail(error: unknown, fallback: string): Promise<void> {
     const base = sendFailureOf(error, fallback, models);
     let card: ContextCardData | null = null;
+    let known = models;
     if (base.context) {
-      let known = models;
       try { known = (await api.models()).models; } catch { known = models; }
       card = contextCardOf(base.body, known);
     }
+    // 選んだモデルが使えなかったとき、いま使えるほかのモデルがあれば、それで送り直せるようにする（黙って切り替えはしない）
+    const other = base.context && modelId ? known.find(m => m.id !== modelId && m.probe?.status === 'ok') : undefined;
     stick.current = true;
-    setFailure({ ...base, card });
+    setFailure({ ...base, card, alternative: other ? { id: other.id, label: other.label } : undefined });
   }
 
   async function attach(files: FileList | null): Promise<void> {
@@ -224,7 +263,7 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
       const id = target.id;
       created.current = target.created;
       onClearNotices(id);
-      await api.send(id, text, attached.map(a => a.id));
+      await api.send(id, text, attached.map(a => a.id), conversationId ? {} : { ...(modelId ? { modelId } : {}), ...(effort ? { effort } : {}) });
       if (preset === undefined) setInput('');
       setAttached([]);
       if (!conversationId) onCreated(id);
@@ -298,7 +337,7 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   }
   if (failure) {
     push('send-failure', 'fail', failure.context
-      ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} />
+      ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} alternative={failure.alternative ? { label: failure.alternative.label, onUse: () => { const alt = failure.alternative!; void choose({ modelId: alt.id }).then(() => send()); } } : undefined} />
       : <SendErrorCard message={failure.message} hint={failure.hint} setup={failure.noModels} />);
   }
 
@@ -332,7 +371,9 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
           <ApprovalDock approvals={approvals} />
           <Composer
             textareaRef={textarea} fileInputRef={fileInput} input={input} attached={attached} uploading={uploading} sending={sending} generating={Boolean(draft)}
-            approvalId={frontApprovalId} assistantName={assistantName} modelName={modelName} usage={usage}
+            approvalId={frontApprovalId} assistantName={assistantName} modelName={shownModel} effort={effort} usage={usage}
+            modelMenuOpen={menuOpen} onModelMenu={() => setMenuOpen(open => !open)}
+            modelMenu={menuOpen ? <ModelMenu models={models} selected={modelId} effort={effort} efforts={efforts} onModel={id => void choose({ modelId: id })} onEffort={value => void choose({ effort: value })} onClose={() => setMenuOpen(false)} /> : null}
             onInput={setInput} onAttach={files => void attach(files)} onDetach={id => setAttached(list => list.filter(a => a.id !== id))}
             onSend={() => void send()} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
           />

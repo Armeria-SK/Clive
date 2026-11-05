@@ -96,6 +96,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
       stream_options: { include_usage: true },
       ...(this.provider.server === 'openai' ? { max_completion_tokens: req.maxOutputTokens } : { max_tokens: req.maxOutputTokens }),
       ...(req.model.temperature === undefined ? {} : { temperature: req.model.temperature }),
+      ...(req.effort ? { reasoning_effort: req.effort } : {}),
       ...(req.tools.length ? {
         tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
         parallel_tool_calls: false,
@@ -144,6 +145,28 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
   }
 
   async probe(model: ModelConfig, required: number, language: Language = DEFAULT_LANGUAGE): Promise<ProbeResult> {
+    const result = await this.#probeContext(model, required, language);
+    if (!['ok', 'too_small', 'exceeds_model', 'unknown'].includes(result.status)) return result;
+    const efforts = await this.#probeEfforts(model);
+    return efforts ? { ...result, efforts } : result;
+  }
+
+  // /v1/models の項目が supported_reasoning_efforts を知らせていれば、その値（標準の項目ではないので、無ければ undefined）。サーバーの種類を問わず読み、読めなくても確認の結果は変えない
+  async #probeEfforts(model: ModelConfig): Promise<string[] | undefined> {
+    try {
+      const headers = this.#headers();
+      delete headers['Accept'];
+      const response = await this.#fetch(joinUrl(this.#base(), 'models'), { headers, signal: AbortSignal.timeout(10_000), redirect: 'error' });
+      if (!response.ok) return undefined;
+      const list: any = await response.json();
+      const entry = Array.isArray(list?.data) ? list.data.find((m: any) => m?.id === model.model) : undefined;
+      const efforts = entry?.supported_reasoning_efforts;
+      const values = Array.isArray(efforts) ? efforts.filter((v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/u.test(v)).slice(0, 8) : [];
+      return values.length ? values : undefined;
+    } catch { return undefined; }
+  }
+
+  async #probeContext(model: ModelConfig, required: number, language: Language): Promise<ProbeResult> {
     const server = this.provider.server ?? 'generic';
     const facts = { modelId: model.id, server, required, declared: model.contextLength, language };
     let base: string; let headers: Record<string, string>;

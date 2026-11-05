@@ -550,6 +550,8 @@
     "not_chat_conversation": "この会話にはここから送れません（タスクや振り返りの会話です）",
     "persona_unsafe": "このファイルはリンクなどで、通常のファイルではないので書き換えません（{file}）",
     "persona_empty": "書き込む項目がありません（userName・callMe・botName・style・styleNote のどれかを送ってください）",
+    "unknown_model": "モデル「{id}」は設定にありません",
+    "bad_effort": "effort「{effort}」は、このモデルでは選べません（選べる値: {values}）",
     "internal": "内部エラーが発生しました（ログを確認してください）"
   }
 }

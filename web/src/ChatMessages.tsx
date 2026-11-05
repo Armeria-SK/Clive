@@ -256,9 +256,9 @@ export function FailureCard({ message, hint, numbers, onRetry }: FailureProps) {
   );
 }
 
-interface PreSendProps { message: string; hint: string | null; numbers: ContextNumbers | null }
+interface PreSendProps { message: string; hint: string | null; numbers: ContextNumbers | null; alternative?: { label: string; onUse: () => void } | undefined }
 
-export function PreSendCard({ message, hint, numbers }: PreSendProps) {
+export function PreSendCard({ message, hint, numbers, alternative }: PreSendProps) {
   const t = useT();
   const tooSmall = numbers !== null && numbers.required !== null && numbers.effective !== null && numbers.required > numbers.effective;
   return (
@@ -284,7 +284,8 @@ export function PreSendCard({ message, hint, numbers }: PreSendProps) {
         <span className="chat-meta">{t('chat.pre.kept')}</span>
       </div>
       <div className="chat-actions">
-        <a className="btn btn-primary" href="#/settings"><Icon name="sliders" size={13} />{t('chat.settings')}</a>
+        {alternative && <button type="button" className="btn btn-primary" onClick={alternative.onUse}><Icon name="cpu" size={13} />{t('chat.pre.useModel', alternative.label)}</button>}
+        <a className={`btn ${alternative ? 'btn-secondary' : 'btn-primary'}`} href="#/settings"><Icon name="sliders" size={13} />{t('chat.settings')}</a>
       </div>
     </div>
   );

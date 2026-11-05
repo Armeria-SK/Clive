@@ -14,6 +14,8 @@ export interface ConversationRow {
   last_message_at: number;
   summary: string | null;
   summary_upto: number | null;
+  model_id: string | null;
+  effort: string | null;
 }
 
 export interface StoredMessage {
@@ -53,6 +55,20 @@ export class Conversations {
       .all(limit) as unknown as ConversationRow[];
   }
 
+  // 無ければ空の会話を作る（最初の発言の前に、選んだモデルを覚えるため）
+  ensure(id: string): void {
+    if (this.get(id)) return;
+    const now = this.now();
+    this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, 'chat', ?, ?)`).run(id, now, now);
+  }
+
+  // 会話で選んだモデルと考える深さ。渡さなかった方は変えない（null は自動・モデルの既定に戻す）
+  setChoice(id: string, choice: { modelId?: string | null | undefined; effort?: string | null | undefined }): void {
+    this.ensure(id);
+    if (choice.modelId !== undefined) this.db.prepare('UPDATE conversations SET model_id = ? WHERE id = ?').run(choice.modelId, id);
+    if (choice.effort !== undefined) this.db.prepare('UPDATE conversations SET effort = ? WHERE id = ?').run(choice.effort, id);
+  }
+
   rename(id: string, title: string): void {
     this.db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, id);
   }
@@ -74,10 +90,7 @@ export class Conversations {
   append(conversationId: string, message: ChatMessage, runId?: string): StoredMessage {
     return transaction(this.db, () => {
       const now = this.now();
-      if (!this.get(conversationId)) {
-        this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, 'chat', ?, ?)`)
-          .run(conversationId, now, now);
-      }
+      this.ensure(conversationId);
       const text = messageText(message);
       const result = this.db.prepare(`INSERT INTO messages (conversation_id, run_id, role, text, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(conversationId, runId ?? null, message.role, text, JSON.stringify(message), now);

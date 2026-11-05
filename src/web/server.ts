@@ -3,7 +3,8 @@ import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
 import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
-import { candidateModelIds } from '../engine/chat.ts';
+import { candidateModelIds, type SendChoice } from '../engine/chat.ts';
+import { modelEfforts } from '../engine/efforts.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
@@ -57,11 +58,39 @@ function modelsView(app: App) {
       providerKind: config.providers.find(p => p.id === m.provider)?.kind,
       contextLength: m.contextLength, minContext: m.minContext, maxOutputTokens: m.maxOutputTokens,
       inChat: config.routing.chat.includes(m.id),
+      efforts: modelEfforts(config, m, app.status.get(m.id)),
       probe: app.status.get(m.id) ?? null,
       cooldown: app.status.coolingDown(m.id) ?? null,
       recentFailures: app.health.failures(m.id),
     })),
   };
+}
+
+// モデルと考える深さの選び方（PATCH と送信で共通）。設定にあるモデルだけ、そのモデルで選べる値だけを受ける。
+// モデルだけを替えて、今の考える深さが新しいモデルに無いときは、null に戻して effortReset で知らせる。何も書く前に検査を終える
+function readChoice(app: App, body: Record<string, unknown>, current: { model_id: string | null; effort: string | null } | undefined): { choice: SendChoice; effortReset: boolean } {
+  const choice: SendChoice = {};
+  const text = (field: 'modelId' | 'effort'): string | null | undefined => {
+    const value = body[field];
+    if (value === undefined || value === null) return value;
+    if (typeof value !== 'string' || !value.trim()) throw problem(400, 'invalid_field', 'required', { field, params: { field } });
+    return value;
+  };
+  const modelId = text('modelId');
+  const effort = text('effort');
+  if (modelId !== undefined) {
+    if (modelId !== null && !app.config().models.some(m => m.id === modelId)) throw problem(400, 'invalid_field', 'unknown_model', { field: 'modelId', params: { id: modelId } });
+    choice.modelId = modelId;
+  }
+  if (effort !== undefined) choice.effort = effort;
+  const { efforts } = app.engine.effortChoices(modelId !== undefined ? modelId : current?.model_id ?? null);
+  if (effort) {
+    if (!efforts.includes(effort)) throw problem(400, 'invalid_field', 'bad_effort', { field: 'effort', params: { effort, values: efforts.join(' / ') || '-' } });
+    return { choice, effortReset: false };
+  }
+  const kept = effort === undefined ? current?.effort ?? null : null;
+  if (modelId !== undefined && kept !== null && !efforts.includes(kept)) { choice.effort = null; return { choice, effortReset: true }; }
+  return { choice, effortReset: false };
 }
 
 export function createWebServer(app: App): WebServer {
@@ -86,16 +115,19 @@ export function createWebServer(app: App): WebServer {
   });
   router.add('PATCH', '/api/conversations/:id', async ({ req, res, params }) => {
     const id = params[0]!;
-    if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
+    const current = app.conversations.get(id);
+    if (!current) throw problem(404, 'not_found', 'conversation_missing');
     const body = requireObject(await readJson(req));
     const title = requireString(body, 'title', { optional: true, max: 200 });
     if (body.archived !== undefined && typeof body.archived !== 'boolean') {
       throw problem(400, 'invalid_field', 'bad_bool', { field: 'archived', params: { field: 'archived' } });
     }
+    const { choice, effortReset } = readChoice(app, body, current);
     if (title) app.conversations.rename(id, title);
+    app.conversations.setChoice(id, choice);
     if (body.archived === true) app.conversations.archive(id);
     if (body.archived === false) app.conversations.unarchive(id);
-    sendJson(res, 200, { conversation: app.conversations.get(id) });
+    sendJson(res, 200, { conversation: app.conversations.get(id), ...(effortReset ? { effortReset: true } : {}) });
   });
   router.add('GET', '/api/conversations/:id/messages', ({ res, params }) => {
     const id = params[0]!;
@@ -140,6 +172,8 @@ export function createWebServer(app: App): WebServer {
       if (!upload) throw problem(400, 'invalid_field', 'attachment_missing', { field: 'attachments' });
       return upload;
     });
+    const existing = app.conversations.get(id);
+    const { choice } = readChoice(app, body, existing);
     const images: ImageRef[] = [];
     const blocks: string[] = [];
     for (const upload of uploads) {
@@ -147,7 +181,9 @@ export function createWebServer(app: App): WebServer {
     }
     if (images.length) {
       const config = app.config();
-      const candidates = candidateModelIds(config, 'chat');
+      // 会話でモデルを選んでいれば、画像を読めるかはそのモデルで決める
+      const pinned = choice.modelId !== undefined ? choice.modelId : existing?.model_id ?? null;
+      const candidates = pinned ? [pinned] : candidateModelIds(config, 'chat');
       // 候補が 1 つも無い（モデルが 0 個）ときは画像の話の前に、エンジンの「使えるモデルがない」案内に任せる
       const vision = candidates.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
       if (candidates.length && !vision) throw problem(409, 'no_vision', 'no_vision');
@@ -155,10 +191,9 @@ export function createWebServer(app: App): WebServer {
     const attachments: AttachmentMeta[] = uploads.map(u => ({ id: u.id, name: u.name, kind: u.kind }));
     const content = [text || engineText(languageOf(app.config()), images.length ? 'attachment.image' : 'attachment.file'), ...blocks].join('\n\n');
     // 画面が決めた id へ最初の発言を送ると、受け付けたときに会話ができる。作られる id は UUID の形だけ。タスク・振り返りの会話には、ここから送らせない
-    const existing = app.conversations.get(id);
     if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
     if (!existing && !CONVERSATION_ID.test(id)) throw problem(400, 'invalid_id', 'invalid_id');
-    const outcome = app.engine.send(id, content, images, attachments);
+    const outcome = app.engine.send(id, content, images, attachments, choice);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     sendJson(res, 202, { runId: outcome.runId, messageId: outcome.messageId });
   });

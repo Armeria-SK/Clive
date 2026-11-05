@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import type { ContextUsage, UploadView } from './api.ts';
 import { compactTokens, contextPercent, slashMatches, type SlashCommand } from './chat-logic.ts';
 import { useT } from './i18n/index.ts';
@@ -19,6 +19,12 @@ interface Props {
   approvalId: string | null;
   assistantName: string;
   modelName: string | null;
+  // 考える深さを選んでいるときの値（札に添える）
+  effort: string | null;
+  // モデルの一覧（開いているときだけ入る）。札を押すと onModelMenu
+  modelMenu: ReactNode;
+  modelMenuOpen: boolean;
+  onModelMenu: () => void;
   usage: ContextUsage | null;
   onInput: (value: string) => void;
   onAttach: (files: FileList | null) => void;
@@ -130,9 +136,14 @@ export function Composer(props: Props) {
             {uploading ? <span className="spin"><Icon name="loader" size={15} /></span> : <Icon name="paperclip" size={15} />}
           </button>
           {modelName && (
-            <span className="chat-model-chip" data-tip={t('chat.model')}>
-              <Icon name="cpu" size={13} />
-              <span className="chat-model-name">{modelName}</span>
+            <span className="chat-model-wrap">
+              <button type="button" className="chat-model-chip" data-tip={t('chat.model')} aria-haspopup="dialog" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}>
+                <Icon name="cpu" size={13} />
+                <span className="chat-model-name">{modelName}</span>
+                {props.effort && <span className="chat-model-effort">{props.effort}</span>}
+                <Icon name="chevD" size={11} />
+              </button>
+              {props.modelMenu}
             </span>
           )}
           <span className="chat-tools-fill" />

@@ -1,13 +1,19 @@
 import { getLanguage } from './i18n/state.ts';
 import { errorBodyText } from './server-text.ts';
 
-export interface Conversation { id: string; title: string | null; created_at: number; last_message_at: number }
+export interface Conversation {
+  id: string; title: string | null; created_at: number; last_message_at: number;
+  // 会話で選んだモデルと考える深さ（null は自動・モデルの既定）
+  model_id?: string | null; effort?: string | null;
+}
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;
   toolName?: string; toolCallId?: string; isError?: boolean;
   attachments?: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>;
 }
+// 会話で選ぶモデルと考える深さ。渡さなかった方は変えない。null は自動・モデルの既定に戻す
+export interface ModelChoice { modelId?: string | null; effort?: string | null }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
 export interface ApprovalPreview { path: string; text: string; truncated: boolean }
 // 見つけたパスごとの判定。in は許可フォルダの中（mode はそのフォルダの読み書き / 読むだけ）、out は外、deny は拒否、unknown は判定できない（path が無い）
@@ -29,6 +35,8 @@ export interface Probe {
 export interface ModelView {
   id: string; label: string; provider: string; model: string; providerKind?: string;
   contextLength?: number; minContext: number; maxOutputTokens: number; inChat: boolean; probe: Probe | null;
+  // そのモデルで選べる考える深さ（無ければ選ばせない）
+  efforts?: string[];
 }
 export interface SettingsView {
   config: Record<string, any>;
@@ -128,7 +136,8 @@ export const api = {
   contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   decide: (id: string, decision: 'once' | 'conversation' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
-  send: (id: string, text: string, attachments: string[] = []) => call<{ runId: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}) }) }),
+  send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}) => call<{ runId: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice }) }),
+  chooseModel: (id: string, choice: ModelChoice) => call<{ conversation: Conversation; effortReset?: boolean }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(choice) }),
   upload: async (file: File) => {
     const res = await fetch(`/api/uploads?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } });
     const body = await res.json().catch(() => ({}));

@@ -297,4 +297,9 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE tasks ADD COLUMN created_in_conversation TEXT;
   CREATE INDEX ix_tasks_created_in ON tasks (created_in_conversation);
   `,
+  // 9: 会話ごとに選んだモデルと考える深さ（NULL = 自動・モデルの既定。前からある会話はこれまでと同じ動き）
+  `
+  ALTER TABLE conversations ADD COLUMN model_id TEXT;
+  ALTER TABLE conversations ADD COLUMN effort TEXT;
+  `,
 ];

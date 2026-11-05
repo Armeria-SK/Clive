@@ -337,6 +337,10 @@ test('workerState / pickChatModel: 状態バーに出す状態とモデル', () 
   assert.equal(pickChatModel(models, { chat: ['zzz', 'c'] }), 'model-c', '設定に無い ID は飛ばす');
   assert.equal(pickChatModel(models, { chat: [] }), null);
   assert.equal(pickChatModel([], { chat: ['a'] }), null);
+  assert.equal(pickChatModel(models, { chat: ['b', 'c'] }, 'a'), 'model-a', '会話で選んだモデルは、使えなくても選んだとおりに出す（黙って別のモデルに見せない）');
+  assert.equal(pickChatModel(models, { chat: ['b'] }, 'c'), 'model-c', '並びに無くても、選んだモデル');
+  assert.equal(pickChatModel(models, { chat: ['b'] }, 'gone'), null, '設定から消えたモデルは出さない');
+  assert.equal(pickChatModel(models, { chat: ['b', 'c'] }, null), 'model-b', 'null は自動');
 });
 
 const paletteItem = (id: string, label: string, sub = ''): PaletteItem => ({ id, label, sub, hint: '', icon: 'msg', run: () => undefined });

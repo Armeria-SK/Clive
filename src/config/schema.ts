@@ -38,6 +38,8 @@ export const ModelConfig = Type.Object({
   maxTools: Type.Optional(Type.Integer({ minimum: 0, maximum: 128 })),
   vision: Type.Boolean({ default: false }),
   temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
+  // 考える深さとして選べる値（reasoning_effort に送る）。OpenAI 互換のプロバイダのモデルだけで使う。書かなければ、サーバーが supported_reasoning_efforts で知らせた値を使う
+  efforts: Type.Optional(Type.Array(Type.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$' }), { maxItems: 8 })),
 }, { additionalProperties: false });
 
 export const ServerConfig = Type.Object({

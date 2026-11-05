@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, type Approval, type Conversation, type NotificationItem, type Profile, type WorkerStatus } from './api.ts';
+import { api, type Approval, type Conversation, type ModelView, type NotificationItem, type Profile, type WorkerStatus } from './api.ts';
 import { ActivityPanel } from './ActivityPanel.tsx';
 import { presenceOf } from './avatar.ts';
 import { Chat, type ConversationChange, type RunNotice } from './Chat.tsx';
@@ -18,7 +18,8 @@ import { NotificationBubble } from './NotificationBubble.tsx';
 import { notificationLink } from './notification-meta.ts';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { Palette } from './Palette.tsx';
-import { PAGE_META, pickChatModel } from './pages.ts';
+import { PAGE_META, pickChatModelView } from './pages.ts';
+import { OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
 import { chatHash, pageBehind, parseRoute, type Route } from './routes.ts';
 import { Runs } from './Runs.tsx';
 import { serverText, warningText } from './server-text.ts';
@@ -67,7 +68,7 @@ export function App() {
   const [notificationRevision, setNotificationRevision] = useState(0);
   const [memoryRevision, setMemoryRevision] = useState(0);
   const [celebrating, setCelebrating] = useState(false);
-  const [modelName, setModelName] = useState<string | null>(null);
+  const [modelsInfo, setModelsInfo] = useState<{ models: ModelView[]; routing: { chat: string[] } } | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
   const [runStarts, setRunStarts] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<LayoutMode>(() => layoutModeFor(window.innerWidth));
@@ -103,7 +104,7 @@ export function App() {
     void api.notifications().then(r => { setNotifications(r.notifications); setUnread(r.unread); setNotificationsFailed(false); }).catch(() => setNotificationsFailed(true));
   }, []);
   const refreshMeta = useCallback(() => {
-    void api.models().then(r => setModelName(pickChatModel(r.models, r.routing))).catch(() => undefined);
+    void api.models().then(r => setModelsInfo({ models: r.models, routing: r.routing })).catch(() => undefined);
     void api.settings().then(s => setRestartRequired(s.restartRequired)).catch(() => undefined);
   }, []);
   useEffect(() => {
@@ -259,6 +260,8 @@ export function App() {
     refreshList();
     if (change.kind === 'archived') tabState.close(`chat:${change.id}`);
     if (change.kind === 'unarchived') tabState.openChat(change.id);
+    // モデルを替えたら、使用量の輪を、替えたモデルで数え直す
+    if (change.kind === 'model') setEndRevision(n => n + 1);
   }, [refreshList, tabState.close, tabState.openChat]);
   const addNotice = (conversationId: string, notice: RunNotice) =>
     setNotices(state => ({ ...state, [conversationId]: [...(state[conversationId] ?? []), notice].slice(-8) }));
@@ -450,6 +453,10 @@ export function App() {
     />
   );
   const viewKey = shown.page === 'chat' ? `chat:${current ?? 'new'}` : shown.page;
+  // 入力欄と状態バーに出すモデル: この会話で選んだものがあればそれ。無ければ設定の順番の先頭の使えるもの
+  const pinnedModel = current ? conversations.find(c => c.id === current)?.model_id ?? null : null;
+  const chatModel = modelsInfo ? pickChatModelView(modelsInfo.models, modelsInfo.routing, pinnedModel) : null;
+  const defaultModel = modelsInfo ? pickChatModelView(modelsInfo.models, modelsInfo.routing) : null;
 
   return (
     <div className="shell" ref={rootRef} data-mode={mode}>
@@ -480,7 +487,8 @@ export function App() {
                 key={current ?? 'new'}
                 conversationId={current}
                 profile={profile}
-                modelName={modelName}
+                modelName={defaultModel?.model ?? null}
+                defaultModelId={defaultModel?.id ?? null}
                 usage={contextUsage}
                 drafts={drafts}
                 runStarts={runStarts}
@@ -514,8 +522,9 @@ export function App() {
       {!narrow && (
         <StatusBar
           connected={connected} worker={worker} runStartedAt={runningId ? runStarts[runningId] : undefined} approvals={approvals.length}
-          modelName={modelName} usage={shown.page === 'chat' ? contextUsage : null} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
+          modelName={chatModel?.model ?? null} usage={shown.page === 'chat' ? contextUsage : null} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
           onOpenApproval={openApproval} onOpenNotifications={toggleNotifications} inert={settingsCovers}
+          onOpenModel={shown.page === 'chat' ? () => dispatchEvent(new Event(OPEN_MODEL_MENU_EVENT)) : undefined}
         />
       )}
       <NotificationBubble
