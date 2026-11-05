@@ -10,7 +10,7 @@ import { webFailure, webFetch } from '../src/tools/builtin/web.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { htmlText } from '../src/tools/web/html-text.ts';
 import { decodeText, defaultNetwork, fetchPublic, mediaTypeOf, pageUrl, publicIPv4, RetrievalFailure, type PageNetwork, type PageResponse } from '../src/tools/web/public-page.ts';
-import { parseDuckDuckGo, searchDuckDuckGo, SearchFailure, searchSearxng, SearchThrottle } from '../src/tools/web/search.ts';
+import { parseDuckDuckGo, searchDuckDuckGo, SearchFailure, searchSearxng, searxngLanguage, SearchThrottle } from '../src/tools/web/search.ts';
 import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function fakeNetwork(dns: Record<string, string[]>, pages: Record<string, Partial<PageResponse>>): PageNetwork & { gets: string[] } {
@@ -117,6 +117,32 @@ test('SearXNG の JSON を読む。JSON が無効なら直し方を返す', asyn
   await assert.rejects(searchSearxng('http://127.0.0.1:8888', 'x', { limit: 5, language: '', fetch: fetch403 }), /search\.formats/u);
 });
 
+test('SearXNG に渡す言語: 地域コードを言語のコードに直す（jp→ja・kr→ko・cn/tw/hk→zh・uk/us→en）。2 文字の言語のコードならそのまま、そうでなければ渡さない', () => {
+  const table: Array<[string, string | undefined]> = [
+    ['jp-jp', 'ja'], ['kr-kr', 'ko'], ['cn-zh', 'zh'], ['tw-tzh', 'zh'], ['hk-tzh', 'zh'], ['uk-en', 'en'], ['us-en', 'en'],
+    ['de-de', 'de'], ['fr-fr', 'fr'], ['ru-ru', 'ru'], ['DE-de', 'de'], ['en', 'en'],
+    ['wt-wt', undefined], ['xl-es', undefined], ['in-en', undefined], ['', undefined], ['-', undefined], ['zzz-en', undefined], ['j-jp', undefined],
+  ];
+  for (const [region, expected] of table) assert.equal(searxngLanguage(region), expected, region);
+});
+
+test('web_search（SearXNG）: 設定の地域 jp-jp は language=ja で送る。言語に直せない地域は language を付けない', async t => {
+  const asked: string[] = [];
+  const searx = (async (url: string | URL) => {
+    asked.push(String(url));
+    return new Response(JSON.stringify({ results: [{ title: 'A', url: 'https://a.example/', content: '抜粋' }] }), { status: 200 });
+  }) as typeof fetch;
+  for (const [region, expected] of [['jp-jp', 'ja'], ['de-de', 'de'], ['wt-wt', null]] as const) {
+    const s = await setupApp(t, fakeNetwork({}, {}), undefined, c => { c.tools.web.search = 'searxng'; c.tools.web.searxngUrl = 'http://127.0.0.1:8888'; c.tools.web.region = region; }, searx);
+    s.adapter().scripts.push(toolCall('web_search', { query: 'テスト' }), reply('検索しました'));
+    await chat(s, '調べて');
+    const sent = new URL(asked.at(-1)!);
+    assert.equal(sent.searchParams.get('language'), expected, `地域 ${region}`);
+    assert.equal(sent.searchParams.get('q'), 'テスト');
+  }
+  assert.equal(asked.length, 3);
+});
+
 test('検索の回数を抑える（連打は間をあけ、1時間の上限で止める）', () => {
   let now = 0;
   const throttle = new SearchThrottle(() => now);
@@ -137,7 +163,7 @@ function toolCall(name: string, args: unknown): Script {
   };
 }
 
-async function setupApp(t: { after: (fn: () => void) => void }, network: PageNetwork, now?: () => number, configure?: (config: ReturnType<typeof testConfig>) => void) {
+async function setupApp(t: { after: (fn: () => void) => void }, network: PageNetwork, now?: () => number, configure?: (config: ReturnType<typeof testConfig>) => void, fetchImpl?: typeof fetch) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
@@ -149,7 +175,7 @@ async function setupApp(t: { after: (fn: () => void) => void }, network: PageNet
   configure?.(config);
   writeFileSync(paths.config, JSON.stringify(config));
   let adapter!: FakeAdapter;
-  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, ...(now ? { now } : {}), adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, ...(fetchImpl ? { fetch: fetchImpl } : {}), ...(now ? { now } : {}), adapterOverride: p => (adapter = new FakeAdapter(p)) });
   await app.status.probeAll(app.config());
   const events: RunEvent[] = [];
   app.bus.subscribe(e => events.push(e.event));

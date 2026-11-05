@@ -7,7 +7,7 @@ import type { Language } from '../../config/schema.ts';
 import type { PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { htmlText } from '../web/html-text.ts';
 import { clip, decodeText, fetchPublic, pageUrl, RetrievalFailure } from '../web/public-page.ts';
-import { searchDuckDuckGo, SearchFailure, searchSearxng, SearchThrottle, type SearchHit } from '../web/search.ts';
+import { searchDuckDuckGo, SearchFailure, searchSearxng, searxngLanguage, SearchThrottle, type SearchHit } from '../web/search.ts';
 
 const PAGE_CHARS = 20_000;
 const SEARCH_BLOCK_LIMIT = 2;
@@ -108,7 +108,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
         ctx.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new SearchFailure(toolText('ja', 'fetch.aborted'), 'fetch.aborted')); }, { once: true });
       });
       const hits: SearchHit[] = w.search === 'searxng'
-        ? await searchSearxng(w.searxngUrl, input.query, { limit, language: w.region.split('-')[0] ?? '', signal: ctx.signal, fetch: web(ctx).fetch })
+        ? await searchSearxng(w.searxngUrl, input.query, { limit, language: searxngLanguage(w.region) ?? '', signal: ctx.signal, fetch: web(ctx).fetch })
         : await searchDuckDuckGo(input.query, { limit, region: w.region, signal: ctx.signal, network: web(ctx).network });
       ctx.searchBlocks = 0;
       if (!hits.length) return { content: toolText(language, 'web.no_hits', { query: input.query }) };
