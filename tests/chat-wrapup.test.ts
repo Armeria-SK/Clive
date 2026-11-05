@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { iterationLimit } from '../src/engine/chat.ts';
+import { nextStepOf } from '../src/engine/prompts.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import type { PageNetwork } from '../src/tools/web/public-page.ts';
@@ -143,6 +144,32 @@ test('上限 0 は会話だけの「制限なし」: タスクの実行は 100 �
     const runId = (s.events.find(e => e.type === 'run.start') as { runId: string }).runId;
     assert.deepEqual(JSON.parse(s.app.runs.get(runId)!.flags), ['max_iterations']);
   }
+});
+
+// ── 6b: まとめの「次の一手」の見出しの書き方 ──
+
+test('nextStepOf: 見出しが 「」・""・**・先頭の #/-・コロンの有無・同じ行／次の行のどれでも、次の一手の中身を取る', () => {
+  const table: Array<[string, string | undefined]> = [
+    ['次の一手: b', 'b'],
+    ['次の一手：b', 'b'],
+    ['次の一手\nb', 'b'],
+    ['Next step: x', 'x'],
+    ['「次の一手」: b', 'b'],
+    ['**次の一手**: b', 'b'],
+    ['## 次の一手\nb', 'b'],
+    ['- 次の一手: b', 'b'],
+    ['"Next step": x', 'x'],
+    ['**次の一手:** b', 'b'],
+    ['ここまで:\n- a を書いた\n\n### 次の一手\n\nb を確かめる', 'b を確かめる'],
+    ['done\r\n\r\n**Next step**\r\nx', 'x'],
+    ['NEXT STEP:\nx', 'x'],
+    ['次の一手は後で決めます', undefined],
+    ['次の一手:', undefined],
+    ['次の一手\n', undefined],
+    ['ここまでにやったこと: a だけ', undefined],
+  ];
+  for (const [input, expected] of table) assert.equal(nextStepOf(input), expected, JSON.stringify(input));
+  assert.equal(nextStepOf(`次の一手: ${'あ'.repeat(600)}`)?.length, 500, '500 文字まで');
 });
 
 // ── 6b: 会話で進んだ分を、タスクへ引き継ぐ ──

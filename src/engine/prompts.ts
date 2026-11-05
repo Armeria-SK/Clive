@@ -82,10 +82,11 @@ export function wrapUpPrompt(transcript: string, language: Language): string {
   return [...text.wrapUpInstructions, `\n${text.wrapUpTranscriptHeading}\n${transcript}`, `\n${text.doneHeading}:`].join('\n');
 }
 
-// まとめの「次の一手」の部分（見出しの後ろ）。見つからなければ undefined
+const NEXT_STEP = /(?:^|\n)[ \t]*(?:(?:#{1,6}|[-*+])[ \t]+)?[*_「『"“'`]*(?:次の一手|Next steps?)[*_」』"”'`]*[ \t]*(?:[:：][*_」』"”'`]*|\r?\n)([\s\S]+)$/iu;
+
+// まとめの「次の一手」の部分（見出しの後ろ）。見出しは「」・""・**・先頭の # や - で飾ってよく、コロンは無くてもよい（中身は同じ行でも次の行でも）。見つからなければ undefined
 export function nextStepOf(summary: string): string | undefined {
-  const m = /(?:^|\n)[ \t]*(?:次の一手|Next step)[ \t]*[:：][ \t]*([\s\S]+)$/iu.exec(summary);
-  const step = m?.[1]?.trim();
+  const step = NEXT_STEP.exec(summary)?.[1]?.trim();
   return step ? step.slice(0, 500) : undefined;
 }
 
