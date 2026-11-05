@@ -90,10 +90,14 @@ const PLAIN_BY_SUB: Record<string, ReadonlySet<string>> = {
   remote: new Set(['url', 'fetch', 'pushurl', 'tagopt', 'prune']),
   branch: new Set(['remote', 'merge', 'rebase', 'pushremote']),
   submodule: new Set(['url', 'active']),
+  gc: new Set(['reflogexpire', 'reflogexpireunreachable']),
 };
-const PLAIN_WHOLE = new Set(['gc', 'color', 'i18n', 'log', 'status', 'advice', 'extensions']);
+const PLAIN_WHOLE = new Set(['color', 'i18n', 'log', 'status', 'advice', 'extensions']);
 const PLAIN_PLAIN: Record<string, ReadonlySet<string>> = {
   user: new Set(['name', 'email']),
+  // gc.recentObjectsHook は gc のときにコマンドを動かす（本物の git で確かめた）ので、gc は名前を決めたものだけ
+  gc: new Set(['auto', 'autodetach', 'autopacklimit', 'bigpackthreshold', 'aggressivedepth', 'aggressivewindow', 'pruneexpire', 'reflogexpire', 'reflogexpireunreachable', 'worktreepruneexpire', 'logexpiry', 'packrefs',
+    'writecommitgraph', 'cruftpacks', 'maxcruftsize', 'rerereresolved', 'rerereunresolved']),
   init: new Set(['defaultbranch']),
   pull: new Set(['rebase', 'ff']),
   push: new Set(['default', 'autosetupremote']),

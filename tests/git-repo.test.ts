@@ -459,3 +459,13 @@ test('remote の名前: remote.<名前>.url がある名前だけ（名前にド
   assert.equal(inspectRepo(repoWith(t, cfg('[branch "b"]\n\tpushremote = victim\n'))).badKey, 'branch.b.pushremote = victim');
   assert.equal(inspectRepo(repoWith(t, cfg('[branch "b"]\n\tremote = fetchonly\n'))).configOk, false, 'url の無い名前は宛先として使えない');
 });
+
+// 審査の指摘（深い審査）: [gc] の項目をすべてふつうとしていたが、gc.recentObjectsHook は gc のときにコマンドを動かす（本物の git 2.54 の `git gc --prune=now` で動くことを確かめた）
+test('gc の項目: 名前を決めたものだけふつう。gc.recentObjectsHook などコマンドを動かすものと、知らない項目はふつうでない', () => {
+  const plain = ['auto', 'autoDetach', 'autoPackLimit', 'bigPackThreshold', 'aggressiveDepth', 'aggressiveWindow', 'pruneExpire', 'reflogExpire', 'reflogExpireUnreachable', 'worktreePruneExpire', 'logExpiry', 'packRefs',
+    'writeCommitGraph', 'cruftPacks', 'maxCruftSize', 'rerereResolved', 'rerereUnresolved'];
+  assert.deepEqual(plain.filter(k => unusualKey(parseGitConfig(`[gc]\n\t${k} = 1\n`)!) !== null), []);
+  assert.equal(unusualKey(parseGitConfig('[gc "refs/heads/*"]\n\treflogExpire = 30.days\n\treflogExpireUnreachable = 10.days\n')!), null);
+  for (const [config, key] of [['[gc]\n\trecentObjectsHook = ./x.sh\n', 'gc.recentobjectshook'], ['[GC]\n\tRecentObjectsHook = x\n', 'gc.recentobjectshook'], ['[gc]\n\tauto = 0\n\tsomethingNew = x\n', 'gc.somethingnew'],
+    ['[gc "main"]\n\trecentObjectsHook = x\n', 'gc.main.recentobjectshook']] as const) assert.equal(unusualKey(parseGitConfig(config)!), key, config);
+});

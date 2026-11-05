@@ -71,6 +71,11 @@ test('git の設定の洗い出し: コードを動かせる項目を落とし�
   for (const helper of ['!evil', '/path/to/evil', 'evil', '"manager; evil"', 'cache --evil=x', 'store --file=/etc/passwd; x']) assert.equal(sanitizeGitConfig([`[credential]\n\thelper = ${helper}\n`]).includes('helper'), false, helper);
 });
 
+test('git の設定の洗い出し: gc.recentObjectsHook（gc がコマンドを動かす）は落とす。名前の決まった gc の項目は残す', () => {
+  const kept = parseGitConfig(sanitizeGitConfig(['[gc]\n\trecentObjectsHook = ./x.sh\n\tauto = 0\n\tpruneExpire = 2.weeks.ago\n']))!.map(e => e.key);
+  assert.deepEqual(kept, ['gc.auto', 'gc.pruneexpire']);
+});
+
 test('git のバージョン: GIT_CONFIG_GLOBAL が効くのは 2.32 から', () => {
   assert.equal(gitVersionAtLeast('git version 2.54.0.windows.1', 2, 32), true);
   assert.equal(gitVersionAtLeast('git version 2.32.0', 2, 32), true);
