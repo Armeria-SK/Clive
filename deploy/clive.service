@@ -23,7 +23,9 @@ RestartSec=5
 KillMode=mixed
 TimeoutStopSec=20
 
-# OS レベルの閉じ込め。Clive のシェル実行のガードは文字列の判定なので、ここで書ける場所を絞っておく
+# OS レベルの閉じ込め。Clive のシェル実行のガードは文字列の判定なので、Clive からこの PC の残りを守るために、ここで書ける場所を絞っておく。
+# Clive 自身の設定・人格・記憶（/var/lib/clive）は、Clive のシェルと同じユーザーで動くので、この閉じ込めでは守れない
+# （確かめを通ったコードは書き換えられる）。分けるには、シェルの子だけを別のユーザーで動かす仕組みが要る（今後の課題）
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
