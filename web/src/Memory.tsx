@@ -169,7 +169,7 @@ function Item({ item, onChanged, setError }: { item: MemoryItem; onChanged: () =
             <li key={e.id}>
               <span>{t('memory.event.line', time(e.created_at), label(actorKey(e.actor), e.actor), label(actionKey(e.action), e.action))}</span>
               {e.action === 'update' && e.before !== null && <span className="mem-dim">{t('memory.event.before', e.before)}</span>}
-              {e.reason && <span className="mem-dim">（{e.reason}）</span>}
+              {e.reason && <span className="mem-dim">{t('memory.event.reason', e.reason)}</span>}
               {canUndo(e) && <button className="btn btn-ghost" onClick={() => void run(async () => { await api.undoMemory(e.id); setEvents(null); })}>{t('memory.event.undo')}</button>}
               {Boolean(e.undone_at) && <span className="mem-dim">{t('memory.event.undone')}</span>}
             </li>

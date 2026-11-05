@@ -30,6 +30,9 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'login-added': return t('access.login', a.login);
     case 'logins-cleared': return t('access.loginsCleared');
     case 'host-exposed': return t('access.host', a.host);
+    case 'provider-url': return t('access.providerUrl', a.id, a.url);
+    case 'provider-key': return t('access.providerKey', a.id, a.env);
+    case 'searxng-url': return t('access.searxng', a.url);
   }
 }
 

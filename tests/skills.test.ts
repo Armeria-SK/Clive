@@ -120,17 +120,21 @@ test('広がる変更: 触れないパスを外す・フォルダを足す・読
 test('広すぎる場所: ディスク全体・ドライブの直下・ホームフォルダの全体を見分け、ふつうのフォルダは見分けない', () => {
   for (const path of ['/', '//', '\\', 'C:', 'c:\\', 'D:/', 'C:\\\\']) assert.equal(broadKind(path), 'filesystem', path);
   for (const path of ['~', '~/', '~\\', '/home/alice', '/home/alice/', '/Users/bob', 'C:\\Users\\carol', 'c:/users/carol/']) assert.equal(broadKind(path), 'home', path);
-  for (const path of ['workspace', '~/Documents', '/home/alice/notes', '/var/log', 'C:\\Users\\carol\\Documents', 'C:\\Windows', '/home', '', '   ']) assert.equal(broadKind(path), null, path);
+  for (const path of ['workspace', '~/Documents', '/home/alice/notes', '/var/log', 'C:\\Users\\carol\\Documents', 'C:\\Windows', '', '   ']) assert.equal(broadKind(path), null, path);
 });
 
 test('広すぎる場所: . と .. を畳んで見分ける（ホームの . や、ディスク全体への ..、ホームの外への ~/..）。相対の名前は見分けない', () => {
   for (const path of ['/home/alice/.', '/home/alice/./', '/home/alice/notes/..', '/home//alice', '/Users/bob/x/y/../..', 'C:\\Users\\carol\\.', 'C:\\Users\\carol\\Documents\\..', '~/.', '~/x/..', '~/./']) {
     assert.equal(broadKind(path), 'home', path);
   }
+  // /home と /Users（C:\Users）そのものと、そこへ畳まれるもの（/home/me/..）は、全員のホームをまとめて含むので、ホームの全体と同じに扱う
+  for (const path of ['/home', '/home/', '/Users', '/users/', 'C:\\Users', 'c:/users/', '/home/alice/..', '/home/me/..', '/Users/bob/..', 'C:\\Users\\carol\\..']) {
+    assert.equal(broadKind(path), 'home', path);
+  }
   for (const path of ['/tmp/..', '/var/log/../..', '/..', '/../..', '/home/alice/../..', 'C:\\Windows\\..', 'D:/a/../', '~/..', '~/../..', '~/x/../..']) {
     assert.equal(broadKind(path), 'filesystem', path);
   }
-  for (const path of ['/home/alice/..', '/Users/bob/..', 'workspace/..', '../..', './', 'notes/./x', '~user', '~user/..', '/home/alice/x/./y']) {
+  for (const path of ['/homework', '/Users2', '/var/home', 'workspace/..', '../..', './', 'notes/./x', '~user', '~user/..', '/home/alice/x/./y']) {
     assert.equal(broadKind(path), null, path);
   }
 });

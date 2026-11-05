@@ -145,7 +145,8 @@ export function broadKind(path: string): BroadKind | null {
   if (home) return above ? 'filesystem' : stack.length === 0 ? 'home' : null;
   if (!absolute && !drive) return null;
   if (stack.length === 0) return 'filesystem';
-  return stack.length === 2 && /^(?:home|users)$/iu.test(stack[0]!) ? 'home' : null;
+  // /home と /Users（C:\Users）そのものは、全員のホームフォルダをまとめて含むので、ホームの全体と同じに扱う
+  return stack.length <= 2 && /^(?:home|users)$/iu.test(stack[0]!) ? 'home' : null;
 }
 
 export type Widening =
