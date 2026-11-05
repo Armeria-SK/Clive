@@ -14,7 +14,7 @@ import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
-import { runProcess, scrubEnv } from '../src/tools/shell/runner.ts';
+import { resolveShell, runProcess, scrubEnv } from '../src/tools/shell/runner.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
@@ -239,4 +239,43 @@ test('子プロセス: 出力が上限を超えたら全文をファイルに残
   assert.equal(result.totalBytes, 5000);
   await new Promise(r => setTimeout(r, 50));
   assert.equal(readFileSync(result.fullOutputPath!, 'utf8').length, 5000);
+});
+
+// ── PowerShell の制限モード（security-self-api.md の L1・V3）────────────────
+
+test('PowerShell の引数: 文字コードの設定のあと、コマンドの前に制限モードにする。bash には付けない', () => {
+  for (const choice of ['powershell', 'pwsh'] as const) {
+    const args = resolveShell(choice).args('Get-Date');
+    assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
+    const script = args[3]!;
+    const utf8 = script.indexOf('[Console]::OutputEncoding');
+    const mode = script.indexOf("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage';");
+    assert.ok(utf8 >= 0 && mode > utf8, `${choice}: 文字コードのあとに制限モード`);
+    assert.ok(script.endsWith(';Get-Date') && script.indexOf('Get-Date') > mode, `${choice}: コマンドは制限モードのあと`);
+  }
+  assert.deepEqual(resolveShell('bash').args('ls'), ['--noprofile', '--norc', '-c', 'ls']);
+});
+
+const autoShell = resolveShell('auto');
+const powershellAuto = process.platform === 'win32' && /^(?:powershell|pwsh)$/u.test(autoShell.name);
+
+test('PowerShell の制限モード（実機）: .NET の直接呼び出しは止まり、戻せず、ふつうのコマンドと日本語の出力は動く', { skip: !powershellAuto && 'Windows の PowerShell ではない' }, async t => {
+  const dir = tempDir(t);
+  const run = (command: string) => runProcess(autoShell.file, autoShell.args(command), { cwd: dir, env: scrubEnv(), timeoutMs: 30_000, signal: new AbortController().signal, maxBytes: 20_000 });
+
+  const write = await run("try { [IO.File]::WriteAllText('x.txt','1') } catch { $_.FullyQualifiedErrorId }");
+  assert.match(write.stdout, /MethodInvocationNotSupportedInConstrainedLanguage/u);
+  assert.equal(existsSync(join(dir, 'x.txt')), false, '.NET でファイルを書けてしまう');
+
+  const back = await run("$ExecutionContext.SessionState.LanguageMode='FullLanguage'; $ExecutionContext.SessionState.LanguageMode");
+  assert.equal(back.stdout.trim(), 'ConstrainedLanguage', '元のモードへ戻せてしまう');
+
+  const created = await run("try { New-Object Net.WebClient } catch { $_.FullyQualifiedErrorId }; try { Add-Type -TypeDefinition 'public class A{}' } catch { $_.FullyQualifiedErrorId }");
+  assert.match(created.stdout, /CannotCreateTypeConstrainedLanguage/u, 'New-Object が止まらない');
+  assert.match(created.stdout, /CannotDefineNewType/u, 'Add-Type が止まらない');
+
+  writeFileSync(join(dir, 'メモ.txt'), 'hello');
+  const normal = await run("Get-ChildItem | Select-Object -ExpandProperty Name; 'こんにちは'.Replace('こ','ご'); [DateTime]::Now.Year -gt 2000; (Get-Content メモ.txt).ToUpper()");
+  assert.equal(normal.exitCode, 0);
+  assert.deepEqual(normal.stdout.trim().split(/\r?\n/u), ['メモ.txt', 'ごんにちは', 'True', 'HELLO']);
 });

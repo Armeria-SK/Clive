@@ -45,9 +45,11 @@ export type ShellChoice = 'auto' | 'pwsh' | 'powershell' | 'bash' | 'sh';
 export interface ShellSpec { name: string; file: string; args: (command: string) => string[] }
 
 const PS_UTF8 = '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;';
+// 文字コードの設定のあと、制限モードにする。.NET の直接呼び出し（[IO.File]::...）・New-Object・Add-Type が止まり、元のモードへ戻すのも止まる
+const PS_CONSTRAINED = "$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage';";
 
 export function resolveShell(choice: ShellChoice): ShellSpec {
-  const ps = (file: string, name: string): ShellSpec => ({ name, file, args: c => ['-NoProfile', '-NonInteractive', '-Command', `${PS_UTF8}${c}`] });
+  const ps = (file: string, name: string): ShellSpec => ({ name, file, args: c => ['-NoProfile', '-NonInteractive', '-Command', `${PS_UTF8}${PS_CONSTRAINED}${c}`] });
   const posix = (file: string, name: string): ShellSpec => ({ name, file, args: c => (name === 'bash' ? ['--noprofile', '--norc', '-c', c] : ['-c', c]) });
   if (choice === 'pwsh' || (choice === 'auto' && WINDOWS && which('pwsh'))) return ps(which('pwsh') ?? 'pwsh', 'pwsh');
   if (choice === 'powershell' || (choice === 'auto' && WINDOWS)) return ps(which('powershell') ?? 'powershell.exe', 'powershell');
