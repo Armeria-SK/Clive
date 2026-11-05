@@ -15,6 +15,8 @@ export interface Word {
   kind: 'plain' | 'block' | 'hash' | 'splat' | 'paren';
   // PowerShell の -Name:値 の値（直前のパラメータにくっついている）
   attached?: boolean;
+  // PowerShell のワイルドカードのエスケープ（バッククォート）を外した読み。名前の候補の 1 つで、秘密のパスに当たるかを調べるのに使う
+  unescaped?: string;
   // スクリプトブロック（kind: 'block'）の中の文。同じ文は、全体の並びにも入っている
   block?: Statement[];
   // 計算プロパティのハッシュテーブルのキー（kind: 'hash'、小文字）

@@ -29,7 +29,7 @@ const PROVIDER = /^[A-Za-z][A-Za-z0-9_]+:(?![\\/]{2})/u;
 const WILDCARD = /[*?[]/u;
 export function withWildcard(w: Word): Word {
   if (w.kind !== 'plain' || w.dynamic) return w;
-  if (w.text.includes('`')) return { ...w, dynamic: true };
+  if (w.text.includes('`')) return { ...w, dynamic: true, unescaped: w.text.replace(/`(.?)/gsu, '$1') };
   return WILDCARD.test(w.text) ? { ...w, glob: true } : w;
 }
 // New-Item・mkdir の -Path は、作るパスとして文字どおりに扱われる（* ? はパスに使えない文字のエラー。[ ] は名前になる。本物の PowerShell 5.1 で確かめた）

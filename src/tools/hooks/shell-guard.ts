@@ -277,6 +277,11 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       if (write) addCode(text('list.cwd_unknown', { input })); else add('ask', text('list.cwd_unknown', { input }));
       return;
     }
+    // バッククォートでエスケープした名前（'.en`v' は .env）は、エスケープを外した名前でも調べる。秘密のパスに当たるなら止める
+    if (ref.word.unescaped !== undefined) {
+      const { unescaped, ...rest } = ref.word;
+      checkPath({ ...ref, word: { ...rest, text: unescaped, dynamic: false, glob: /[*?[]/u.test(unescaped) } }, deletes);
+    }
     for (const base of relative ? cwds : [cwd]) {
       const primary = base === cwd;
       const expanded = resolveWord(ref.word, base, windows, language);
@@ -293,13 +298,16 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       if (globbing) {
         // ワイルドカード: 今あるもののうち当たるものを全部調べる。列挙しきれないときは、手前のフォルダを調べて確かめる
         const globbed = expandGlob(patternOf(ref.word, base, windows), dotfiles);
-        if (globbed.complete) {
-          for (const match of globbed.matches) {
-            evalAbs(match, match, write, deletes, false);
-            if (write && (ref.recursive || deletes) && isDirectory(match)) rangeCheck(match);
-          }
-        } else if (write) rangeCheck(globbed.prefix);
-        else add('ask', text('list.wild_many', { input }));
+        // 列挙しきれないときも、列挙した分と、上限を超えた分から探した秘密のパスは調べる（秘密があれば止める）
+        for (const match of globbed.matches) {
+          evalAbs(match, match, write, deletes, false);
+          if (write && (ref.recursive || deletes) && isDirectory(match)) rangeCheck(match);
+        }
+        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false);
+        if (!globbed.complete) {
+          if (write) rangeCheck(globbed.prefix);
+          else add('ask', text('list.wild_many', { input }));
+        }
       } else if (write && ref.recursive && isDirectory(expanded.path)) rangeCheck(expanded.path);
       if (ref.list) listCheck(ref, base, expanded.path, globbing);
     }
@@ -317,6 +325,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       const tree = listTree(head, list.deep);
       complete = complete && tree.complete;
       for (const entry of tree.entries) if (wanted(basename(entry)) || isDirectory(entry)) evalAbs(entry, entry, false, false, false);
+      if (tree.secret && wanted(basename(tree.secret))) evalAbs(tree.secret, tree.secret, false, false, false);
     }
     if (!complete) add('ask', text('list.wild_many', { input: ref.word.text }));
   };

@@ -183,6 +183,31 @@ test('実機（Windows PowerShell 5.1・制限モード）: 管理共有・デ�
   assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '管理共有ごしに人格が書き換わった');
 });
 
+// 再審査の指摘（低）: 当たるものが 2,000 件を超えるワイルドカードの中の秘密のパスと、バッククォートでエスケープした秘密の名前（'.en`v'）は、ふつうの確かめで通っていた。
+// 本物の Windows PowerShell 5.1 で、その書き方が .env を読めること（前提）と、Clive のシェルでは確かめにも進まず止まることを確かめる
+test('実機（Windows PowerShell 5.1・制限モード）: バッククォートでエスケープした秘密の名前と、2,000 件を超えるワイルドカードの中の秘密は、確かめにも進まず止まる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  // 前提: 素の PowerShell は、-Path の [ ] の中のバッククォートつきの文字（'.en[`v]'）で .env を読む
+  for (const path of ['.en[`v]', '.[`e]nv']) {
+    const raw = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-Content -Path '${path}'`], { cwd: s.paths.workspace, encoding: 'utf8' });
+    assert.match(raw.stdout, /SECRET=1/u, `前提: 素の PowerShell は '${path}' で .env を読む`);
+  }
+  for (const command of ["Get-Content '.en[`v]'", "Select-String -Path '.[`e]nv' -Pattern SECRET", "Get-ChildItem '.en[`v]'", "Get-Content '.en`v'"]) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
+  }
+  mkdirSync(s.files('many'));
+  for (let i = 0; i < 2100; i++) writeFileSync(s.files(`many/f${String(i).padStart(5, '0')}.txt`), 'x');
+  writeFileSync(s.files('many/zzz.pem'), 'PRIVATE-KEY\n');
+  for (const command of ['Get-Content many/*', 'Select-String -Path many/* -Pattern PRIVATE', 'Get-ChildItem many | Get-Content']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content.slice(0, 200)}`);
+    assert.doesNotMatch(outcome.output.content, /PRIVATE-KEY/u, `${command}: 秘密が出た`);
+  }
+});
+
 const bashPath = which('bash');
 const bashAvailable = bashPath !== undefined && spawnSync(bashPath, ['--noprofile', '--norc', '-c', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
 

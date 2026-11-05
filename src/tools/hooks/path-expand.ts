@@ -3,7 +3,7 @@
 import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { isGitDir } from './git-repo.ts';
-import { isInside, isRemotePath, writeApprovalKind, type ProtectedKind, type ScopePolicy } from './scope.ts';
+import { isInside, isRemotePath, isSecretPath, writeApprovalKind, type ProtectedKind, type ScopePolicy } from './scope.ts';
 
 export const GLOB_CAP = 2000;
 const WALK_DEPTH = 6;
@@ -53,7 +53,11 @@ function segmentRegex(seg: string, caseFold: boolean, powershell: boolean): RegE
   return new RegExp(`^${re}$`, caseFold ? 'iu' : 'u');
 }
 
-export interface Globbed { prefix: string; matches: string[]; complete: boolean }
+// secret: 当たったものの中の、秘密のパス（列挙しきれなくても、上限を超えた分まで探す）
+export interface Globbed { prefix: string; matches: string[]; complete: boolean; secret?: string }
+
+// 列挙しきれないときに、秘密のパスを探すために数える名前の上限
+const SCAN_CAP = 100_000;
 
 // 絶対パスのパターン（* ? [..] {a,b}）に、今あるもののうち当たるものを列挙する。dotfiles: PowerShell のワイルドカードか（先頭が . の名前に * が当たる。[..] の中の ^ ! は文字。bash は当たらず、! は否定）
 export function expandGlob(pattern: string, dotfiles: boolean): Globbed {
@@ -65,32 +69,42 @@ export function expandGlob(pattern: string, dotfiles: boolean): Globbed {
   const prefix = prefixSegs.join(sep) || sep;
   if (!alternatives) return { prefix, matches: [], complete: false };
   const matches: string[] = [];
+  let secret: string | undefined;
+  let scanned = 0;
+  const found = (): { secret?: string } => (secret === undefined ? {} : { secret });
   for (const alt of alternatives) {
     const segs = alt.split(/[\\/]/u);
     const at = segs.findIndex(s => /[*?[]/u.test(s));
     if (at < 0) { if (exists(alt)) matches.push(alt); continue; }
     let level = [segs.slice(0, at).join(sep) || sep];
-    for (const seg of segs.slice(at)) {
-      if (seg === '**') return { prefix, matches, complete: false };
+    for (const [index, seg] of segs.slice(at).entries()) {
+      if (seg === '**') return { prefix, matches, complete: false, ...found() };
       const next: string[] = [];
+      let overflow = false;
       if (/[*?[]/u.test(seg)) {
         const re = segmentRegex(seg, WINDOWS, dotfiles);
-        for (const dir of level) {
+        scan: for (const dir of level) {
           let names: string[];
           try { names = readdirSync(dir); } catch { continue; }
           for (const name of names) {
             if (name.startsWith('.') && !dotfiles && !seg.startsWith('.')) continue;
-            if (re.test(name)) next.push(join(dir, name));
-            if (next.length > GLOB_CAP) return { prefix, matches, complete: false };
+            if (re.test(name)) {
+              const full = join(dir, name);
+              if (secret === undefined && isSecretPath(full)) secret = full;
+              // 上限を超えても、秘密のパスを探すために、名前を数え続ける（一覧には足さない）
+              if (next.length < GLOB_CAP) next.push(full); else overflow = true;
+            }
+            if (++scanned > SCAN_CAP) { overflow = true; break scan; }
           }
         }
       } else for (const dir of level) next.push(join(dir, seg));
+      if (overflow) return { prefix, matches: at + index === segs.length - 1 ? [...matches, ...next] : matches, complete: false, ...found() };
       level = next;
     }
     for (const m of level) if (exists(m)) matches.push(m);
-    if (matches.length > GLOB_CAP) return { prefix, matches: matches.slice(0, GLOB_CAP), complete: false };
+    if (matches.length > GLOB_CAP) return { prefix, matches: matches.slice(0, GLOB_CAP), complete: false, ...found() };
   }
-  return { prefix, matches, complete: true };
+  return { prefix, matches, complete: true, ...found() };
 }
 
 const LIST_CAP = 20_000;
@@ -101,25 +115,31 @@ export function wildcardMatches(name: string, pattern: string): boolean {
 }
 
 // フォルダの中身（deep なら下の階層まで）の一覧。幅優先で、上限を超えたら途中まで返して complete: false。入れないフォルダ・たどれないリンクがあっても complete: false
-export function listTree(dir: string, deep: boolean, cap = LIST_CAP): { entries: string[]; complete: boolean } {
+export function listTree(dir: string, deep: boolean, cap = LIST_CAP): { entries: string[]; complete: boolean; secret?: string } {
   if (isRemotePath(dir)) return { entries: [], complete: false };
   const entries: string[] = [];
   const queue = [dir];
   let complete = true;
+  let secret: string | undefined;
+  let scanned = 0;
+  const result = (): { entries: string[]; complete: boolean; secret?: string } => ({ entries, complete, ...(secret === undefined ? {} : { secret }) });
   while (queue.length) {
     const current = queue.shift()!;
     let items: import('node:fs').Dirent[];
     try { items = readdirSync(current, { withFileTypes: true }); } catch { complete = false; continue; }
     for (const item of items) {
       const full = join(current, item.name);
-      entries.push(full);
-      if (entries.length >= cap) return { entries, complete: false };
+      if (secret === undefined && isSecretPath(full)) secret = full;
+      // 上限を超えても、秘密のパスを探すために、名前を数え続ける（一覧には足さない）
+      if (entries.length < cap) entries.push(full);
+      if (entries.length >= cap) complete = false;
+      if (++scanned > SCAN_CAP) { complete = false; return result(); }
       if (!deep) continue;
       if (item.isSymbolicLink()) { if (isDirectory(full)) complete = false; continue; }
       if (item.isDirectory()) queue.push(full);
     }
   }
-  return { entries, complete };
+  return result();
 }
 
 // フォルダの下（そのフォルダ自身も）に、.git という名前のものか、git のフォルダ（HEAD・objects/・refs/ がある。.git でない名前の裏のリポジトリ）があるか（深さと件数に上限。超えたら「ある」とみなす）
