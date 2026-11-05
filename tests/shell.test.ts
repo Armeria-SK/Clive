@@ -12,7 +12,7 @@ import { layoutModeFor, loadPanelPreference, savePanelPreference } from '../web/
 import { notificationIcon, notificationKindLabel, notificationLink } from '../web/src/notification-meta.ts';
 import { filterPalette, flattenPalette, moveIndex, type PaletteGroup, type PaletteGroupKey, type PaletteItem } from '../web/src/palette.ts';
 import { PAGE_META, pickChatModel, workerState } from '../web/src/pages.ts';
-import { chatHash, parseRoute, routeHash } from '../web/src/routes.ts';
+import { chatHash, HOME_ROUTE, pageBehind, parseRoute, routeHash } from '../web/src/routes.ts';
 import { closeTab, dropChats, findGoneChats, loadTabs, MAX_TABS, openTab, sanitizeTabs, saveTabs, toTab, unlistedChatIds, type ChatProbe, type Tab } from '../web/src/tabs.ts';
 
 const reset = () => { setLanguagePreference('ja'); setTimezone('Asia/Tokyo'); };
@@ -196,8 +196,8 @@ test('右のパネルの開き方は保存され、読めなくても閉じた�
   savePanelPreference(true, blocked);
 });
 
-test('Esc: 開いている重なりを、パレット → ダイアログ → 通知 → モデル → シート → 引き出しの順に 1 つずつ閉じる', () => {
-  assert.deepEqual([...ESC_ORDER], ['palette', 'dialog', 'notification', 'model', 'sheet', 'drawer']);
+test('Esc: 開いている重なりを、パレット → ダイアログ → 通知 → 設定 → モデル → シート → 引き出しの順に 1 つずつ閉じる', () => {
+  assert.deepEqual([...ESC_ORDER], ['palette', 'dialog', 'notification', 'settings', 'model', 'sheet', 'drawer']);
   assert.equal(closeTopLayer(), false, '何も開いていなければ false（返事を止める側に回す）');
   const closed: string[] = [];
   const offs = [
@@ -431,4 +431,34 @@ test('幅の決まり: 会話の列・入力欄・ページ・タスク・実行
     assert.doesNotMatch(rule, /max-width: \d+px/, `${selector} に数字の幅を書き戻さない`);
   }
   assert.doesNotMatch(styleOf('logs.css'), /lg-inner \{[^}]*max-width/, '実行ログだけ別の幅にしない（.view-inner と同じ）');
+});
+
+test('Esc: 設定のモーダルは、確かめのダイアログの下で、後ろのページのシートや引き出しの上。ダイアログ → 設定 → シートの順に 1 つずつ閉じる', () => {
+  const closed: string[] = [];
+  const offs = [
+    registerEscape('sheet', () => closed.push('sheet')),
+    registerEscape('settings', () => closed.push('settings')),
+    registerEscape('dialog', () => closed.push('dialog')),
+  ];
+  assert.equal(closeTopLayer(), true);
+  assert.deepEqual(closed, ['dialog']);
+  offs[2]!();
+  assert.equal(closeTopLayer(), true);
+  assert.deepEqual(closed, ['dialog', 'settings']);
+  offs[1]!();
+  assert.equal(closeTopLayer(), true);
+  assert.deepEqual(closed, ['dialog', 'settings', 'sheet']);
+  offs[0]!();
+  assert.equal(closeTopLayer(), false);
+  assert.deepEqual(closed, ['dialog', 'settings', 'sheet']);
+});
+
+test('pageBehind: 設定はモーダルなので、後ろには直前に見ていたページを描く。直前が無ければ新しい会話', () => {
+  const tasks = parseRoute('#/tasks/t1');
+  assert.deepEqual(pageBehind(parseRoute('#/settings'), tasks), tasks, '設定の後ろは直前のページ（タスクの詳細まで）');
+  assert.deepEqual(pageBehind(parseRoute('#/settings'), parseRoute('#/c/a')), { page: 'chat', conversationId: 'a' });
+  assert.deepEqual(pageBehind(parseRoute('#/settings'), null), HOME_ROUTE, '設定を直接開いたときは新しい会話');
+  assert.deepEqual(HOME_ROUTE, { page: 'chat', conversationId: null });
+  assert.deepEqual(pageBehind(parseRoute('#/skills'), tasks), parseRoute('#/skills'), '設定でなければ、そのページ自身');
+  assert.deepEqual(parseRoute('#/settings/models'), { page: 'settings' }, '#/settings は今までどおり読める（通知のリンクも同じ）');
 });

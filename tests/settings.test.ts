@@ -6,7 +6,7 @@ import { getLanguagePreference, setLanguagePreference } from '../web/src/i18n/in
 import { ja } from '../web/src/i18n/ja.ts';
 import { adoptLanguageInDraft, configWithLanguage, loadPromptAnswer, savePromptAnswer, saveLanguage, shouldAskLanguage, withAdoptedLanguage } from '../web/src/language.ts';
 import {
-  addModel, addProvider, addTag, addToRoute, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, providerInUse, pruned,
+  addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, providerInUse, pruned,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -356,4 +356,21 @@ test('saveLanguage: 保存に失敗したら画面の言語は変えない', asy
   }) as typeof fetch;
   await assert.rejects(saveLanguage('en'));
   assert.equal(getLanguagePreference(), 'ja');
+});
+
+test('closeAction: 設定のモーダルを閉じるとき、保存していない変更があれば確かめ、保存している最中は待つ', () => {
+  assert.equal(closeAction({ dirty: 0, busy: false }), 'close', '変更が無ければそのまま閉じる');
+  assert.equal(closeAction({ dirty: 3, busy: false }), 'confirm', '変更があれば、捨てる前に確かめる');
+  assert.equal(closeAction({ dirty: 0, busy: true }), 'wait', '保存している最中は閉じない');
+  assert.equal(closeAction({ dirty: 2, busy: true }), 'wait');
+});
+
+test('設定のモーダルの辞書: 閉じる確かめの文は ja にも en にもあり、件数が入る', () => {
+  assert.match(ja['settings.discard.body'](3), /3/u);
+  assert.match(en['settings.discard.body'](1), /1 unsaved change /u);
+  assert.match(en['settings.discard.body'](2), /2 unsaved changes /u);
+  for (const key of ['settings.close', 'settings.discard.title', 'settings.discard.keep', 'settings.discard.do'] as const) {
+    assert.ok(ja[key] && en[key], key);
+    assert.notEqual(ja[key], en[key], `${key} は訳してある`);
+  }
 });

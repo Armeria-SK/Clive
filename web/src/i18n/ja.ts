@@ -313,6 +313,12 @@ export const ja = {
   'settings.bar.lastSaved': (time: string) => `最後に保存: ${time}`,
   'settings.bar.revert': '元に戻す',
   'settings.bar.save': '保存する',
+  // p0-4
+  'settings.close': '設定を閉じる',
+  'settings.discard.title': '変更を捨てますか',
+  'settings.discard.body': (n: number) => `${n} 件の変更を保存していません。このまま閉じると、変更は捨てられます。`,
+  'settings.discard.keep': '編集に戻る',
+  'settings.discard.do': '変更を捨てて閉じる',
   'settings.field.changed': '変更あり',
   'settings.field.reset': '既定に戻す',
   'settings.tag.add': (label: string) => `${label}に追加`,

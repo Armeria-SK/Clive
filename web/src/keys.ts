@@ -1,5 +1,6 @@
 // Esc は、開いている重なりを前から順に 1 つだけ閉じる。どれも開いていなければ呼び出し側の既定の動き（返事を止める）に回す。
-export const ESC_ORDER = ['palette', 'dialog', 'notification', 'model', 'sheet', 'drawer'] as const;
+// 設定（モーダル）は、確かめのダイアログとパレットの下、通知の吹き出しの下で、後ろのページのシートや引き出しの上。
+export const ESC_ORDER = ['palette', 'dialog', 'notification', 'settings', 'model', 'sheet', 'drawer'] as const;
 export type EscLayer = (typeof ESC_ORDER)[number];
 
 const open = new Map<EscLayer, () => void>();

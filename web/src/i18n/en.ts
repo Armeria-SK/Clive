@@ -316,6 +316,12 @@ export const en: Dict = {
   'settings.bar.lastSaved': time => `Last saved: ${time}`,
   'settings.bar.revert': 'Discard',
   'settings.bar.save': 'Save',
+  // p0-4
+  'settings.close': 'Close settings',
+  'settings.discard.title': 'Discard your changes?',
+  'settings.discard.body': n => `${n} unsaved ${n === 1 ? 'change' : 'changes'} will be lost if you close now.`,
+  'settings.discard.keep': 'Keep editing',
+  'settings.discard.do': 'Discard and close',
   'settings.field.changed': 'Changed',
   'settings.field.reset': 'Reset to default',
   'settings.tag.add': label => `Add to ${label}`,

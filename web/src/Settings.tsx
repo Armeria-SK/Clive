@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type ModelView, type Profile, type SettingsView } from './api.ts';
+import { ChatDialog } from './ChatDialog.tsx';
 import { useEscapeLayer, useSaveShortcut } from './hooks.ts';
 import { Icon } from './icons.tsx';
 import { applyServerSettings, formatDateTimeSmart, getLanguagePreference, useT } from './i18n/index.ts';
@@ -9,9 +10,10 @@ import { AccessConfirm } from './settings/AccessConfirm.tsx';
 import { accessKey, accessWidening, type Access } from './settings/access.ts';
 import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merge.ts';
 import {
-  blockUnload, countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
+  blockUnload, closeAction, countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
 import { SectionView } from './settings/SectionView.tsx';
+import { SettingsFrame } from './settings/SettingsFrame.tsx';
 import { toast } from './toast.tsx';
 import './styles/settings.css';
 
@@ -23,7 +25,10 @@ function loadSection(): SettingsSection {
 }
 
 
-export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
+interface Props { onProfile: (p: Profile) => void; open: boolean; leaving: boolean; onClose: () => void }
+
+// 設定は、今の画面の上に重ねるモーダル。open が false になったあとも、閉じる動きが終わる（leaving）まで描かれる。
+export function Settings({ onProfile, open, leaving, onClose }: Props) {
   const t = useT();
   const [view, setView] = useState<SettingsView | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -41,6 +46,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   const [reverts, setReverts] = useState(0);
   const [conflicted, setConflicted] = useState(false);
   const [confirm, setConfirm] = useState<{ items: Access[]; key: string } | null>(null);
+  const [askDiscard, setAskDiscard] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const pendingField = useRef<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
@@ -132,6 +138,13 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   }
   useSaveShortcut(() => { if (!confirm) void save(); });
   useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
+  // × ・Esc・背景で閉じるとき、保存していない変更があれば、捨てる前に確かめる
+  const requestClose = () => {
+    const action = closeAction({ dirty, busy });
+    if (action === 'close') onClose();
+    else if (action === 'confirm') setAskDiscard(true);
+  };
+  useEscapeLayer('settings', open && !askDiscard, requestClose);
 
   // 元に戻したら、画面の中だけに残っている入力（JSON の欄に書きかけの文字など）も捨てる
   const revert = () => { if (saved) { setDraft(saved); setProblems([]); setConflicted(false); setConfirm(null); setReverts(n => n + 1); } };
@@ -155,18 +168,37 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
 
   const meta = useMemo(() => SECTION_GROUPS.flatMap(g => g.items).find(i => i.id === section)!, [section]);
 
+  const frame = (children: ReactNode) => (
+    <SettingsFrame leaving={leaving} label={t('nav.settings')} closeLabel={t('settings.close')} onClose={requestClose}>
+      {children}
+      {askDiscard && (
+        <ChatDialog
+          title={t('settings.discard.title')} onClose={() => setAskDiscard(false)}
+          actions={(
+            <>
+              <button type="button" className="btn btn-ghost chat-plain" onClick={() => setAskDiscard(false)}>{t('settings.discard.keep')}</button>
+              <button type="button" className="btn btn-primary" onClick={onClose}>{t('settings.discard.do')}</button>
+            </>
+          )}
+        >
+          <p className="chat-dialog-text">{t('settings.discard.body', dirty)}</p>
+        </ChatDialog>
+      )}
+    </SettingsFrame>
+  );
+
   if (!saved || !draft || !view) {
-    return (
+    return frame(
       <section className="set-loading">
         <p className="muted">{loadFailed ? t('settings.loadFailed') : t('settings.loading')}</p>
         {loadFailed && <button className="btn btn-secondary" onClick={() => void load()}>{t('settings.retry')}</button>}
-      </section>
+      </section>,
     );
   }
 
   const dot = (id: SettingsSection) => sectionChanged(saved, draft, id) || problems.some(p => p.section === id) || (id === 'server' && restartRequired);
 
-  return (
+  return frame(
     <section className="set">
       <nav className="set-nav" ref={navRef} aria-label={t('nav.settings')}>
         <h1 className="set-nav-title">{t('nav.settings')}</h1>
@@ -240,6 +272,6 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
           </div>
         )}
       </div>
-    </section>
+    </section>,
   );
 }

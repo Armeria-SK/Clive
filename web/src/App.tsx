@@ -4,7 +4,7 @@ import { ActivityPanel } from './ActivityPanel.tsx';
 import { presenceOf } from './avatar.ts';
 import { Chat, type ConversationChange, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
-import { useEscapeLayer } from './hooks.ts';
+import { useEscapeLayer, useExit } from './hooks.ts';
 import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
@@ -18,7 +18,7 @@ import { notificationLink } from './notification-meta.ts';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { Palette } from './Palette.tsx';
 import { PAGE_META, pickChatModel } from './pages.ts';
-import { chatHash, parseRoute } from './routes.ts';
+import { chatHash, pageBehind, parseRoute, type Route } from './routes.ts';
 import { Runs } from './Runs.tsx';
 import { serverText, warningText } from './server-text.ts';
 import { Settings } from './Settings.tsx';
@@ -71,6 +71,7 @@ export function App() {
   const rootRef = useRef<HTMLDivElement>(null);
   const taskStatus = useRef(new Map<string, string>());
   const lastChatHash = useRef('#/');
+  const behindSettings = useRef<Route | null>(null);
   const taskConversations = useRef(new Map<string, string>());
 
   const refreshList = useCallback(() => {
@@ -133,8 +134,17 @@ export function App() {
     else if (mode === 'wide') setPanelOpen(loadPanelPreference());
   }, [mode]);
 
-  const current = route.page === 'chat' ? route.conversationId : null;
-  const tabState = useTabs(route, conversations, conversationsLoaded);
+  // 設定はモーダル。後ろには、設定を開く前に見ていたページを残して描く
+  if (route.page !== 'settings') behindSettings.current = route;
+  const shown = pageBehind(route, behindSettings.current);
+  const settingsOpen = route.page === 'settings';
+  const settingsExit = useExit(settingsOpen, 220);
+  const closeSettings = useCallback(() => {
+    if (behindSettings.current) history.back();
+    else location.replace('#/');
+  }, []);
+  const current = shown.page === 'chat' ? shown.conversationId : null;
+  const tabState = useTabs(shown, conversations, conversationsLoaded);
   useEffect(() => { if (route.page === 'chat') lastChatHash.current = chatHash(route.conversationId); }, [route]);
 
   // 「いまの動き」は、広い画面では右のパネル。#/today（古い通知のリンクなど）は、パネルを開いて直前の会話に戻す
@@ -389,9 +399,9 @@ export function App() {
     const running = worker?.running;
     if (running) location.hash = running.kind === 'task' && running.taskId ? `#/tasks/${encodeURIComponent(running.taskId)}` : '#/runs/reviews';
   };
-  const title = route.page === 'chat'
+  const title = shown.page === 'chat'
     ? (current ? conversations.find(c => c.id === current)?.title ?? t('conversation.untitled') : t('tab.newChat'))
-    : t(PAGE_META[route.page].label);
+    : t(PAGE_META[shown.page].label);
   const pane = (
     <ActivityPanel
       variant={narrow ? 'page' : 'side'} open={panelOpen} overlay={mode === 'mid'} profile={profile} presence={presence}
@@ -400,13 +410,13 @@ export function App() {
       onOpenApproval={openApproval} onClose={() => showPanel(false)}
     />
   );
-  const viewKey = route.page === 'chat' ? `chat:${current ?? 'new'}` : route.page;
+  const viewKey = shown.page === 'chat' ? `chat:${current ?? 'new'}` : shown.page;
 
   return (
     <div className="shell" ref={rootRef} data-mode={mode}>
       <div className="shell-body">
         <Sidebar
-          mode={mode} drawerOpen={drawerOpen} route={route} profile={profile} presence={presence}
+          mode={mode} drawerOpen={drawerOpen} route={shown} profile={profile} presence={presence}
           conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
           waitingCount={waiting.size} restartRequired={restartRequired}
           onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
@@ -424,7 +434,7 @@ export function App() {
             )}
           <LanguagePrompt />
           <div className="content" key={viewKey}>
-            {route.page === 'chat' && (
+            {shown.page === 'chat' && (
               <Chat
                 key={current ?? 'new'}
                 conversationId={current}
@@ -441,20 +451,19 @@ export function App() {
                 onConversationChanged={onConversationChanged}
               />
             )}
-            {route.page === 'today' && narrow && pane}
-            {route.page === 'tasks' && (
+            {shown.page === 'today' && narrow && pane}
+            {shown.page === 'tasks' && (
               <TasksPage
-                taskId={route.taskId} section={route.section} revision={taskRevision + approvals.length} worker={worker}
+                taskId={shown.taskId} section={shown.section} revision={taskRevision + approvals.length} worker={worker}
                 runStartedAt={runningId ? runStarts[runningId] : undefined} onNewTask={openNewTask}
               />
             )}
-            {route.page === 'notifications' && (
+            {shown.page === 'notifications' && (
               <NotificationsPage items={notifications} failed={notificationsFailed} unread={unread} onReadAll={readAllNotifications} onOpenItem={openNotification} />
             )}
-            {route.page === 'settings' && <Settings onProfile={setProfile} />}
-            {route.page === 'runs' && <Runs tab={route.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
-            {route.page === 'memory' && <Memory revision={memoryRevision} />}
-            {route.page === 'skills' && <SkillsPage target={route.target} revision={notificationRevision} />}
+            {shown.page === 'runs' && <Runs tab={shown.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
+            {shown.page === 'memory' && <Memory revision={memoryRevision} />}
+            {shown.page === 'skills' && <SkillsPage target={shown.target} revision={notificationRevision} />}
           </div>
         </main>
         {!narrow && pane}
@@ -474,6 +483,7 @@ export function App() {
         open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
         onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
+      {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} />}
       <NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} />
       <ToastHost mode={mode} />
       <Tooltip disabled={narrow} />

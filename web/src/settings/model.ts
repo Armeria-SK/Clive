@@ -179,6 +179,12 @@ export function removeFromRoute(config: Config, route: Route, id: string): Confi
   return { ...config, routing: { ...config.routing, [route]: (config.routing[route] as string[]).filter(m => m !== id) } };
 }
 
+// 設定のモーダルを閉じようとしたとき（× ・Esc・背景）にどうするか。保存している最中は待つ。保存していない変更があれば、捨てる前に確かめる。
+export function closeAction(state: { dirty: number; busy: boolean }): 'close' | 'confirm' | 'wait' {
+  if (state.busy) return 'wait';
+  return state.dirty > 0 ? 'confirm' : 'close';
+}
+
 // 保存していない編集があるまま、ページを閉じる・読み直すときに、ブラウザの確認を出させる（beforeunload）。
 export function blockUnload(event: { preventDefault: () => void; returnValue?: unknown }): void {
   event.preventDefault();

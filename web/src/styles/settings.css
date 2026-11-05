@@ -1,4 +1,4 @@
-/* 設定の画面（左に節の一覧、右に中身、下に保存の帯）。「Clive も英語にしますか」の帯もここ。 */
+/* 設定の画面（左に節の一覧、右に中身、下に保存の帯）。モーダルの枠は末尾。「Clive も英語にしますか」の帯もここ。 */
 .set-loading { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 34px 36px; }
 .set { display: flex; flex-direction: row; }
 .set-nav { display: flex; flex-direction: column; flex: none; gap: 2px; width: 232px; padding: 30px 12px 20px; border-right: 1px solid var(--color-divider); overflow: auto; scrollbar-width: none; box-sizing: border-box; }
@@ -162,3 +162,25 @@
 .set-widen ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
 .set-widen-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .shell[data-mode="narrow"] .set-widen { margin: 0 14px 12px; }
+
+/* 設定のモーダル（画面全体に重ねる。狭い幅では下から出る全画面のシート。中身の幅は min(1080px, 92vw)） */
+@keyframes cl-set-in { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+@keyframes cl-set-out { to { opacity: 0; transform: translateY(10px) scale(.98); } }
+@keyframes cl-set-sheet-in { from { transform: translateY(100%); } }
+@keyframes cl-set-sheet-out { to { transform: translateY(100%); } }
+.set-backdrop { position: absolute; inset: 0; z-index: 40; background: color-mix(in srgb, var(--color-neutral-900) 42%, transparent); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); animation: cl-fade .24s ease; }
+.set-backdrop.leaving { animation: cl-fade-out .22s ease-in forwards; }
+.set-wrap { position: absolute; inset: 0; z-index: 41; display: grid; place-items: center; padding: 24px; pointer-events: none; }
+.set-modal { pointer-events: auto; position: relative; display: flex; flex-direction: column; width: min(1080px, 92vw); height: min(760px, 100%); overflow: hidden; box-sizing: border-box; border-radius: var(--radius-lg); background: var(--color-bg); box-shadow: var(--shadow-lg); animation: cl-set-in .34s cubic-bezier(.16, 1, .3, 1); }
+.set-modal:focus { outline: none; }
+.set-modal.leaving { pointer-events: none; animation: cl-set-out .22s cubic-bezier(.4, 0, 1, 1) forwards; }
+.set-modal > .set, .set-modal > .set-loading { flex: 1 1 0; min-height: 0; }
+.set-close { position: absolute; top: 10px; right: 10px; z-index: 2; width: 32px; height: 32px; color: inherit; }
+.set-modal .set-inner { padding-top: 44px; }
+.set-modal .set-nav { padding-top: 40px; }
+.shell[data-mode="narrow"] .set-wrap { place-items: end stretch; padding: 0; }
+.shell[data-mode="narrow"] .set-modal { width: 100%; height: 100%; border-radius: 0; animation-name: cl-set-sheet-in; }
+.shell[data-mode="narrow"] .set-modal.leaving { animation-name: cl-set-sheet-out; }
+.shell[data-mode="narrow"] .set-modal .set-nav { padding: 8px 52px 8px 10px; }
+.shell[data-mode="narrow"] .set-modal .set-inner { padding-top: 22px; }
+.shell[data-mode="narrow"] .set-modal .set-close { top: 6px; right: 6px; background: var(--color-bg); }

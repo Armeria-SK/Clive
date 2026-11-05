@@ -10,6 +10,13 @@ export type Route =
 
 export type Page = Route['page'];
 
+// 設定はモーダルで開くので、後ろには直前に開いていたページを残して描く。直前が無ければ（設定を直接開いたとき）新しい会話。
+export const HOME_ROUTE: Route = { page: 'chat', conversationId: null };
+
+export function pageBehind(route: Route, previous: Route | null): Route {
+  return route.page === 'settings' ? previous ?? HOME_ROUTE : route;
+}
+
 // 通知はリンクの文字列をデータベースに残すので、古い経路もずっと受け付ける。
 // 行き先が新しい画面に移る段階では、ここの返り値を変える。
 export function parseRoute(hash: string): Route {
