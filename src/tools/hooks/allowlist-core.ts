@@ -10,7 +10,11 @@ export const worstLevel = (a: Level, b: Level): Level => (RANK[a] >= RANK[b] ? a
 
 // 判定の理由。exempt: 持ち主が tools.shell.allow に書いたコマンドで外せる（「一覧に無いコマンド・フラグ・形」の確かめだけ。§11.6）
 export interface Reason { key: GuardMessageKey; params: Record<string, string | number>; level: Level; exempt: boolean }
-export interface PathRef { word: Word; mode: 'read' | 'write'; recursive: boolean }
+// list: パイプで次のコマンドに流れるファイル（Get-ChildItem の出力など）として読まれる。word は一覧の元のパスで、フォルダなら中のファイル（deep なら下の階層まで）を読むものとして調べる。
+// items: フォルダの中身ではなく、当たったもの自身（Get-Item・Resolve-Path）。filter/include/exclude: 名前の絞り込み（絞り込みが分からないときは空 = すべて）
+export interface ListSpec { deep: boolean; items: boolean; filter: string[]; include: string[]; exclude: string[] }
+// strict: スクリプトブロックの中。パスが分からない読み取りは、確かめでなく今回だけにする
+export interface PathRef { word: Word; mode: 'read' | 'write'; recursive: boolean; list?: ListSpec; strict?: boolean }
 // 書き込み先を組み立てて調べるもの（11.4）。copy: cp・mv・Copy-Item・Move-Item（先がフォルダなら 先/元の名前）、join: New-Item -Path p -Name n（p/n）、rename: Rename-Item（親/n）
 export interface CopyUse { kind: 'copy' | 'join' | 'rename'; sources: Word[]; dest: Word | null; name: Word | null; recursive: boolean; dirFlag: boolean; noTargetDir: boolean }
 // remotes: push の宛先に使える remote の名前（設定に remote.<名前>.url があるもの）。無い名前は、git がフォルダ・URL として扱う
@@ -64,7 +68,9 @@ export class Acc {
     if (level === 'allow') return;
     this.reasons.push({ key, params, level, exempt });
   }
-  read(word: Word, recursive = false): void { this.paths.push({ word, mode: 'read', recursive }); }
+  strict = false;
+  read(word: Word, recursive = false): void { this.paths.push({ word, mode: 'read', recursive, ...(this.strict ? { strict: true } : {}) }); }
+  readList(word: Word, list: ListSpec): void { this.paths.push({ word, mode: 'read', recursive: false, list }); }
   write(word: Word, recursive = false): void { this.paths.push({ word, mode: 'write', recursive }); }
   result(): StatementResult {
     let level: Level = 'allow';

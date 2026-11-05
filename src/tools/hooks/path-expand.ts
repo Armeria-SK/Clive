@@ -90,6 +90,34 @@ export function expandGlob(pattern: string, dotfiles: boolean): Globbed {
   return { prefix, matches, complete: true };
 }
 
+const LIST_CAP = 20_000;
+
+// PowerShell のワイルドカードを、名前 1 つに当てる（大文字小文字は、Windows では区別しない）
+export function wildcardMatches(name: string, pattern: string): boolean {
+  return segmentRegex(pattern, WINDOWS, true).test(name);
+}
+
+// フォルダの中身（deep なら下の階層まで）の一覧。幅優先で、上限を超えたら途中まで返して complete: false。入れないフォルダ・たどれないリンクがあっても complete: false
+export function listTree(dir: string, deep: boolean, cap = LIST_CAP): { entries: string[]; complete: boolean } {
+  const entries: string[] = [];
+  const queue = [dir];
+  let complete = true;
+  while (queue.length) {
+    const current = queue.shift()!;
+    let items: import('node:fs').Dirent[];
+    try { items = readdirSync(current, { withFileTypes: true }); } catch { complete = false; continue; }
+    for (const item of items) {
+      const full = join(current, item.name);
+      entries.push(full);
+      if (entries.length >= cap) return { entries, complete: false };
+      if (!deep) continue;
+      if (item.isSymbolicLink()) { if (isDirectory(full)) complete = false; continue; }
+      if (item.isDirectory()) queue.push(full);
+    }
+  }
+  return { entries, complete };
+}
+
 // フォルダの下に .git という名前のものがあるか（深さと件数に上限。超えたら「ある」とみなす）
 export function containsDotGit(dir: string): boolean {
   let seen = 0;

@@ -3,6 +3,7 @@
 
 import { Acc, bashVarOk, envAssignOk, psVarOk, worstLevel, type Level, type MatchCtx, type RepoInfo, type StatementResult } from './allowlist-core.ts';
 import { runGit } from './allowlist-git.ts';
+import { pipeBound } from './allowlist-pipe.ts';
 import { parsePs, psCmdlet, runFindstr, runPsSimple, winArgs, withWildcard } from './allowlist-ps.ts';
 import { toolFor } from './allowlist-tools.ts';
 import { isPowerShell, lexShell, type LexFail, type ShellKind, type Statement, type Word } from './shell-lex.ts';
@@ -15,6 +16,8 @@ const NULL_SINK = /^(?:\/dev\/null|\$null|nul)$/iu;
 // PowerShell から起こしてよい外部のプログラム（git・rg・tar・言語の道具は allowlist-tools.ts と同じ表）
 const PS_EXTERNAL_TOOLS = new Set(['rg', 'tar', 'curl', 'node', 'nodejs', 'python', 'python3', 'py', 'deno', 'bun', 'go', 'cargo', 'rustc', 'tsc', 'npm', 'pnpm', 'yarn', 'pip', 'pip3', 'pipx', 'uv', 'poetry', 'conda', 'gem', 'composer', 'pdm', 'hatch']);
 const PS_SIMPLE = new Set(['whoami', 'hostname', 'ipconfig', 'tree', 'tree.com', 'where.exe']);
+// パイプに文字だけを流す外部のプログラム
+const isExternalText = (name: string): boolean => name === 'git' || name === 'findstr' || PS_EXTERNAL_TOOLS.has(name) || PS_SIMPLE.has(name);
 
 export type { StatementResult, MatchCtx, RepoInfo, Level };
 
@@ -73,6 +76,7 @@ function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx
       const p = parsePs(spec, words, acc, ctx);
       spec.extra?.(p, acc, ctx, st);
       if (acc.pipeWrite) { if (st.pipedIn) acc.add('once', 'list.pipe_write', {}, false); else acc.pipeWrite = false; }
+      pipeBound(spec, p, st, acc, ctx, isExternalText);
       return;
     }
   }
@@ -92,6 +96,7 @@ function runPs(key: string, exe: boolean, st: Statement, acc: Acc, ctx: MatchCtx
 
 export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   const acc = new Acc();
+  acc.strict = st.inBlock === true;
   const ps = isPowerShell(ctx.shell);
   shapes(st, acc);
   redirects(st, acc, ps);

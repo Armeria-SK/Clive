@@ -110,8 +110,8 @@ export function parsePs(spec: PsCmd, words: readonly Word[], acc: Acc, ctx: Matc
   return { named, positional, all };
 }
 
-const first = (p: PsParsed, ...keys: string[]): Word[] => keys.flatMap(k => p.named.get(k) ?? []);
-const pathWords = (p: PsParsed): Word[] => first(p, 'path', 'literalpath').flatMap(splitList);
+export const first = (p: PsParsed, ...keys: string[]): Word[] => keys.flatMap(k => p.named.get(k) ?? []);
+export const pathWords = (p: PsParsed): Word[] => first(p, 'path', 'literalpath').flatMap(splitList);
 
 // ── 読む ──
 cmd('get-childitem gci ls dir', 'Path:path-r LiteralPath:path-r Filter:s Include:s Exclude:s Recurse Depth:n File Directory Hidden Force Name', 'path');

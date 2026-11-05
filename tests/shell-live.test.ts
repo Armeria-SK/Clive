@@ -129,6 +129,35 @@ test('実機（Windows PowerShell 5.1・制限モード）: 組み立てた書�
   }
 });
 
+// 審査の指摘（深い審査）: パスの引数が無い Set-Content・Clear-Content は、パイプで流れてきたファイルの PSPath を束縛して、本当に書き換えた。
+// 読む側も、`Get-ChildItem -Force | Select-String -Pattern SECRET` が .env を読んだ。本物の Windows PowerShell 5.1（制限モード）で、動かないことと、文字だけ・秘密のない一覧は動くことを確かめる
+test('実機（Windows PowerShell 5.1・制限モード）: パイプで流れてくるファイルへの書き込みは確かめになり、秘密を含む一覧の読み取りは止まる。文字や秘密のない一覧は動く', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  for (const command of [
+    'Get-Item SOUL.md | Set-Content -Value pwned', 'Get-ChildItem tmp -Recurse -File | Set-Content -Value x', 'Get-ChildItem | ForEach-Object { $_ | Set-Content -Value x }', 'Get-ChildItem -Recurse -File | Clear-Content',
+    'Get-ChildItem | ForEach-Object { $_ | Select-String line }', 'Get-ChildItem sub | ForEach-Object { Get-Content $_.FullName }',
+  ]) await expectAsk(s, command);
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '人格が書き換わった');
+  assert.equal(readFileSync(s.files('tmp/SOUL.md'), 'utf8'), 'evil persona');
+  assert.equal(readFileSync(s.files('a.txt'), 'utf8'), 'line1\nline2\nline3\n');
+  assert.equal(readFileSync(s.files('sub/b.txt'), 'utf8'), 'bee\n');
+  for (const command of ['Get-ChildItem -Force | Select-String -Pattern SECRET', 'Get-ChildItem -Force | Get-Content', 'Get-ChildItem -Force | Get-FileHash', 'Get-ChildItem -Recurse | Select-String -Pattern SECRET']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
+  }
+  for (const [command, expected] of [
+    ['Get-Content a.txt | Select-String line2', /line2/u], ['Get-ChildItem sub | Select-String bee', /bee/u], ['Get-ChildItem -Filter *.txt | Select-String line3', /line3/u],
+    ['Get-ChildItem sub -Recurse | Get-Content', /bee/u], ['Get-ChildItem -Recurse -Include *.md | Select-String persona', /persona/u],
+  ] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
 const bashPath = which('bash');
 const bashAvailable = bashPath !== undefined && spawnSync(bashPath, ['--noprofile', '--norc', '-c', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
 

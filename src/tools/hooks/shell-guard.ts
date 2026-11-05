@@ -7,7 +7,7 @@ import { classifyStatements, type CopyUse, type MatchCtx, type PathRef, type Rea
 import { codeFindings } from './code-guard.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
-import { containsDotGit, exists, expandGlob, isDirectory, protectedInside } from './path-expand.ts';
+import { containsDotGit, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
 import { containsToolConfig, curlConfigFile, isToolConfigPath, wgetConfigFile, type Env } from './tool-config.ts';
 import { expandPath, isInside, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
@@ -269,7 +269,9 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       const expanded = resolveWord(ref.word, base, windows, language);
       if ('unresolved' in expanded) {
         if (primary) paths.push({ input, placement: { kind: 'unresolved', reason: expanded.unresolved }, write });
-        if (write) addCode(text('list.write_dynamic', { input })); else add('ask', text('list.read_dynamic', { input }));
+        if (write) addCode(text('list.write_dynamic', { input }));
+        else if (ref.strict) addCode(text('list.read_dynamic', { input }));
+        else add('ask', text('list.read_dynamic', { input }));
         continue;
       }
       const globbing = ref.word.glob && !ref.word.dynamic;
@@ -286,7 +288,24 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         } else if (write) rangeCheck(globbed.prefix);
         else add('ask', text('list.wild_many', { input }));
       } else if (write && ref.recursive && isDirectory(expanded.path)) rangeCheck(expanded.path);
+      if (ref.list) listCheck(ref, base, expanded.path, globbing);
     }
+  };
+
+  // パイプで次のコマンドに流れるファイル（Get-ChildItem の出力など）は、次のコマンドが読む。フォルダなら中のファイルを、読むものとして調べる
+  const listCheck = (ref: PathRef, base: string, root: string, globbing: boolean): void => {
+    const list = ref.list!;
+    const heads = globbing ? expandGlob(patternOf(ref.word, base, windows), dotfiles) : { matches: [root], complete: true };
+    let complete = heads.complete;
+    const wanted = (name: string): boolean => (list.filter.length === 0 || list.filter.some(p => wildcardMatches(name, p)))
+      && (list.include.length === 0 || list.include.some(p => wildcardMatches(name, p))) && !list.exclude.some(p => wildcardMatches(name, p));
+    for (const head of heads.matches) {
+      if (list.items || !isDirectory(head)) { evalAbs(head, head, false, false, false); continue; }
+      const tree = listTree(head, list.deep);
+      complete = complete && tree.complete;
+      for (const entry of tree.entries) if (wanted(basename(entry)) || isDirectory(entry)) evalAbs(entry, entry, false, false, false);
+    }
+    if (!complete) add('ask', text('list.wild_many', { input: ref.word.text }));
   };
 
   // cp・mv・Copy-Item・Move-Item・Rename-Item・New-Item: 実際に書かれるパスを組み立てて調べる

@@ -31,6 +31,10 @@ export interface Statement {
   assigns: Assign[];
   pipedIn: boolean;
   pipedOut: boolean;
+  // パイプで直前に流れてくる文（pipedIn のとき）
+  upstream?: Statement;
+  // スクリプトブロックの中の文
+  inBlock?: boolean;
   background: boolean;
   // 形そのものが今回だけになる理由の印（関数の定義・呼び出し演算子・splatting・許していない型など）
   shapes: string[];
@@ -560,10 +564,13 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
 
   const pipeline = (depth: number): LexFail | null => {
     let pipedIn = false;
+    let prev: Statement | undefined;
     for (;;) {
       const st = element(depth);
       if (isFail(st)) return st;
       st.pipedIn = pipedIn;
+      if (prev) st.upstream = prev;
+      prev = st;
       const p = peek();
       if (isP(p, '|')) { k++; skipNl(); st.pipedOut = true; pipedIn = true; continue; }
       return null;
@@ -575,7 +582,9 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     const before = sink.length;
     const r = statements('}', depth + 1);
     if (r) return r;
-    return plain('{…}', { kind: 'block', dynamic: true, block: sink.slice(before) });
+    const inner = sink.slice(before);
+    for (const st of inner) st.inBlock = true;
+    return plain('{…}', { kind: 'block', dynamic: true, block: inner });
   };
 
   const hashtable = (depth: number): Word | LexFail => {
