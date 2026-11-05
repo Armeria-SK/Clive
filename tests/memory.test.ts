@@ -3,7 +3,6 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import { Conversations } from '../src/db/conversations.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
@@ -11,7 +10,7 @@ import type { RunEvent, StopReason } from '../src/engine/types.ts';
 import { readHistory, searchHistory } from '../src/memory/history.ts';
 import { MemoryError, MemoryStore, renderBooks } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function store(caps = { user: 200, notes: 300 }) {
   const db = openDatabase(':memory:', MIGRATIONS);
@@ -97,7 +96,7 @@ async function app(t: { after: (fn: () => void) => void }) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   writeFileSync(join(paths.workspace, 'SOUL.md'), '# SOUL\n名前は Clive');
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };

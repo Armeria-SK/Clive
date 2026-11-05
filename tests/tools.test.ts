@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
-import { defaultConfig, parseConfig } from '../src/config/store.ts';
+import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
@@ -16,14 +16,14 @@ import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { runProcess, scrubEnv } from '../src/tools/shell/runner.ts';
 import type { ToolContext } from '../src/tools/types.ts';
-import { tempDir } from './helpers.ts';
+import { tempDir, testConfig } from './helpers.ts';
 
 function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => void = () => undefined) {
   const paths: AppPaths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   mkdirSync(join(paths.data, 'reference'), { recursive: true });
   writeFileSync(join(paths.data, 'reference', 'doc.md'), '参照用の文書');
-  const config = defaultConfig();
+  const config = testConfig();
   config.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }];
   mutate(config);
   const parsed = parseConfig(config);

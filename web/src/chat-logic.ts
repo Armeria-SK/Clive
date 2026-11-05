@@ -24,6 +24,7 @@ export interface SendFailure {
   message: string;
   hint: string | null;
   context: boolean;
+  noModels: boolean;
   body: unknown;
 }
 
@@ -60,9 +61,10 @@ export function noUsableText(body: unknown, models: readonly ModelView[], langua
 }
 
 export function sendFailureOf(error: unknown, fallback: string, models: readonly ModelView[] = []): SendFailure {
-  if (!(error instanceof ApiError)) return { message: fallback, hint: null, context: false, body: null };
+  if (!(error instanceof ApiError)) return { message: fallback, hint: null, context: false, noModels: false, body: null };
   const body = asRecord(error.body);
   return {
+    noModels: body?.errorCode === 'engine.no_usable' && Array.isArray(body.problems) && body.problems.length === 0,
     message: noUsableText(error.body, models, getLanguage()) ?? error.message,
     hint: text(asRecord(body?.detail)?.hint),
     context: (body?.errorKind ?? body?.error) === 'context_overflow',

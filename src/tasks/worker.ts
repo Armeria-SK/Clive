@@ -220,6 +220,8 @@ export class Worker {
         this.#schedule(Math.max(1000, Math.min(at ?? Infinity, now + IDLE_POLL_MS) - now));
       };
       if (!c.worker.enabled) { reschedule(); return 'disabled'; }
+      // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
+      if (!c.models.length) { reschedule(); return 'no_model'; }
 
       // 予定から実行用のタスクを作る・返事待ちを知らせ直す（どちらもモデルは呼ばない）
       tasks.spawnDueSchedules();

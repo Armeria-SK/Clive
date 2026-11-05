@@ -120,7 +120,7 @@
     "problem.unchecked": "まだ確認していません",
     "problem.hint_suffix": "（{hint}）",
     "problem.line": "・{id}: {message}{hintPart}",
-    "problem.none": "・routing.chat にモデルがありません",
+    "problem.none": "・モデルがまだ設定されていません（設定の「モデル」で足してください）",
     "no_usable": "使えるモデルがないため送信しませんでした。設定画面で確認してください。\n{lines}",
     "tool.invalid_streak": "モデルが正しい形でツールを呼べませんでした（{count} 回続けて）。ツールに強いモデルに替えるか、toolMode を json_fallback にしてください",
     "tool.invalid_streak_hint": "models[].toolMode を json_fallback にするか、maxTools で数を絞ってください",

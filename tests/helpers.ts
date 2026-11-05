@@ -3,13 +3,27 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
+import type { AppConfig, ModelConfig, ProviderConfig } from '../src/config/schema.ts';
+import { defaultConfig } from '../src/config/store.ts';
 import type { ModelRequest, ProbeResult, ProviderAdapter, StreamEvent } from '../src/providers/types.ts';
 
 export function tempDir(t: { after: (fn: () => void) => void }): string {
   const dir = mkdtempSync(join(tmpdir(), 'clive-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
+}
+
+// 初期値（defaultConfig）はモデルを持たないので、モデルが要るテストはこの設定から始める。
+export function testConfig(): AppConfig {
+  return {
+    ...defaultConfig(),
+    models: [
+      { id: 'claude-sonnet', label: 'Claude Sonnet 5.5', provider: 'anthropic', model: 'claude-sonnet-5-5', minContext: 65536, maxOutputTokens: 8192, toolMode: 'native', vision: true },
+      { id: 'claude-haiku', label: 'Claude Haiku 5.5', provider: 'anthropic', model: 'claude-haiku-5-5', minContext: 65536, maxOutputTokens: 8192, toolMode: 'native', vision: true },
+      { id: 'local', label: 'ローカル（Ollama）', provider: 'ollama', model: 'qwen3:32b', contextLength: 65536, minContext: 65536, maxOutputTokens: 8192, toolMode: 'native', vision: false },
+    ],
+    routing: { chat: ['claude-sonnet'], background: ['claude-haiku'], retriesPerModel: 2 },
+  };
 }
 
 export interface FakeServer { url: string; requests: Array<{ method: string; path: string; body: any; headers: IncomingMessage['headers'] }>; close: () => Promise<void> }

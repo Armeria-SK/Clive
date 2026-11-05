@@ -3,6 +3,7 @@ import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
 import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
+import { candidateModelIds } from '../engine/chat.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
@@ -134,8 +135,10 @@ export function createWebServer(app: App): WebServer {
     }
     if (images.length) {
       const config = app.config();
-      const vision = config.routing.chat.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
-      if (!vision) throw problem(409, 'no_vision', 'no_vision');
+      const candidates = candidateModelIds(config, 'chat');
+      // 候補が 1 つも無い（モデルが 0 個）ときは画像の話の前に、エンジンの「使えるモデルがない」案内に任せる
+      const vision = candidates.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
+      if (candidates.length && !vision) throw problem(409, 'no_vision', 'no_vision');
     }
     const attachments: AttachmentMeta[] = uploads.map(u => ({ id: u.id, name: u.name, kind: u.kind }));
     const content = [text || engineText(languageOf(app.config()), images.length ? 'attachment.image' : 'attachment.file'), ...blocks].join('\n\n');

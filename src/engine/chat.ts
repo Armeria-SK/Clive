@@ -74,6 +74,13 @@ export type SendOutcome =
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
 
+// 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
+// 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
+export function candidateModelIds(config: AppConfig, route: 'chat' | 'background'): string[] {
+  const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
+  return preferred.length ? [...preferred] : config.models.map(m => m.id);
+}
+
 type Failure = { kind: EngineErrorKind; message: string; code?: string; params?: MessageParams; retryable: boolean; detail?: ContextDetail; route?: Route };
 
 type CallResult =
@@ -194,8 +201,7 @@ export class ChatEngine {
   #chain(route: 'chat' | 'background'): { usable: Route[]; problems: ModelProblem[] } {
     const config = this.#d.config();
     const language = languageOf(config);
-    const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
-    const ids = preferred.length ? preferred : config.models.map(m => m.id);
+    const ids = candidateModelIds(config, route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];

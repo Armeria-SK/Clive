@@ -4,12 +4,11 @@ import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { WebAuth } from '../src/web/auth.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, reply, tempDir } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, testConfig } from './helpers.ts';
 
 const req = (headers: Record<string, string>, method = 'GET') => ({ headers, method } as unknown as IncomingMessage);
 
@@ -30,7 +29,7 @@ test('認証: Host・Origin・Sec-Fetch-Site・Tailscale を確かめる', () =>
 async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, models?: ModelConfig[]) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = models ?? [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: config.models.map(m => m.id), background: [], retriesPerModel: 0 };

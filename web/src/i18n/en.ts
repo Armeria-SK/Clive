@@ -948,4 +948,6 @@ export const en: Dict = {
   'curiosity.drop': 'Drop',
   'curiosity.reopen': 'Wonder again',
   'curiosity.viewTask': 'View task',
+  // p0-6
+  'chat.send.setupModel': 'Set up a model',
 };

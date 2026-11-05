@@ -303,7 +303,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   if (failure) {
     push('send-failure', 'fail', failure.context
       ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} />
-      : <SendErrorCard message={failure.message} hint={failure.hint} />);
+      : <SendErrorCard message={failure.message} hint={failure.hint} setup={failure.noModels} />);
   }
 
   useEffect(() => {

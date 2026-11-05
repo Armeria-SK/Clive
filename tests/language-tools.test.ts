@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig, Language } from '../src/config/schema.ts';
-import { defaultConfig, parseConfig } from '../src/config/store.ts';
+import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
@@ -20,7 +20,7 @@ import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
-import { FakeAdapter, tempDir } from './helpers.ts';
+import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
 const pick = <T>(language: Language, ja: T, en: T): T => (language === 'ja' ? ja : en);
@@ -29,7 +29,7 @@ function setup(t: { after: (fn: () => void) => void }, language: Language, mutat
   const paths: AppPaths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   mkdirSync(join(paths.data, 'reference'), { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.language = language;
   config.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }];
   mutate(config);
@@ -173,7 +173,7 @@ test('承認の理由（英語）: シェルの判定の理由に日本語が混
 async function appFor(t: { after: (fn: () => void | Promise<void>) => void }, language: Language) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.language = language;
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];

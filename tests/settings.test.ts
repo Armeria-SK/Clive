@@ -357,3 +357,21 @@ test('saveLanguage: 保存に失敗したら画面の言語は変えない', asy
   await assert.rejects(saveLanguage('en'));
   assert.equal(getLanguagePreference(), 'ja');
 });
+
+test('モデルを足したとき、チャットも裏方も空の順番には、今の候補（設定のモデル全部）に新しいモデルを足して入れる', () => {
+  const empty = { ...sample(), models: [], routing: { chat: [], background: [], retriesPerModel: 1 } };
+  const first = addModel(empty);
+  assert.deepEqual(first.config.routing, { chat: ['new-model'], background: ['new-model'], retriesPerModel: 1 }, '最初のモデルは、チャットにも裏方にも入る');
+  const second = addModel(first.config);
+  assert.deepEqual(second.config.routing.chat, ['new-model'], '順番がもうあれば、2 つ目からは自分で入れる');
+  assert.deepEqual(second.config.routing.background, ['new-model']);
+
+  const hollow = { ...sample(), routing: { chat: [], background: [], retriesPerModel: 1 } };
+  const added = addModel(hollow);
+  assert.deepEqual(added.config.routing.chat, ['big', 'sonnet', 'new-model'], '今まで候補だったモデルを外さない');
+  assert.deepEqual(added.config.routing.background, ['big', 'sonnet', 'new-model']);
+
+  const oneEmpty = { ...sample(), routing: { chat: ['big'], background: [], retriesPerModel: 1 } };
+  assert.deepEqual(addModel(oneEmpty).config.routing, oneEmpty.routing, '片方でも順番があるときは触らない（裏方が空ならチャットの順番を使う）');
+  assert.deepEqual(addModel(sample()).config.routing, sample().routing, '順番があるときは触らない');
+});

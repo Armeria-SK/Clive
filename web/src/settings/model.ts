@@ -136,7 +136,11 @@ export function addModel(config: Config): { config: Config; id: string } {
   const providers = config.providers as Array<{ id: string }>;
   const id = uniqueId('new-model', (config.models as Array<{ id: string }>).map(m => m.id));
   const model = { id, label: '', provider: providers[0]?.id ?? '', model: '', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: false };
-  return { config: { ...config, models: [...config.models, model] }, id };
+  const ids = (config.models as Array<{ id: string }>).map(m => m.id);
+  const routing = config.routing as { chat: string[]; background: string[] };
+  // チャットも裏方も順番が空のときは、サーバーが設定のモデル全部を候補にする。足したモデルが他のモデルを押しのけないよう、今の候補に足した順番にする
+  const filled = routing.chat.length === 0 && routing.background.length === 0 ? { ...routing, chat: [...ids, id], background: [...ids, id] } : routing;
+  return { config: { ...config, models: [...config.models, model], routing: filled }, id };
 }
 
 export function removeModel(config: Config, id: string): Config {

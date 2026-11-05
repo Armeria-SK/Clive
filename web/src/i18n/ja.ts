@@ -945,4 +945,6 @@ export const ja = {
   'curiosity.drop': 'やめる',
   'curiosity.reopen': 'また気にする',
   'curiosity.viewTask': 'タスクを見る',
+  // p0-6
+  'chat.send.setupModel': 'モデルを設定する',
 } as const;
