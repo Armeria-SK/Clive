@@ -918,3 +918,35 @@ for (const shell of ['powershell', 'bash'] as const) {
     assert.equal(existsSync(marker), true, '許したのに、フォルダのフックが動かない');
   });
 }
+
+// 9 回目の審査（高）: `cp -r secrets stuff; cat stuff/token.txt` は、素のシェルでは秘密のフォルダの中身を表示する。Clive のシェルでは、動かす前に止まり、コピー先もできず、中身も出ない
+function seedSecretFolder(s: ReturnType<typeof setup>): void {
+  for (const dir of ['secrets', 'proj', 'stuff', 'stuff2']) rmSync(s.files(dir), { recursive: true, force: true });
+  mkdirSync(s.files('secrets'), { recursive: true });
+  writeFileSync(s.files('secrets/token.txt'), 'TOKEN-9\n');
+  mkdirSync(s.files('proj/secrets'), { recursive: true });
+  writeFileSync(s.files('proj/secrets/token.txt'), 'TOKEN-9\n');
+}
+async function expectSecretFolderBlocked(s: ReturnType<typeof setup>, commands: readonly string[], raw: (command: string) => string): Promise<void> {
+  for (const command of commands) {
+    seedSecretFolder(s);
+    assert.match(raw(command), /TOKEN-9/u, `前提: 素のシェルでは中身が出る: ${command}`);
+    seedSecretFolder(s);
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.doesNotMatch(outcome.output.content, /TOKEN-9/u, `${command}: 中身が出た`);
+    for (const dir of ['stuff', 'stuff2']) assert.equal(existsSync(s.files(dir)), false, `${command}: ${dir} ができた`);
+    assert.equal(readFileSync(s.files('secrets/token.txt'), 'utf8'), 'TOKEN-9\n', `${command}: 元のフォルダが動いた`);
+  }
+}
+test('実機（bash）: cp -r・mv で秘密のフォルダを別の名前にして読む形は、動かす前に止まり、中身は出ない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  const bash = (command: string): string => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  await expectSecretFolderBlocked(s, ['cp -r secrets stuff; cat stuff/token.txt', 'cp -r proj stuff; cat stuff/secrets/token.txt', 'mv secrets stuff2; cat stuff2/token.txt'], bash);
+});
+
+test('実機（Windows PowerShell 5.1・制限モード）: Copy-Item -Recurse・Move-Item で秘密のフォルダを別の名前にして読む形は、動かす前に止まり、中身は出ない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  await expectSecretFolderBlocked(s, ['Copy-Item -Recurse secrets stuff; Get-Content stuff/token.txt', 'Copy-Item -Recurse proj stuff; Get-Content stuff/secrets/token.txt', 'Move-Item secrets stuff2; Get-Content stuff2/token.txt'], raw);
+});
