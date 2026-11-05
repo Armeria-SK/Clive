@@ -12,10 +12,10 @@ import { MemoryError, MemoryStore, renderBooks } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
-function store(caps = { user: 200, notes: 300 }) {
+function store() {
   const db = openDatabase(':memory:', MIGRATIONS);
   let now = 1_000;
-  return { db, memory: new MemoryStore(db, () => caps, () => now++) };
+  return { db, memory: new MemoryStore(db, () => now++) };
 }
 
 test('記憶: 保存・更新・削除と、それぞれの取り消し', () => {
@@ -36,16 +36,8 @@ test('記憶: 保存・更新・削除と、それぞれの取り消し', () => 
   assert.equal(memory.events(m.id).length, 6);
 });
 
-test('記憶: 上限を超える保存は、統合を促すエラーにする（自動では消さない）', () => {
-  const { memory } = store({ user: 30, notes: 300 });
-  memory.save({ book: 'user', content: 'あ'.repeat(20), actor: 'clive' });
-  assert.throws(() => memory.save({ book: 'user', content: 'い'.repeat(20), actor: 'clive' }), (e: unknown) => e instanceof MemoryError && /memory_update でまとめる/u.test(e.message));
-  assert.equal(memory.list('user').length, 1);
-  assert.doesNotThrow(() => memory.save({ book: 'notes', content: 'い'.repeat(20), actor: 'clive' }), 'ブックごとに上限は別');
-});
-
 test('記憶: 秘密情報・重複・長すぎる1件・空は保存しない', () => {
-  const { memory } = store({ user: 5000, notes: 5000 });
+  const { memory } = store();
   assert.throws(() => memory.save({ book: 'user', content: 'キーは sk-ant-api03-abcdefghijklmnop です', actor: 'clive' }), /API キー/u);
   memory.save({ book: 'user', content: '同じ内容', actor: 'clive' });
   assert.throws(() => memory.save({ book: 'user', content: '同じ内容', actor: 'clive' }), /既にあります/u);
@@ -54,7 +46,7 @@ test('記憶: 秘密情報・重複・長すぎる1件・空は保存しない',
 });
 
 test('記憶: 3文字以上は FTS、短い語は LIKE で探す', () => {
-  const { memory } = store({ user: 5000, notes: 5000 });
+  const { memory } = store();
   memory.save({ book: 'user', content: 'ローカルLLMは Ollama で動かしている', actor: 'clive' });
   memory.save({ book: 'notes', content: '猫の名前はタマ', actor: 'clive' });
   assert.equal(memory.search('Ollama').length, 1);

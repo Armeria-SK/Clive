@@ -31,6 +31,7 @@ import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts'
 import { stripAttachments } from '../uploads/store.ts';
 
 export const CONTEXT_FILL_RATIO = 0.95;
+export const MEMORY_BUDGET_RATIO = 0.12;
 export const TRUNCATION_RATIO = 0.6;
 const TRUNCATION_MIN_ESTIMATE = 2048;
 const TRUNCATION_STRIKES = 2;
@@ -73,6 +74,9 @@ export type SendOutcome =
   | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; detail?: ContextDetail; problems?: ModelProblem[] };
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
+
+// 古い発言を削り始める境目（コンテキストの 95% から最大出力を引いた量）。
+export const contextAvailable = (capacity: number, model: ModelConfig): number => Math.floor(capacity * CONTEXT_FILL_RATIO) - model.maxOutputTokens;
 
 // 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
 // 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
@@ -173,6 +177,23 @@ export class ChatEngine {
   }
 
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
+
+  // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
+  // 容量が分かるものの available のいちばん小さい値の 12%。容量が分かるモデルが無ければ undefined（予算なし = 全部入れる。0 にはしない）。
+  memoryBudget(): number | undefined {
+    const config = this.#d.config();
+    const ids = new Set([...candidateModelIds(config, 'chat'), ...candidateModelIds(config, 'background')]);
+    let smallest: number | undefined;
+    for (const id of ids) {
+      const model = config.models.find(m => m.id === id);
+      if (!model || !this.#d.status.usable(id)) continue;
+      const capacity = this.#d.status.get(id)?.effective ?? model.contextLength ?? 0;
+      if (!(capacity > 0)) continue;
+      const available = contextAvailable(capacity, model);
+      if (available > 0) smallest = smallest === undefined ? available : Math.min(smallest, available);
+    }
+    return smallest === undefined ? undefined : Math.floor(smallest * MEMORY_BUDGET_RATIO);
+  }
 
   #preemptFor(routes: Route[]): void {
     const providers = new Set(routes.map(r => r.provider.id));
@@ -371,7 +392,7 @@ export class ChatEngine {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
         const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
-        const available = Math.floor(capacity * CONTEXT_FILL_RATIO) - model.maxOutputTokens;
+        const available = contextAvailable(capacity, model);
         const conversation = d.conversations.get(p.conversationId);
         const upto = conversation?.summary_upto ?? 0;
         const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
@@ -506,7 +527,7 @@ export class ChatEngine {
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
     const snapshot = buildSnapshot(d.paths, {
-      ...(d.memory ? { memories: renderBooks(d.memory.list(), language) } : {}),
+      ...(d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
     }, language);
     if (d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash)) d.kv.set(snapshotLanguageKey(conversationId), language);

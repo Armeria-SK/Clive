@@ -9,7 +9,7 @@ import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
 import type { ApprovalView } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
-import { MemoryError } from '../memory/store.ts';
+import { MemoryError, planBooks } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
 import { httpText } from '../shared/messages/http.ts';
 import { domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
@@ -200,12 +200,16 @@ export function createWebServer(app: App): WebServer {
     return id;
   };
   router.add('GET', '/api/memories', ({ res }) => {
-    const usage = app.memory.usage();
     const items = app.memory.list();
-    sendJson(res, 200, { books: {
-      user: { ...usage.user, items: items.filter(m => m.book === 'user') },
-      notes: { ...usage.notes, items: items.filter(m => m.book === 'notes') },
-    } });
+    const budget = app.engine.memoryBudget();
+    const plan = planBooks(items, languageOf(app.config()), budget);
+    sendJson(res, 200, {
+      books: {
+        user: { used: app.memory.used('user'), items: items.filter(m => m.book === 'user') },
+        notes: { used: app.memory.used('notes'), items: items.filter(m => m.book === 'notes') },
+      },
+      context: { tokens: plan.tokens, budget: budget ?? null, omitted: plan.omitted.length },
+    });
   });
   router.add('POST', '/api/memories', async ({ req, res }) => {
     const body = requireObject(await readJson(req));

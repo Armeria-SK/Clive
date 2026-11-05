@@ -30,7 +30,7 @@ export function defaultConfig(): AppConfig {
     tools: defaultTools(),
     profile: { name: 'Clive', shape: 'pebble', color: '#61B8A5', motion: 'auto' },
     worker: { enabled: true, autonomy: false, maxRunsPerHour: 6, idleMinutes: 5, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, remindAfterHours: 12, curiosityPerDay: 2 },
-    memory: { userMaxChars: 2000, notesMaxChars: 3000, review: true, reviewIdleMinutes: 30, reviewAfterToolCalls: 8 },
+    memory: { review: true, reviewIdleMinutes: 30, reviewAfterToolCalls: 8 },
   };
 }
 

@@ -2,6 +2,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { StoredMessage } from '../db/conversations.ts';
 import type { Task, TaskEvent } from '../tasks/store.ts';
+import { estimateTextTokens } from '../engine/tokens.ts';
+import { prefix, type Memory } from './store.ts';
 
 export type ReviewTrigger = 'task' | 'idle' | 'heavy_run' | 'book_full' | 'manual';
 
@@ -20,8 +22,8 @@ export interface ReviewJob {
 }
 
 export const TRIGGER_TEXT: Record<Language, Record<ReviewTrigger, string>> = {
-  ja: { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が上限に近い', manual: '手動' },
-  en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory is nearly full', manual: 'Manual' },
+  ja: { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が大きくなった', manual: '手動' },
+  en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory has grown large', manual: 'Manual' },
 };
 
 export const TRIGGER_LABEL = TRIGGER_TEXT.ja;
@@ -88,7 +90,9 @@ interface ReviewText {
   policy: readonly string[];
   forgottenHeading: string;
   pressureHeading: string;
-  pressureTail: string;
+  pressureSummary: (tokens: number, budget: number, count: number) => string;
+  pressureListHeading: string;
+  pressureMore: (count: number) => string;
   taskHeading: string;
   taskTitle: string;
   taskResult: string;
@@ -99,10 +103,6 @@ interface ReviewText {
   user: string;
   tool: (name: string) => string;
   line: (label: string, body: string) => string;
-  bookUser: string;
-  bookNotes: string;
-  chars: string;
-  separator: string;
 }
 
 const REVIEW_TEXT: Record<Language, ReviewText> = {
@@ -122,7 +122,9 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     ],
     forgottenHeading: '# ユーザーが消した記憶（同じ内容を覚え直さない）',
     pressureHeading: '# 記憶の量',
-    pressureTail: '。重なりをまとめて減らすことを優先する',
+    pressureSummary: (tokens, budget, count) => `記憶の合計は約 ${tokens} トークンで、会話に入れる量の目安（約 ${budget} トークン）を超えています。会話に入りきらない記憶が ${count} 件あります。重なりをまとめ、古いものを減らすことを優先する`,
+    pressureListHeading: '会話に入りきらない記憶（古い順）:',
+    pressureMore: count => `…（ほか ${count} 件）`,
     taskHeading: '# 終わったタスク',
     taskTitle: 'タイトル',
     taskResult: '結果',
@@ -133,10 +135,6 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     user: 'ユーザー',
     tool: name => `道具 ${name}`,
     line: (label, body) => `【${label}】${body}`,
-    bookUser: 'ユーザーについて',
-    bookNotes: 'メモと教訓',
-    chars: '文字',
-    separator: '、',
   },
   en: {
     intro: trigger => `[Review] Trigger: ${trigger}. Read the record below and tidy up your memory (this is not a conversation with the user; your reply is only saved to the record).`,
@@ -154,7 +152,9 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     ],
     forgottenHeading: '# Memories the user deleted (do not learn the same thing again)',
     pressureHeading: '# Memory usage',
-    pressureTail: '. Prioritize merging overlapping memories to reduce it',
+    pressureSummary: (tokens, budget, count) => `Memory totals about ${tokens} tokens, over the guideline for what goes into a conversation (about ${budget} tokens). ${count} ${count === 1 ? 'memory does' : 'memories do'} not fit in a conversation. Prioritize merging overlapping memories and trimming old ones`,
+    pressureListHeading: 'Memories that do not fit (oldest first):',
+    pressureMore: count => `… (${count} more)`,
     taskHeading: '# Finished task',
     taskTitle: 'Title',
     taskResult: 'Result',
@@ -165,10 +165,6 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     user: 'User',
     tool: name => `Tool ${name}`,
     line: (label, body) => `[${label}] ${body}`,
-    bookUser: 'About the user',
-    bookNotes: 'Notes and lessons',
-    chars: 'characters',
-    separator: ', ',
   },
 };
 
@@ -193,9 +189,25 @@ export function transcriptOf(messages: readonly StoredMessage[], maxChars = 15_0
   return kept.join('\n');
 }
 
-export function bookPressureText(usage: Record<string, { used: number; max: number }>, language: Language = DEFAULT_LANGUAGE): string {
+// 記憶が会話に入りきらないときの、振り返りへの知らせ。入りきらない記憶を古い順に挙げる（挙げる量も、会話に入れる量と同じ予算まで。最初の 1 件は必ず挙げる）。
+export function bookPressureText(input: { tokens: number; budget: number; outside: readonly Pick<Memory, 'id' | 'book' | 'content'>[] }, language: Language = DEFAULT_LANGUAGE): string {
   const text = REVIEW_TEXT[language];
-  return Object.entries(usage).map(([book, u]) => `${book === 'user' ? text.bookUser : text.bookNotes}: ${u.used}/${u.max} ${text.chars}`).join(text.separator);
+  const lines: string[] = [];
+  let used = 0;
+  for (const m of input.outside) {
+    const line = `- [${prefix(m.book)}${m.id}] ${clip(m.content, 600, language)}`;
+    const cost = estimateTextTokens(line) + 1;
+    if (lines.length > 0 && used + cost > input.budget) break;
+    used += cost;
+    lines.push(line);
+  }
+  const rest = input.outside.length - lines.length;
+  return [
+    text.pressureSummary(input.tokens, input.budget, input.outside.length),
+    text.pressureListHeading,
+    ...lines,
+    ...(rest > 0 ? [text.pressureMore(rest)] : []),
+  ].join('\n');
 }
 
 export function reviewPrompt(input: {
@@ -218,7 +230,7 @@ export function reviewPrompt(input: {
   if (input.forgotten.length) {
     parts.push('', text.forgottenHeading, ...input.forgotten.map(f => `- ${clip(f, 200, language)}`));
   }
-  if (input.bookPressure) parts.push('', `${text.pressureHeading}\n${input.bookPressure}${text.pressureTail}`);
+  if (input.bookPressure) parts.push('', `${text.pressureHeading}\n${input.bookPressure}`);
   if (input.task) {
     parts.push('', text.taskHeading, `${text.taskTitle}: ${input.task.title}`, `${text.taskResult}: ${input.task.status}${input.task.result_summary ? ` — ${clip(input.task.result_summary, 2000, language)}` : ''}`);
     if (input.task.body) parts.push(`${text.taskNotes}:\n${clip(input.task.body, 3000, language)}`);

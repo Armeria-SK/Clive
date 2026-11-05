@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import { api, ApiError, type Book, type BookView, type HistoryHit, type MemoryEvent, type MemoryItem } from './api.ts';
+import { api, ApiError, type Book, type BookView, type HistoryHit, type MemoryContext, type MemoryEvent, type MemoryItem } from './api.ts';
 import { formatDateTime, formatNumber, useT } from './i18n/index.ts';
 import { isComposing } from './keys.ts';
 import { actionKey, actorKey, BOOK_TAB_KEY, canUndo, MEMORY_TABS, memoryRef, originKey, roleKey, TAB_KEY, type MemoryTab } from './memory-page.ts';
@@ -9,7 +9,6 @@ import { ZoneNote } from './ZoneNote.tsx';
 import './styles/memory.css';
 
 const BOOKS: readonly Book[] = ['user', 'notes'];
-const SETTINGS_SECTION_KEY = 'clive.settingsSection';
 const time = (ms: number) => formatDateTime(ms, 'full');
 
 // 記憶のページ（左の一覧の「記憶」。#/memory）。2 冊の一覧と、過去の会話の検索を、デザインの「スキル・ツール」と同じ並びで出す。
@@ -18,12 +17,13 @@ export function Memory({ revision = 0 }: { revision?: number }) {
   const t = useT();
   const tabsName = useId();
   const [books, setBooks] = useState<Record<Book, BookView> | null>(null);
+  const [context, setContext] = useState<MemoryContext | null>(null);
   const [failed, setFailed] = useState(false);
   const [tab, setTab] = useState<MemoryTab>('user');
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
-    void api.memories().then(r => { setBooks(r.books); setFailed(false); }).catch(() => setFailed(true));
+    void api.memories().then(r => { setBooks(r.books); setContext(r.context); setFailed(false); }).catch(() => setFailed(true));
   }, []);
   useEffect(load, [load, revision]);
 
@@ -48,23 +48,23 @@ export function Memory({ revision = 0 }: { revision?: number }) {
         <p className="view-zone"><ZoneNote /></p>
         {error && <div className="mem-error" role="alert">{error}</div>}
         {tab === 'search' ? <HistorySearch />
-          : !books ? (
+          : !books || !context ? (
             <div className="view-note">
               {failed ? t('memory.loadFailed') : t('memory.loading')}
               {failed && <> <button className="btn btn-secondary" onClick={load}>{t('memory.retry')}</button></>}
             </div>
           )
-            : <BookPanel key={tab} book={tab} view={books[tab]} onChanged={load} setError={setError} />}
+            : <BookPanel key={tab} book={tab} view={books[tab]} context={context} onChanged={load} setError={setError} />}
       </div>
     </section>
   );
 }
 
-function BookPanel({ book, view, onChanged, setError }: { book: Book; view: BookView; onChanged: () => void; setError: (message: string) => void }) {
+function BookPanel({ book, view, context, onChanged, setError }: { book: Book; view: BookView; context: MemoryContext; onChanged: () => void; setError: (message: string) => void }) {
   const t = useT();
   const [text, setText] = useState('');
   const title = t(BOOK_TAB_KEY[book]);
-  const fraction = usageFraction(view.used, view.max);
+  const budget = context.budget;
 
   async function add() {
     if (!text.trim()) return;
@@ -72,20 +72,16 @@ function BookPanel({ book, view, onChanged, setError }: { book: Book; view: Book
     try { await api.addMemory(book, text); setText(''); onChanged(); }
     catch (e) { setError(e instanceof ApiError ? e.message : t('memory.addFailed')); }
   }
-  const openLimits = () => {
-    try { sessionStorage.setItem(SETTINGS_SECTION_KEY, 'memory'); } catch { }
-    location.hash = '#/settings';
-  };
 
   return (
     <>
       <div className="mem-usage">
         <div className="mem-usage-line">
-          <span className="mem-usage-text">{t('memory.usage', formatNumber(view.used), formatNumber(view.max))}</span>
-          <button className="btn btn-ghost" onClick={openLimits}>{t('memory.limitLink')}</button>
+          <span className="mem-usage-text">{t('memory.size', formatNumber(view.used))}</span>
+          <span className="mem-usage-text">{budget === null ? t('memory.contextNoBudget', formatNumber(context.tokens)) : t('memory.context', formatNumber(context.tokens), formatNumber(budget))}</span>
         </div>
-        <div className="mem-meter" aria-hidden="true"><div className={usageIsHigh(view.used, view.max) ? 'high' : undefined} style={{ width: `${fraction * 100}%` }} /></div>
-        <span className="mem-hint">{t('memory.limitNote')}</span>
+        {budget !== null && <div className="mem-meter" aria-hidden="true"><div className={context.omitted > 0 || usageIsHigh(context.tokens, budget) ? 'high' : undefined} style={{ width: `${usageFraction(context.tokens, budget) * 100}%` }} /></div>}
+        <span className="mem-hint">{context.omitted > 0 ? t('memory.over', formatNumber(context.omitted)) : t('memory.sizeNote')}</span>
       </div>
       <div className="mem-add">
         <input

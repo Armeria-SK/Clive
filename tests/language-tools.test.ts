@@ -178,8 +178,6 @@ async function appFor(t: { after: (fn: () => void | Promise<void>) => void }, la
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
-  config.memory.userMaxChars = 200;
-  config.memory.notesMaxChars = 200;
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
@@ -201,26 +199,24 @@ for (const language of ['ja', 'en'] as const) {
     const text = async (tool: ToolDef, input: unknown) => (await run(tool, input)).content;
 
     assert.equal(await text(memorySave, { book: 'user', content: 'a'.repeat(100) }), pick(language,
-      '記憶しました [u1]（ユーザーについての記憶: 100/200 文字）。次の会話から使われます',
-      'Saved to memory [u1] (Memories about the user: 100/200 characters). It will be used from the next conversation'));
-    const over = await run(memorySave, { book: 'user', content: 'b'.repeat(150) });
-    assert.equal(over.isError, true);
-    assert.equal(over.content, pick(language,
-      'ユーザーについての記憶が上限 200 文字を超えます（今 100 文字）。似た記憶を memory_update でまとめるか、もう要らない記憶を memory_forget で消してから保存してください',
-      'The memories about the user would exceed the limit of 200 characters (now 100). Merge similar memories with memory_update, or delete ones you no longer need with memory_forget, and then save'));
+      '記憶しました [u1]（ユーザーについての記憶: 計 100 文字）。次の会話から使われます',
+      'Saved to memory [u1] (Memories about the user: 100 characters in total). It will be used from the next conversation'));
+    assert.equal(await text(memorySave, { book: 'user', content: 'b'.repeat(150) }), pick(language,
+      '記憶しました [u2]（ユーザーについての記憶: 計 250 文字）。次の会話から使われます',
+      'Saved to memory [u2] (Memories about the user: 250 characters in total). It will be used from the next conversation'),
+      '以前の上限（200 文字）を超えても、断らずに保存する');
     assert.equal((await run(memorySave, { book: 'user', content: 'a'.repeat(100) })).content, pick(language, '同じ内容が既にあります（[u1]）', 'The same content already exists ([u1])'));
     assert.equal(await text(memoryUpdate, { id: 'u1', content: 'short' }), pick(language, '書き直しました [u1]', 'Rewritten [u1]'));
-    const overNotes = await run(memorySave, { book: 'notes', content: 'n'.repeat(250) });
-    assert.equal(overNotes.content, pick(language,
-      'Clive のメモと教訓が上限 200 文字を超えます（今 0 文字）。似た記憶を memory_update でまとめるか、もう要らない記憶を memory_forget で消してから保存してください',
-      "Clive's notes and lessons would exceed the limit of 200 characters (now 0). Merge similar memories with memory_update, or delete ones you no longer need with memory_forget, and then save"));
+    assert.equal(await text(memorySave, { book: 'notes', content: 'n'.repeat(250) }), pick(language,
+      '記憶しました [n3]（Clive のメモと教訓: 計 250 文字）。次の会話から使われます',
+      "Saved to memory [n3] (Clive's notes and lessons: 250 characters in total). It will be used from the next conversation"));
     assert.equal(await text(memorySave, { book: 'notes', content: 'lesson' }), pick(language,
-      '記憶しました [n2]（Clive のメモと教訓: 6/200 文字）。次の会話から使われます',
-      "Saved to memory [n2] (Clive's notes and lessons: 6/200 characters). It will be used from the next conversation"));
+      '記憶しました [n4]（Clive のメモと教訓: 計 256 文字）。次の会話から使われます',
+      "Saved to memory [n4] (Clive's notes and lessons: 256 characters in total). It will be used from the next conversation"));
     assert.equal(await text(memoryUpdate, { id: 'u1', content: 'short' }), pick(language, '内容が変わっていません', 'The content has not changed'));
     assert.equal(await text(memoryUpdate, { id: 99, content: 'x' }), pick(language, '記憶 99 がありません', 'Memory 99 was not found'));
     assert.equal(await text(memorySearch, { query: 'zzzz' }), pick(language, '「zzzz」に当たる記憶はありません', 'No memory matches "zzzz"'));
-    assert.equal(await text(memoryForget, { id: 'n2', reason: 'test' }), pick(language, '消しました [n2]', 'Deleted [n2]'));
+    assert.equal(await text(memoryForget, { id: 'n4', reason: 'test' }), pick(language, '消しました [n4]', 'Deleted [n4]'));
     assert.equal(await text(historySearch, { query: 'zzzz', days: 7 }), pick(language, '「zzzz」は過去の会話に見つかりませんでした（直近 7 日）', '"zzzz" was not found in past conversations (last 7 day(s))'));
     assert.equal(await text(historySearch, { query: 'zzzz' }), pick(language, '「zzzz」は過去の会話に見つかりませんでした', '"zzzz" was not found in past conversations'));
 

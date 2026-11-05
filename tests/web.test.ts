@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO } from '../src/engine/chat.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { WebAuth } from '../src/web/auth.ts';
@@ -138,7 +139,16 @@ test('API: 記憶の追加・編集・削除・取り消しと、過去の会話
   assert.equal((await s.api(`/api/memory-events/${removed.eventId}/undo`, { method: 'POST', body: '{}' })).status, 200);
   const books = (await (await s.api('/api/memories')).json() as any).books;
   assert.equal(books.user.items[0].content, '朝は紅茶');
-  assert.equal(books.user.max, 2000);
+  assert.equal(books.user.used, '朝は紅茶'.length);
+  assert.equal('max' in books.user, false, '本の大きさに上限は無い');
+  for (let i = 0; i < 14; i++) {
+    const saved = await s.api('/api/memories', { method: 'POST', body: JSON.stringify({ book: 'user', content: `${i}${'あ'.repeat(590)}` }) });
+    assert.equal(saved.status, 201, '以前の上限（2,000 文字）を超えても保存できる');
+  }
+  const context = (await (await s.api('/api/memories')).json() as any).context;
+  assert.equal(context.budget, Math.floor((Math.floor(65536 * CONTEXT_FILL_RATIO) - 1024) * MEMORY_BUDGET_RATIO), '会話に入れる量の予算（使えるモデルの available の 12%）');
+  assert.ok(context.tokens > 8000 && context.tokens > context.budget, `全部を入れたときの見積もり: ${context.tokens}`);
+  assert.ok(context.omitted >= 1, '予算を超えた分は会話に入らない');
   const tooLong = await s.api('/api/memories', { method: 'POST', body: JSON.stringify({ book: 'user', content: 'あ'.repeat(2500) }) });
   assert.equal(tooLong.status, 400);
   s.app.conversations.append('past', { role: 'user', content: 'ベクトル検索の話をしよう' });

@@ -29,7 +29,7 @@ export const memorySave: ToolDef<{ book: Book; content: string }> = {
   description: [
     '次の会話でも覚えておくべきことを、その場で記憶する（ChatGPT のメモリのように）。',
     'user: ユーザーの名前・好み・状況・決めたこと。notes: 自分の教訓・やり方のコツ。',
-    '1件は短く1つの事実にする。その場限りの経緯や、もう分かっていることは書かない。上限を超えたら、似た記憶をまとめるか消してから保存する。',
+    '1件は短く1つの事実にする。その場限りの経緯や、もう分かっていることは書かない。',
   ].join(''),
   input: Type.Object({ book: BookArg, content: Type.String({ minLength: 1, maxLength: 600 }) }, { additionalProperties: false }),
   effect: 'meta',
@@ -40,9 +40,8 @@ export const memorySave: ToolDef<{ book: Book; content: string }> = {
       const messageId = latestUserMessage(ctx);
       const { memory, eventId } = s.memory.save({ book: input.book, content: input.content, actor: ctx.kind === 'review' ? 'review' : 'clive', conversationId: ctx.conversationId, ...(messageId === undefined ? {} : { messageId }), runId: ctx.runId });
       s.emit({ type: 'memory.changed', runId: ctx.runId, conversationId: ctx.conversationId, memoryId: memory.id, book: memory.book, action: 'create', content: memory.content, eventId });
-      const usage = s.memory.usage()[memory.book];
       const language = languageOf(ctx.config);
-      return { content: toolText(language, 'memory.saved', { id: `${prefix(memory.book)}${memory.id}`, label: BOOK_LABELS[language][memory.book], used: usage.used, max: usage.max }) };
+      return { content: toolText(language, 'memory.saved', { id: `${prefix(memory.book)}${memory.id}`, label: BOOK_LABELS[language][memory.book], used: s.memory.used(memory.book) }) };
     } catch (error) { return fail(error, ctx); }
   },
 };

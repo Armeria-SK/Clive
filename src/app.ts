@@ -131,10 +131,7 @@ export class App {
         this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: v.conversationId, approvalId: v.id, outcome: event.outcome });
       }
     });
-    this.memory = new MemoryStore(this.db, () => {
-      const m = this.config().memory;
-      return { user: m.userMaxChars, notes: m.notesMaxChars };
-    }, undefined, () => languageOf(this.config()));
+    this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
     this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.notifications = new Notifications(this.db, now);
     this.reviews = new ReviewJobs(this.db, now);
@@ -153,7 +150,7 @@ export class App {
     this.worker = new Worker({
       db: this.db, tasks: this.tasks, engine: this.engine, conversations: this.conversations, notifications: this.notifications,
       kv: this.kv, config: () => this.config(), log: this.log, now, autoSchedule: options.workerTimers ?? true,
-      reviews: this.reviews, memory: this.memory, curiosity: this.curiosity,
+      reviews: this.reviews, memory: this.memory, curiosity: this.curiosity, memoryBudget: () => this.engine.memoryBudget(),
     });
     this.tasks.onChange = task => {
       this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });
@@ -214,11 +211,10 @@ export class App {
   baseTokens(): number {
     const config = this.config();
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
-    const memoryBudget = config.memory.userMaxChars + config.memory.notesMaxChars;
     const language = languageOf(config);
-    const memoryNow = this.memory ? estimateTextTokens(renderBooks(this.memory.list(), language)) : 0;
+    const memoryNow = this.memory ? estimateTextTokens(renderBooks(this.memory.list(), language, this.engine?.memoryBudget())) : 0;
     const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat'))) : 0;
-    return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + Math.max(memoryBudget, memoryNow) + tools
+    return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + memoryNow + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
   }
 

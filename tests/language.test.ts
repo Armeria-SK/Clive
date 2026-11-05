@@ -229,7 +229,7 @@ test('baseTokens: 言語に合うルールの長さで見積もる', async t => 
   const s = await startApp(t);
   const rest = () => {
     const config = s.app.config();
-    return config.memory.userMaxChars + config.memory.notesMaxChars + estimateToolTokens(ToolRegistry.specs(s.app.tools.forRun('chat'))) + 64;
+    return estimateToolTokens(ToolRegistry.specs(s.app.tools.forRun('chat'))) + 64;
   };
   const expected = (language: Language) => estimateTextTokens(buildSnapshot(s.paths, { skills: '' }, language).text)
     + estimateTextTokens(buildDynamic(s.app.config().timezone, language)) + rest();
@@ -324,7 +324,7 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
     { id: 3, role: 'tool', text: 'out', message: { role: 'tool', name: 'file_list' } },
   ] as any;
   const triggers: ReviewTrigger[] = ['task', 'idle', 'heavy_run', 'book_full', 'manual'];
-  const usage = { user: { used: 10, max: 20 }, notes: { used: 5, max: 30 } };
+  const pressure = { tokens: 900, budget: 500, outside: [{ id: 1, book: 'user' as const, content: 'Old fact' }, { id: 2, book: 'notes' as const, content: 'Old lesson' }] };
   const texts: Record<string, string> = {
     books: renderBooks(memories, 'en'),
     skills: skills.index('en'),
@@ -336,10 +336,10 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
     fallback: jsonFallbackInstructions([{ name: 'file_list', description: 'List files', inputSchema: { type: 'object' } }], 'en'),
     fallbackHistory: JSON.stringify(toJsonFallbackHistory([{ role: 'tool', name: 'file_list', content: 'x', isError: true, toolCallId: '1' }], 'en')),
     transcript: transcriptOf(stored, 15_000, 'en'),
-    pressure: bookPressureText(usage, 'en'),
+    pressure: bookPressureText(pressure, 'en'),
     curiosity: Object.values(curiosityText('en')).map(v => (typeof v === 'function' ? v('Topic') : v)).join('\n'),
     ...Object.fromEntries(triggers.map(trigger => [`review:${trigger}`, reviewPrompt({
-      trigger, language: 'en', forgotten: ['Forgotten fact'], bookPressure: bookPressureText(usage, 'en'),
+      trigger, language: 'en', forgotten: ['Forgotten fact'], bookPressure: bookPressureText(pressure, 'en'),
       task: { title: 'T', status: 'done', result_summary: 'Result', body: 'Body' }, taskEvents: [{ kind: 'note', content: 'Event' }], transcript: transcriptOf(stored, 15_000, 'en'),
     })])),
   };
@@ -349,7 +349,7 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
   }
   assert.match(texts.task!, /^\[Task run\]/u);
   assert.match(texts.task!, /Where it came from: From your curiosity/u);
-  assert.match(texts['review:book_full']!, /Memory usage\nAbout the user: 10\/20 characters, Notes and lessons: 5\/30 characters\. Prioritize/u);
+  assert.match(texts['review:book_full']!, /Memory usage\nMemory totals about 900 tokens, over the guideline for what goes into a conversation \(about 500 tokens\)\. 2 memories do not fit in a conversation\. Prioritize merging overlapping memories and trimming old ones\nMemories that do not fit \(oldest first\):\n- \[u1\] Old fact\n- \[n2\] Old lesson/u);
   assert.match(texts.fallbackHistory!, /\[Result of tool \\"file_list\\" \(error\)\]/u);
 });
 
@@ -424,14 +424,14 @@ test('日本語の固定文: タスクの実行の指示は 0250344 の出力と
 
 test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字も違わない', () => {
   assert.equal(reviewPrompt({ trigger: 'book_full', forgotten: ['忘れた記憶'], bookPressure: 'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字' }), [
-    jaReviewIntro('記憶が上限に近い'),
+    jaReviewIntro('記憶が大きくなった'),
     ...JA_REVIEW_POLICY,
     '',
     '# ユーザーが消した記憶（同じ内容を覚え直さない）',
     '- 忘れた記憶',
     '',
     '# 記憶の量',
-    'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字。重なりをまとめて減らすことを優先する',
+    'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字',
   ].join('\n'));
 
   assert.equal(reviewPrompt({
@@ -465,7 +465,7 @@ test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字
     '【道具 file_list】tool out',
   ].join('\n'));
 
-  const triggers = { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が上限に近い', manual: '手動' };
+  const triggers = { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が大きくなった', manual: '手動' };
   for (const [trigger, label] of Object.entries(triggers)) {
     assert.equal(reviewPrompt({ trigger: trigger as ReviewTrigger, forgotten: [] }).split('\n')[0], jaReviewIntro(label), trigger);
   }
@@ -474,7 +474,12 @@ test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字
     { id: 2, role: 'tool', text: 'い'.repeat(310), message: { role: 'tool', name: 'file_list' } },
   ] as any;
   assert.equal(transcriptOf(long), `【ユーザー】${'あ'.repeat(3000)}…（略）\n【道具 file_list】${'い'.repeat(300)}…（略）`);
-  assert.equal(bookPressureText({ user: { used: 10, max: 20 }, notes: { used: 5, max: 30 } }), 'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字');
+  assert.equal(bookPressureText({ tokens: 900, budget: 500, outside: [{ id: 1, book: 'user', content: '古い事実' }, { id: 2, book: 'notes', content: '古い教訓' }] }), [
+    '記憶の合計は約 900 トークンで、会話に入れる量の目安（約 500 トークン）を超えています。会話に入りきらない記憶が 2 件あります。重なりをまとめ、古いものを減らすことを優先する',
+    '会話に入りきらない記憶（古い順）:',
+    '- [u1] 古い事実',
+    '- [n2] 古い教訓',
+  ].join('\n'));
 });
 
 test('日本語の固定文: json_fallback の説明・スキル一覧・好奇心のタスクの文は 0250344 の出力と一字も違わない', t => {

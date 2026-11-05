@@ -109,3 +109,14 @@ test('doctor: モデルが 0 個なら、そのことを案内して終了コー
   assert.match(run.stdout, /NG {2}モデルがまだ設定されていません/u);
   assert.doesNotMatch(run.stdout, /チャットで使えるモデルがありません/u, '「使えない」ではなく「まだ無い」と案内する');
 });
+
+test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書いてあっても読めて、初期値にはもう書かない', () => {
+  assert.deepEqual(Object.keys(defaultConfig().memory).sort(), ['review', 'reviewAfterToolCalls', 'reviewIdleMinutes']);
+  const old = parseConfig({ version: 1, server: {}, routing: {}, memory: { userMaxChars: 2000, notesMaxChars: 3000, review: false } });
+  assert.equal(old.memory.review, false);
+  assert.equal(old.memory.userMaxChars, 2000, '読めるが、使わない');
+  assert.equal(old.memory.notesMaxChars, 3000);
+  const fresh = parseConfig({ version: 1, server: {}, routing: {} });
+  assert.equal(fresh.memory.userMaxChars, undefined, '書かなければ補わない');
+  assert.equal(fresh.memory.reviewIdleMinutes, 30);
+});

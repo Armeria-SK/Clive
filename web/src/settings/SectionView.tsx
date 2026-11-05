@@ -31,7 +31,7 @@ export function SectionView(props: SectionViewProps) {
     case 'keys': return <KeysSection draft={props.draft} apiKeys={props.apiKeys} />;
     case 'tools': return <ToolsSection {...base} />;
     case 'worker': return <WorkerSection {...base} />;
-    case 'memory': return <MemorySection {...base} />;
+    case 'memory': return <MemorySection />;
     case 'look': return <LookSection {...base} />;
     case 'server': return <ServerSection {...base} />;
     case 'file': return <FileSection {...base} configPath={props.configPath} hasConfigError={props.hasConfigError} lastSavedAt={props.lastSavedAt} />;
