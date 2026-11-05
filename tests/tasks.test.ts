@@ -352,6 +352,22 @@ test('会話の中で task_create を呼ぶと、メモ帳にタスクが増え�
   assert.ok(!s.adapter().calls[0]!.tools.some(t => t.name === 'task_complete'), '終え方の道具は会話では渡さない');
 });
 
+test('会話で作ったタスクは、作った会話の ID で探す（経過の文に会話の ID が入っていても、別の言語の文でも、作った会話でなければ見つけない）', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(toolCall('task_create', { title: '洗濯', requested_by_user: true }), reply('作りました'));
+  const outcome = s.app.engine.send('conv-a', '洗濯をタスクにして');
+  assert.ok(outcome.ok);
+  await s.app.engine.wait(outcome.runId);
+  const mine = s.app.tasks.list().find(task => task.title === '洗濯')!;
+  assert.equal(mine.created_in_conversation, 'conv-a');
+  const text = s.app.tasks.create({ title: '経過の文に会話の ID がある', origin: 'user', actor: 'user' });
+  s.app.tasks.event(text.id, 'context', 'clive', 'この会話（conv-a）で作りました / Created in conv-a');
+  const manual = s.app.tasks.create({ title: '画面から作った', origin: 'user', actor: 'user' });
+  assert.equal(manual.created_in_conversation, null);
+  assert.deepEqual(s.app.tasks.createdByConversation('conv-a'), [mine.id]);
+  assert.deepEqual(s.app.tasks.createdByConversation('conv-b'), []);
+});
+
 test('通知は同じ dedupKey なら 24 時間出さない', async t => {
   const s = await setup(t);
   assert.ok(s.app.notifications.notify({ kind: 'info', title: 'A', dedupKey: 'k' }));

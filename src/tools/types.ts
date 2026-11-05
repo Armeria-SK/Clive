@@ -61,6 +61,8 @@ export interface ToolContext {
   taint: { tainted: boolean; sources: string[] };
   // この実行で、検索が自動アクセスの判定（ボット判定）で続けて止められた回数（成功・別の失敗で 0 に戻る）
   searchBlocks?: number | undefined;
+  // この実行で、task_create で作った・task_update で触ったタスクの id（会話の実行が終わるとき、会話で進んだ分を渡す先を決める）
+  touchedTasks?: Set<string> | undefined;
   log: (line: string) => void;
   services?: {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;

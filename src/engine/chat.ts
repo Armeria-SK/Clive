@@ -320,12 +320,14 @@ export class ChatEngine {
     const policy = buildPolicy(config, d.paths);
     // 道具が書き込む「どう終えるか」の印は、ワーカーが読む control.value と同じ入れ物にする
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
+    const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
       runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: defaultWorkspace(policy, d.paths),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       log: d.log ?? (() => undefined),
       services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, notify: d.notify, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
+      touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
     };
     const addUsage = (u: Usage) => {
@@ -334,9 +336,9 @@ export class ChatEngine {
       }
     };
     let replyLanguage: Language | undefined;
-    const finishOk = (text: string, stop: StopReason, handover?: { note: string; nextAction?: string | undefined }): EngineResult => {
+    const finishOk = (text: string, stop: StopReason, wrapUp?: { nextAction: string | undefined }): EngineResult => {
       if (replyLanguage && this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
-      if (kind === 'chat') this.#handOver(runId, conversationId, handover ?? { note: text }, counters.workCalls);
+      if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop };
@@ -403,7 +405,7 @@ export class ChatEngine {
     const text = wrapped ?? engineText(languageOf(config), 'wrapup.fallback', { max: maxIterations });
     const saved = d.conversations.append(conversationId, { role: 'assistant', content: text }, runId);
     d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
-    return finishOk(text, 'other', { note: text, nextAction: wrapped ? nextStepOf(wrapped) : undefined });
+    return finishOk(text, 'other', { nextAction: wrapped ? nextStepOf(wrapped) : undefined });
   }
 
   // 上限で止まった会話のまとめ。道具を渡さず、直近のやり取りを文字の記録にして 1 通で渡す（道具の呼び出しの履歴を送ると、道具の定義が要るプロバイダがあるため）。
@@ -434,15 +436,21 @@ export class ChatEngine {
     } finally { release?.(); }
   }
 
-  // 会話の実行が終わるとき、会話で進んだ分をタスクに渡す: この実行が止めたタスクと、この会話で作った実行待ち・返事待ちのタスクの経過（メモ）に書く。
-  // 上限のまとめがあれば、次の一手も書く。会話で作ったタスクへは、作る以外の道具を使った実行だけ（作っただけの確認の返事はメモにしない）
-  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, workCalls: number): void {
+  // 会話の実行が終わるとき、会話で進んだ分をタスクの経過（メモ）に書く。書く先は次のとおりで、普通の終わりで何にも触っていなければ何も書かない:
+  // - この実行で作った・task_update で触ったタスク（作る以外の道具を使った実行だけ。作っただけの確認の返事はメモにしない）
+  // - 道具の上限で止まったときは、さらに、この実行が止めたタスクと、この会話で作った実行待ち・返事待ちのタスク。まとめに次の一手があれば、次の一手も書く
+  // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
+  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, run: { wrapUp: boolean; workCalls: number; touched: ReadonlySet<string>; tainted: boolean }): void {
     const d = this.#d;
     const note = summary.note.trim();
-    if (!d.tasks || !note) return;
+    if (!d.tasks || !note || run.tainted) return;
     const preempted = new Set(this.#preemptedTasks.get(runId) ?? []);
-    const targets = new Set(preempted);
-    if (workCalls > 0) for (const id of d.tasks.createdByConversation(conversationId)) targets.add(id);
+    const targets = new Set<string>();
+    if (run.wrapUp || run.workCalls > 0) for (const id of run.touched) targets.add(id);
+    if (run.wrapUp) {
+      for (const id of preempted) targets.add(id);
+      for (const id of d.tasks.createdByConversation(conversationId)) targets.add(id);
+    }
     if (!targets.size) return;
     const language = languageOf(d.config());
     for (const id of targets) {

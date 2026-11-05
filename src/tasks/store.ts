@@ -34,6 +34,7 @@ export interface Task {
   completed_at: number | null;
   curiosity_id: number | null;
   cancelled_from: TaskStatus | null;
+  created_in_conversation: string | null;
 }
 
 export type TaskView = Task & { cron_text: string | null };
@@ -53,6 +54,7 @@ export interface CreateTask {
   timezone?: string | undefined;
   propose?: boolean | undefined;
   curiosityId?: number | undefined;
+  createdInConversation?: string | undefined;
   actor: string;
 }
 
@@ -88,10 +90,9 @@ export class TaskStore {
     return rows.length === 1 ? rows[0] : undefined;
   }
 
-  // この会話の task_create で作られたタスクの id（作ったときに残す経過 'context' の本文に会話の id が入る）
   createdByConversation(conversationId: string): string[] {
-    const rows = this.#db.prepare("SELECT DISTINCT task_id FROM task_events WHERE kind = 'context' AND instr(content, ?) > 0").all(conversationId) as Array<{ task_id: string }>;
-    return rows.map(r => r.task_id);
+    const rows = this.#db.prepare('SELECT id FROM tasks WHERE created_in_conversation = ?').all(conversationId) as Array<{ id: string }>;
+    return rows.map(r => r.id);
   }
 
   byConversation(conversationId: string): Task | undefined {
@@ -137,10 +138,10 @@ export class TaskStore {
       if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
       status = 'scheduled';
     }
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
-      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, now, now,
+      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, now, now,
     );
     this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);

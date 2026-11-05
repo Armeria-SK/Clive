@@ -292,4 +292,9 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   ALTER TABLE tasks ADD COLUMN cancelled_from TEXT CHECK (cancelled_from IN ('inbox', 'ready', 'running', 'waiting', 'scheduled'));
   `,
+  // 8: 会話の task_create で作ったタスクを、作った会話の ID で探せるようにする（前からある行は NULL。経過の文は探すのに使わない）
+  `
+  ALTER TABLE tasks ADD COLUMN created_in_conversation TEXT;
+  CREATE INDEX ix_tasks_created_in ON tasks (created_in_conversation);
+  `,
 ];
