@@ -25,8 +25,18 @@ const DEVICE_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 
 export type Expanded = { path: string } | { unresolved: string };
 
+// ネットワークのパス（UNC: \\サーバー\共有）か、デバイスのパス（\\?\ \\.\ \??\）か。Windows は / を \ と同じに読む。
+// ネットワークの先は、このPCの中で確かめられず（管理共有 \\localhost\C$ は同じ PC のファイルを指す）、デバイスのパスは * や ? などの書き方の決まりを避けられるので、どれも扱わない
+export function isRemotePath(p: string): boolean {
+  if (!WINDOWS) return false;
+  const normalized = p.replaceAll('/', '\\');
+  return normalized.startsWith('\\\\') || normalized.startsWith('\\??\\');
+}
+
 export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = process.env, language: Language = DEFAULT_LANGUAGE): Expanded {
   let p = input.replace(/^["']|["']$/gu, '');
+  // 展開や解決をする前に決める（* ? のワイルドカードの読み取りや resolve で、別の場所に化けないように）。調べる側 (placePath) が止める
+  if (isRemotePath(p)) return { path: p.replaceAll('/', '\\') };
   if (/\$\(|`|<\(|>\(/u.test(p)) return { unresolved: guardText(language, 'scope.cmd_subst') };
   if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) p = join(homedir(), p.slice(2));
   else if (/^~[A-Za-z]/u.test(p)) return { unresolved: guardText(language, 'scope.other_home') };
@@ -44,6 +54,7 @@ export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = 
     .replace(/\$([A-Za-z_][A-Za-z0-9_]*)/gu, (_, n: string) => lookup(n))
     .replace(/%([A-Za-z_][A-Za-z0-9_]*)%/gu, (_, n: string) => lookup(n));
   if (unknown !== undefined) return { unresolved: guardText(language, 'scope.unknown_env', { name: unknown }) };
+  if (isRemotePath(p)) return { path: p.replaceAll('/', '\\') };
   if (/[*?[\]{}]/u.test(p)) {
     const parts = p.split(/[\\/]/u);
     const first = parts.findIndex(part => /[*?[\]{}]/u.test(part));
@@ -54,6 +65,7 @@ export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = 
 }
 
 export function realish(abs: string): string {
+  if (isRemotePath(abs)) return abs;
   let current = abs;
   const rest: string[] = [];
   for (;;) {
@@ -75,7 +87,7 @@ export function isInside(root: string, target: string): boolean {
 }
 
 export function windowsHazard(p: string, language: Language = DEFAULT_LANGUAGE): string | undefined {
-  if (/^\\\\[?.]\\/u.test(p)) return guardText(language, 'scope.hazard_prefix');
+  if (/^\\\\[?.]\\/u.test(p) || isRemotePath(p)) return guardText(language, 'scope.hazard_prefix');
   const withoutDrive = p.replace(/^[A-Za-z]:/u, '');
   if (withoutDrive.includes(':')) return guardText(language, 'scope.hazard_stream');
   if (p.split(/[\\/]/u).some(part => DEVICE_NAMES.test(part))) return guardText(language, 'scope.hazard_device');
@@ -103,6 +115,7 @@ export type ProtectedKind = 'persona' | 'skill' | 'git';
 const hasGitSegment = (p: string): boolean => p.split(/[\\/]/u).some(part => fold(part) === '.git');
 
 export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKind | undefined {
+  if (isRemotePath(abs)) return 'git';
   const real = realish(abs);
   if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || insideGitDir(real)) return 'git';
   if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';

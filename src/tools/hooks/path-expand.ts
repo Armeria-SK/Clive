@@ -3,7 +3,7 @@
 import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { isGitDir } from './git-repo.ts';
-import { isInside, writeApprovalKind, type ProtectedKind, type ScopePolicy } from './scope.ts';
+import { isInside, isRemotePath, writeApprovalKind, type ProtectedKind, type ScopePolicy } from './scope.ts';
 
 export const GLOB_CAP = 2000;
 const WALK_DEPTH = 6;
@@ -11,8 +11,9 @@ const WALK_CAP = 4000;
 const WILD = /[*?[{]/u;
 const WINDOWS = process.platform === 'win32';
 
-export const isDirectory = (p: string): boolean => { try { return statSync(p).isDirectory(); } catch { return false; } };
-export const exists = (p: string): boolean => { try { statSync(p); return true; } catch { return false; } };
+// ネットワーク・デバイスのパス（scope.ts の isRemotePath）には触れない。止める側が先に止めるが、SMB の応答待ちで調べが止まらないように
+export const isDirectory = (p: string): boolean => { if (isRemotePath(p)) return false; try { return statSync(p).isDirectory(); } catch { return false; } };
+export const exists = (p: string): boolean => { if (isRemotePath(p)) return false; try { statSync(p); return true; } catch { return false; } };
 
 // {a,b} の 1 段だけ展開する（入れ子・{1..3} は展開しない）。展開できない形は null
 function braces(text: string, budget = 64): string[] | null {
@@ -56,6 +57,7 @@ export interface Globbed { prefix: string; matches: string[]; complete: boolean 
 
 // 絶対パスのパターン（* ? [..] {a,b}）に、今あるもののうち当たるものを列挙する。dotfiles: PowerShell のワイルドカードか（先頭が . の名前に * が当たる。[..] の中の ^ ! は文字。bash は当たらず、! は否定）
 export function expandGlob(pattern: string, dotfiles: boolean): Globbed {
+  if (isRemotePath(pattern)) return { prefix: pattern, matches: [], complete: false };
   const alternatives = braces(pattern);
   const first = pattern.split(/[\\/]/u);
   const prefixSegs: string[] = [];
@@ -100,6 +102,7 @@ export function wildcardMatches(name: string, pattern: string): boolean {
 
 // フォルダの中身（deep なら下の階層まで）の一覧。幅優先で、上限を超えたら途中まで返して complete: false。入れないフォルダ・たどれないリンクがあっても complete: false
 export function listTree(dir: string, deep: boolean, cap = LIST_CAP): { entries: string[]; complete: boolean } {
+  if (isRemotePath(dir)) return { entries: [], complete: false };
   const entries: string[] = [];
   const queue = [dir];
   let complete = true;
@@ -121,6 +124,7 @@ export function listTree(dir: string, deep: boolean, cap = LIST_CAP): { entries:
 
 // フォルダの下（そのフォルダ自身も）に、.git という名前のものか、git のフォルダ（HEAD・objects/・refs/ がある。.git でない名前の裏のリポジトリ）があるか（深さと件数に上限。超えたら「ある」とみなす）
 export function containsGitDir(dir: string): boolean {
+  if (isRemotePath(dir)) return true;
   let seen = 0;
   const fold = (s: string): string => (WINDOWS ? s.toLowerCase() : s);
   const walk = (current: string, depth: number): boolean => {

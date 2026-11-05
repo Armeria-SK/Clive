@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -156,6 +156,31 @@ test('実機（Windows PowerShell 5.1・制限モード）: パイプで流れ�
     assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, expected, command);
   }
+});
+
+// 再審査の指摘: `//localhost/D$/…/USER.md`（管理共有）や `//?/D:/…`（デバイスのパス）は、本物の Windows で人格を書き換えたのに、許可フォルダの外のふつうの確かめだけで通った。
+// 本物の Windows PowerShell 5.1 で、その書き方が本当に書けること（前提）と、Clive のシェルでは確かめにも進まず止まることを確かめる
+test('実機（Windows PowerShell 5.1・制限モード）: 管理共有・デバイスのパスで人格を書き換える書き方は、確かめにも進まず止まる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const ws = s.paths.workspace;
+  const fwd = ws.replaceAll('\\', '/');
+  const share = `//localhost/${ws.slice(0, 1)}$${fwd.slice(2)}`;
+  let reachable = false;
+  try { reachable = statSync(share).isDirectory(); } catch { reachable = false; }
+  if (!reachable) { t.skip('この PC の管理共有（\\\\localhost\\C$）が開いていない'); return; }
+  // 前提: 素の PowerShell は、管理共有・デバイスのパスごしに、作業フォルダのファイルを書ける
+  for (const [name, path] of [['share', `${share}/probe-share.txt`], ['device', `//?/${fwd}/probe-device.txt`]] as const) {
+    spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Set-Content -LiteralPath '${path}' -Value x`], { encoding: 'utf8' });
+    assert.equal(existsSync(s.files(`probe-${name}.txt`)), true, `前提: 素の PowerShell は ${name} のパスごしに書ける`);
+  }
+  for (const path of [`${share}/SOUL.md`, `//?/${fwd}/SOUL.md`, `\\\\?\\${ws}\\SOUL.md`, `//./${fwd}/SOUL.md`, `\\??\\${ws}\\SOUL.md`, `\\\\localhost\\${ws.slice(0, 1)}$\\${ws.slice(3)}\\SOUL.md`]) {
+    for (const command of [`Set-Content '${path}' -Value pwned`, `'pwned' > '${path}'`, `Get-Content '${path}'`]) {
+      const outcome = await s.call(command);
+      assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+      assert.match(outcome.output.content, /ネットワークのパス/u, command);
+    }
+  }
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '管理共有ごしに人格が書き換わった');
 });
 
 const bashPath = which('bash');

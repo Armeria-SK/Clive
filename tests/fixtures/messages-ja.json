@@ -145,7 +145,7 @@
     "scope.other_home": "別のユーザーのホームフォルダです",
     "scope.unknown_env": "中身が分からない環境変数 {name} を含んでいます",
     "scope.glob_dotdot": "glob の後ろに .. があります",
-    "scope.hazard_prefix": "\\\\?\\ や \\\\.\\ で始まるパスは扱いません",
+    "scope.hazard_prefix": "\\\\?\\・\\\\.\\・\\??\\ で始まるパスと、ネットワークのパス（\\\\サーバー\\共有）は扱いません",
     "scope.hazard_stream": "NTFS の代替データストリーム（: を含むパス）は扱いません",
     "scope.hazard_device": "デバイス名（CON・NUL など）は扱いません",
     "scope.secret": "秘密情報らしいパスです（{path}）",

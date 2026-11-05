@@ -85,6 +85,23 @@ test('ファイル: 外・秘密情報・読み取り専用・保護対象は実
   assert.equal(readFileSync(join(s.paths.data, 'reference', 'doc.md'), 'utf8'), '参照用の文書');
 });
 
+// 再審査の指摘: `//localhost/D$/…/USER.md`（管理共有）や `//?/D:/…`（デバイスのパス）は、本物の Windows で作業フォルダの中のファイルを指すのに、許可フォルダの外のふつうの確かめだけで通った
+test('ファイル: UNC・デバイスのパス（管理共有・//?/・\\??\\）は、どの書き方でも、読む・書く・設定を指すときも止める', { skip: process.platform !== 'win32' && 'Windows のパスの決まりだけの確かめ' }, async t => {
+  const s = setup(t);
+  const ws = s.paths.workspace;
+  const fwd = (p: string): string => p.replaceAll('\\', '/');
+  writeFileSync(join(ws, 'USER.md'), 'user');
+  const share = (p: string): string => `//localhost/${p.slice(0, 1)}$${fwd(p).slice(2)}`;
+  for (const path of [`${share(ws)}/USER.md`, `//?/${fwd(ws)}/USER.md`, `\\\\?\\${ws}\\USER.md`, `//./${fwd(ws)}/USER.md`, `\\??\\${ws}\\USER.md`, `//server/share/USER.md`]) {
+    const write = await s.call('file_write', { path, content: 'pwned' });
+    assert.equal(write.decision, 'deny', path);
+    const read = await s.call('file_read', { path });
+    assert.equal(read.decision, 'deny', path);
+  }
+  assert.equal(readFileSync(join(ws, 'USER.md'), 'utf8'), 'user', '管理共有ごしに人格が書き換わった');
+  for (const path of [`//?/${fwd(s.paths.config)}`, `${share(s.paths.config)}`, `//?/${fwd(s.paths.database)}`]) assert.equal((await s.call('file_read', { path })).decision, 'deny', `${path}: 設定・データベースは止める（ふつうの確かめに下がらない）`);
+});
+
 test('ファイル: 作業フォルダの中から外を指すシンボリックリンクには書き込まない', async t => {
   const s = setup(t);
   const target = join(s.paths.data, 'outside-dir');
