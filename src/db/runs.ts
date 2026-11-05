@@ -1,4 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { DEFAULT_LANGUAGE } from '../config/schema.ts';
+import { engineText } from '../shared/messages/engine.ts';
 import type { EngineErrorKind, StopReason, Usage } from '../engine/types.ts';
 
 export interface RunRow {
@@ -76,12 +78,12 @@ export class Runs {
     return this.db.prepare('SELECT * FROM engine_runs ORDER BY started_at DESC LIMIT ?').all(limit) as unknown as RunRow[];
   }
 
-  closeDangling(): number {
+  closeDangling(message: string = engineText(DEFAULT_LANGUAGE, 'run.restart_interrupted')): number {
     const now = this.now();
     const result = this.db.prepare(`
-      UPDATE engine_runs SET ended_at = ?, ok = 0, error_kind = 'cancelled', error_message = 'アプリの再起動で中断しました'
+      UPDATE engine_runs SET ended_at = ?, ok = 0, error_kind = 'cancelled', error_message = ?
       WHERE ended_at IS NULL
-    `).run(now);
+    `).run(now, message);
     return Number(result.changes);
   }
 }

@@ -1,15 +1,23 @@
 import { Type } from '@sinclair/typebox';
 import { CuriosityError, type CuriosityItem, type CuriosityStore } from '../../curiosity/store.ts';
+import type { Language } from '../../config/schema.ts';
+import { languageOf } from '../../shared/language.ts';
+import { toolText } from '../../shared/messages/tools.ts';
 import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 function store(ctx: ToolContext): CuriosityStore {
   const curiosity = ctx.services?.curiosity;
-  if (!curiosity) throw new CuriosityError('好奇心リストが使えません');
+  if (!curiosity) throw new CuriosityError('curiosity.unavailable');
   return curiosity;
 }
-const fail = (error: unknown): ToolOutput => ({ content: error instanceof CuriosityError ? error.message : `失敗しました: ${(error as Error).message}`, isError: true });
-const STATUS: Record<CuriosityItem['status'], string> = { open: '気になる', researching: '調べている', done: '調べた', dropped: 'やめた' };
-const line = (i: CuriosityItem) => `- #${i.id} ${STATUS[i.status]}「${i.topic}」${i.why ? `（${i.why}）` : ''}${i.result ? ` → ${i.result.slice(0, 200)}` : ''}`;
+const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
+  const language = languageOf(ctx.config);
+  return { content: error instanceof CuriosityError ? error.text(language) : toolText(language, 'failed', { detail: (error as Error).message }), isError: true };
+};
+const line = (i: CuriosityItem, language: Language) => toolText(language, 'curiosity.line', {
+  id: i.id, status: toolText(language, `curiosity.status.${i.status}`), topic: i.topic,
+  why: i.why ? toolText(language, 'curiosity.why', { why: i.why }) : '', result: i.result ? toolText(language, 'curiosity.result', { result: i.result.slice(0, 200) }) : '',
+});
 
 export const curiosityAdd: ToolDef<{ topic: string; why?: string }> = {
   name: 'curiosity_add',
@@ -23,8 +31,8 @@ export const curiosityAdd: ToolDef<{ topic: string; why?: string }> = {
   async execute(input, ctx) {
     try {
       const item = store(ctx).add({ topic: input.topic, why: input.why, source: 'clive' });
-      return { content: `好奇心リストに足しました ${line(item)}` };
-    } catch (error) { return fail(error); }
+      return { content: toolText(languageOf(ctx.config), 'curiosity.added', { line: line(item, languageOf(ctx.config)) }) };
+    } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -37,8 +45,9 @@ export const curiosityList: ToolDef<{ include_closed?: boolean }> = {
   async execute(input, ctx) {
     try {
       const items = store(ctx).list({ includeClosed: Boolean(input.include_closed), limit: 50 });
-      return { content: items.length ? items.map(line).join('\n') : '好奇心リストは空です' };
-    } catch (error) { return fail(error); }
+      const language = languageOf(ctx.config);
+      return { content: items.length ? items.map(i => line(i, language)).join('\n') : toolText(language, 'curiosity.empty') };
+    } catch (error) { return fail(error, ctx); }
   },
 };
 
@@ -55,7 +64,7 @@ export const curiosityUpdate: ToolDef<{ id: number; status?: 'open' | 'done' | '
   async execute(input, ctx) {
     try {
       const item = store(ctx).update(input.id, { ...(input.status ? { status: input.status } : {}), ...(input.result !== undefined ? { result: input.result } : {}) });
-      return { content: `更新しました ${line(item)}` };
-    } catch (error) { return fail(error); }
+      return { content: toolText(languageOf(ctx.config), 'curiosity.updated', { line: line(item, languageOf(ctx.config)) }) };
+    } catch (error) { return fail(error, ctx); }
   },
 };

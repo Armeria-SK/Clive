@@ -4,11 +4,14 @@ import type { App } from '../app.ts';
 import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
 import { defaultTexts } from '../engine/workspace.ts';
+import { languageOf } from '../shared/language.ts';
+import { engineText } from '../shared/messages/engine.ts';
 import type { ApprovalView } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
 import { MemoryError } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
-import { HttpProblem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
+import { httpText } from '../shared/messages/http.ts';
+import { domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
 import { registerReviewRoutes } from './routes-review.ts';
@@ -84,7 +87,7 @@ export function createWebServer(app: App): WebServer {
   });
   router.add('PATCH', '/api/conversations/:id', async ({ req, res, params }) => {
     const id = params[0]!;
-    if (!app.conversations.get(id)) throw new HttpProblem(404, { error: 'not_found', message: '会話がありません' });
+    if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     const body = requireObject(await readJson(req));
     const title = requireString(body, 'title', { optional: true, max: 200 });
     if (title) app.conversations.rename(id, title);
@@ -94,7 +97,7 @@ export function createWebServer(app: App): WebServer {
   router.add('GET', '/api/conversations/:id/messages', ({ res, params }) => {
     const id = params[0]!;
     const conversation = app.conversations.get(id);
-    if (!conversation) throw new HttpProblem(404, { error: 'not_found', message: '会話がありません' });
+    if (!conversation) throw problem(404, 'not_found', 'conversation_missing');
     const { snapshot: _snapshot, ...meta } = conversation;
     const active = app.engine.activeRuns().find(r => r.conversationId === id);
     sendJson(res, 200, {
@@ -116,26 +119,26 @@ export function createWebServer(app: App): WebServer {
     const body = requireObject(await readJson(req));
     const ids = body.attachments === undefined ? [] : body.attachments;
     if (!Array.isArray(ids) || !ids.every(a => typeof a === 'string') || ids.length > MAX_ATTACHMENTS) {
-      throw new HttpProblem(400, { error: 'invalid_field', field: 'attachments', message: `attachments は添付ファイルの ID の配列にしてください（${MAX_ATTACHMENTS} 件まで）` });
+      throw problem(400, 'invalid_field', 'bad_attachments', { field: 'attachments', params: { max: MAX_ATTACHMENTS } });
     }
     const text = ids.length && (body.text === undefined || body.text === '') ? '' : requireString(body, 'text', { max: MAX_MESSAGE_CHARS })!;
     const uploads = ids.map(uid => {
       const upload = app.uploads.get(uid);
-      if (!upload) throw new HttpProblem(400, { error: 'invalid_field', field: 'attachments', message: '添付ファイルが見つかりません（もう一度添付してください）' });
+      if (!upload) throw problem(400, 'invalid_field', 'attachment_missing', { field: 'attachments' });
       return upload;
     });
     const images: ImageRef[] = [];
     const blocks: string[] = [];
     for (const upload of uploads) {
-      if (upload.kind === 'image') images.push(app.uploads.image(upload)); else blocks.push(attachmentBlock(upload));
+      if (upload.kind === 'image') images.push(app.uploads.image(upload)); else blocks.push(attachmentBlock(upload, languageOf(app.config())));
     }
     if (images.length) {
       const config = app.config();
       const vision = config.routing.chat.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
-      if (!vision) throw new HttpProblem(409, { error: 'no_vision', message: '画像を読めるモデルがチャットの列にありません（models[].vision が true のモデルを routing.chat に入れてください）' });
+      if (!vision) throw problem(409, 'no_vision', 'no_vision');
     }
     const attachments: AttachmentMeta[] = uploads.map(u => ({ id: u.id, name: u.name, kind: u.kind }));
-    const content = [text || (images.length ? '（画像を添付しました）' : '（ファイルを添付しました）'), ...blocks].join('\n\n');
+    const content = [text || engineText(languageOf(app.config()), images.length ? 'attachment.image' : 'attachment.file'), ...blocks].join('\n\n');
     if (!app.conversations.get(id)) app.conversations.create({ id });
     const outcome = app.engine.send(id, content, images, attachments);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
@@ -153,7 +156,7 @@ export function createWebServer(app: App): WebServer {
     const body = await readBody(req, MAX_UPLOAD_BYTES);
     try { sendJson(res, 201, { upload: app.uploads.save({ name, mime: String(req.headers['content-type'] ?? ''), body }) }); }
     catch (error) {
-      if (error instanceof UploadError) throw new HttpProblem(error.status, { error: 'upload', message: error.message });
+      if (error instanceof UploadError) throw domainProblem(error.status, 'upload', error);
       throw error;
     }
   });
@@ -172,10 +175,10 @@ export function createWebServer(app: App): WebServer {
     const body = requireObject(await readJson(req));
     const decision = body.decision;
     if (decision !== 'once' && decision !== 'conversation' && decision !== 'deny') {
-      throw new HttpProblem(400, { error: 'invalid_field', field: 'decision', message: 'decision は once / conversation / deny のどれかにしてください' });
+      throw problem(400, 'invalid_field', 'bad_enum', { field: 'decision', params: { field: 'decision', values: 'once / conversation / deny' } });
     }
     const ok = app.approvals.decide(params[0]!, decision);
-    if (!ok) throw new HttpProblem(404, { error: 'not_found', message: 'この承認は既に終わっています（時間切れか、中止された可能性があります）' });
+    if (!ok) throw problem(404, 'not_found', 'approval_gone');
     sendJson(res, 200, { ok: true });
   });
   router.add('GET', '/api/tool-calls', ({ res, url }) => {
@@ -185,12 +188,12 @@ export function createWebServer(app: App): WebServer {
 
   // ── 記憶と履歴 ──
   const memoryProblem = (error: unknown) => {
-    if (error instanceof MemoryError) throw new HttpProblem(400, { error: 'memory', message: error.message });
+    if (error instanceof MemoryError) throw domainProblem(400, 'memory', error);
     throw error;
   };
   const memoryId = (raw: string) => {
     const id = Number(raw);
-    if (!Number.isSafeInteger(id) || id < 1) throw new HttpProblem(400, { error: 'invalid_id', message: 'ID が正しくありません' });
+    if (!Number.isSafeInteger(id) || id < 1) throw problem(400, 'invalid_id', 'invalid_id');
     return id;
   };
   router.add('GET', '/api/memories', ({ res }) => {
@@ -204,7 +207,7 @@ export function createWebServer(app: App): WebServer {
   router.add('POST', '/api/memories', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     const book = body.book;
-    if (book !== 'user' && book !== 'notes') throw new HttpProblem(400, { error: 'invalid_field', field: 'book', message: 'book は user か notes にしてください' });
+    if (book !== 'user' && book !== 'notes') throw problem(400, 'invalid_field', 'bad_book', { field: 'book' });
     const content = requireString(body, 'content', { max: 600 })!;
     try { sendJson(res, 201, app.memory.save({ book, content, actor: 'user', origin: 'user' })); } catch (error) { memoryProblem(error); }
   });
@@ -213,7 +216,7 @@ export function createWebServer(app: App): WebServer {
     try { sendJson(res, 200, app.memory.update(memoryId(params[0]!), content, 'user')); } catch (error) { memoryProblem(error); }
   });
   router.add('DELETE', '/api/memories/:id', ({ res, params }) => {
-    try { sendJson(res, 200, app.memory.forget(memoryId(params[0]!), 'user', '画面から削除')); } catch (error) { memoryProblem(error); }
+    try { sendJson(res, 200, app.memory.forget(memoryId(params[0]!), 'user', httpText(languageOf(app.config()), 'memory_deleted_note'))); } catch (error) { memoryProblem(error); }
   });
   router.add('GET', '/api/memories/:id/events', ({ res, params }) => sendJson(res, 200, { events: app.memory.events(memoryId(params[0]!)) }));
   router.add('GET', '/api/memory-events', ({ res }) => sendJson(res, 200, { events: app.memory.events(undefined, 100) }));
@@ -247,7 +250,7 @@ export function createWebServer(app: App): WebServer {
   });
   router.add('GET', '/api/templates/:language', ({ res, params }) => {
     const language = params[0]!;
-    if (!isLanguage(language)) throw new HttpProblem(404, { error: 'not_found', message: `言語「${language}」の初期値はありません（${LANGUAGES.join(' / ')}）` });
+    if (!isLanguage(language)) throw problem(404, 'not_found', 'unknown_language', { params: { language, values: LANGUAGES.join(' / ') } });
     sendJson(res, 200, { language, ...defaultTexts(app.paths, language) });
   });
   router.add('GET', '/api/models', ({ res }) => sendJson(res, 200, modelsView(app)));
@@ -269,9 +272,9 @@ export function createWebServer(app: App): WebServer {
     if (match === 'method_not_allowed') { sendJson(res, 405, { error: 'method_not_allowed' }); return; }
     try { await match.handler({ req, res, params: match.params, url }); }
     catch (error) {
-      if (error instanceof HttpProblem) { sendJson(res, error.status, error.body); return; }
+      if (error instanceof HttpProblem) { sendJson(res, error.status, error.render(languageOf(app.config()))); return; }
       app.log(`[ERROR] ${req.method} ${url.pathname}: ${(error as Error).stack ?? error}`);
-      sendJson(res, 500, { error: 'internal', message: '内部エラーが発生しました（ログを確認してください）' });
+      sendJson(res, 500, { error: 'internal', message: httpText(languageOf(app.config()), 'internal'), code: 'http.internal' });
     }
   };
 

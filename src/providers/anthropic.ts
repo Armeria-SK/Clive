@@ -1,10 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { ModelConfig, ProviderConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { ChatMessage, StopReason } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
-import { CONTEXT_HINTS, evaluateContext } from './context.ts';
+import { contextHint, errorProbeText, evaluateContext } from './context.ts';
 import { classifyHttpFailure, parseRetryAfter, requireApiKey } from './http.ts';
-import { ProviderError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
+import { ProviderError, providerError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
 type Block = Anthropic.ContentBlockParam;
 const EPHEMERAL = { type: 'ephemeral' } as const;
@@ -54,19 +54,19 @@ function mapStop(reason: string | null | undefined): StopReason {
 
 export function classifyAnthropicError(error: unknown, signal: AbortSignal): ProviderError {
   if (error instanceof ProviderError) return error;
-  if (error instanceof Anthropic.APIUserAbortError || signal.aborted) return new ProviderError('cancelled', '中止しました', { retryable: false });
-  if (error instanceof Anthropic.APIConnectionTimeoutError) return new ProviderError('timeout', 'Anthropic API の応答がタイムアウトしました');
-  if (error instanceof Anthropic.APIConnectionError) return new ProviderError('provider_error', 'Anthropic API に接続できません', { retryable: true });
+  if (error instanceof Anthropic.APIUserAbortError || signal.aborted) return providerError('cancelled', 'cancelled', {}, { retryable: false });
+  if (error instanceof Anthropic.APIConnectionTimeoutError) return providerError('timeout', 'anthropic.timeout');
+  if (error instanceof Anthropic.APIConnectionError) return providerError('provider_error', 'anthropic.connect', {}, { retryable: true });
   if (error instanceof Anthropic.APIError && typeof error.status === 'number') {
     const body = error.error as { error?: { type?: string; message?: string } } | undefined;
     const message = body?.error?.message ?? error.message ?? '';
     if (error.status === 529 || body?.error?.type === 'overloaded_error') {
       const retryAfterMs = parseRetryAfter(error.headers?.get('retry-after'));
-      return new ProviderError('provider_error', 'Anthropic API が混み合っています（HTTP 529）', { retryable: true, status: error.status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
+      return providerError('provider_error', 'anthropic.busy', {}, { retryable: true, status: error.status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
     }
     return classifyHttpFailure(error.status, message, error.headers);
   }
-  return new ProviderError('internal', `想定外のエラー: ${redactSecrets(String((error as Error)?.message ?? error)).slice(0, 200)}`, { retryable: false });
+  return providerError('internal', 'unexpected', { detail: redactSecrets(String((error as Error)?.message ?? error)).slice(0, 200) }, { retryable: false });
 }
 
 export class AnthropicAdapter implements ProviderAdapter {
@@ -156,16 +156,16 @@ export class AnthropicAdapter implements ProviderAdapter {
     yield { type: 'done', stop };
   }
 
-  async probe(model: ModelConfig, required: number): Promise<ProbeResult> {
-    const facts = { modelId: model.id, server: 'anthropic', required, declared: model.contextLength };
+  async probe(model: ModelConfig, required: number, language: Language = DEFAULT_LANGUAGE): Promise<ProbeResult> {
+    const facts = { modelId: model.id, server: 'anthropic', required, declared: model.contextLength, language };
     try {
       const info = await this.#clientFor().models.retrieve(model.model, undefined, { timeout: 10_000 });
       const modelMax = typeof info.max_input_tokens === 'number' ? info.max_input_tokens : undefined;
-      return evaluateContext({ ...facts, modelMax, hint: CONTEXT_HINTS.hosted(required), unmeasuredNote: modelMax === undefined ? 'API からモデルの上限を取得できませんでした' : undefined });
+      return evaluateContext({ ...facts, modelMax, hint: contextHint(language, 'hosted', required), unmeasuredNote: modelMax === undefined ? 'probe.note.max_unavailable' : undefined });
     } catch (error) {
       const e = classifyAnthropicError(error, new AbortController().signal);
       const status = e.kind === 'auth' ? 'no_api_key' : e.status === 404 ? 'not_found' : e.status === undefined ? 'unreachable' : 'error';
-      return { ...facts, status, message: e.message, checkedAt: Date.now() };
+      return { ...facts, status, ...errorProbeText(e, language), checkedAt: Date.now() };
     }
   }
 }
