@@ -21,6 +21,7 @@ export interface ToolOutput {
   content: string;
   isError?: boolean;
   fullRef?: string;
+  noRemoteContent?: boolean;
 }
 
 export interface PreCheck {

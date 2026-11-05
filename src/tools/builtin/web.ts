@@ -1,12 +1,12 @@
 import { Type } from '@sinclair/typebox';
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
-import { toolText } from '../../shared/messages/tools.ts';
+import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
 import { sanitizeModelInputText } from '../../shared/redaction.ts';
 import type { Language } from '../../config/schema.ts';
-import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
+import type { PreCheck, ToolContext, ToolDef, ToolOutput } from '../types.ts';
 import { htmlText } from '../web/html-text.ts';
-import { decodeText, fetchPublic, pageUrl, RetrievalFailure } from '../web/public-page.ts';
+import { clip, decodeText, fetchPublic, pageUrl, RetrievalFailure } from '../web/public-page.ts';
 import { searchDuckDuckGo, SearchFailure, searchSearxng, SearchThrottle, type SearchHit } from '../web/search.ts';
 
 const PAGE_CHARS = 20_000;
@@ -24,8 +24,12 @@ function exfiltrationCheck(text: string, language: Language, extraReasons: strin
   return reasons.length ? { decision: 'ask', reasons, details: [text.slice(0, 500)] } : { decision: 'allow', reasons: [] };
 }
 
-function failure(error: unknown, language: Language): { content: string; isError: true } {
-  if (error instanceof RetrievalFailure || error instanceof SearchFailure) return { content: error.text(language), isError: true };
+const APP_TEXT_ONLY: ReadonlySet<ToolMessageKey> = new Set<ToolMessageKey>(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked']);
+
+export function webFailure(error: unknown, language: Language): ToolOutput & { isError: true } {
+  if (error instanceof RetrievalFailure || error instanceof SearchFailure) {
+    return { content: error.text(language), isError: true, ...(error.key && APP_TEXT_ONLY.has(error.key) ? { noRemoteContent: true } : {}) };
+  }
   return { content: toolText(language, 'failed', { detail: (error as Error).message }), isError: true };
 }
 
@@ -54,7 +58,7 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
       const html = /^(text\/html|application\/xhtml\+xml)(;|$)/iu.test(page.contentType);
       const extracted = html ? htmlText(raw, page.url) : undefined;
       const text = extracted ? extracted.text : raw;
-      if (!text.trim()) return { content: toolText(language, 'web.no_text', { url: page.url }), isError: true };
+      if (!text.trim()) return { content: toolText(language, 'web.no_text', { url: clip(page.url, 200) }), isError: true };
       const start = Math.min(input.offset ?? 0, text.length);
       const end = start + PAGE_CHARS;
       const lines = [
@@ -70,7 +74,7 @@ export const webFetch: ToolDef<{ url: string; offset?: number }> = {
         !start && extracted?.links.length ? `${toolText(language, 'web.links')}\n${extracted.links.slice(0, 15).map(l => `- ${l.text || toolText(language, 'web.no_link_text')}: ${l.url}`).join('\n')}` : '',
       ].filter(Boolean);
       return { content: lines.join('\n') };
-    } catch (error) { return failure(error, language); }
+    } catch (error) { return webFailure(error, language); }
   },
 };
 
@@ -96,7 +100,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
     const language = languageOf(ctx.config);
     const limit = input.max_results ?? 5;
     // 自動アクセスの判定で続けて止められたら、この実行のあいだは通信しない（同じ失敗でステップを使い切らせない）
-    if ((ctx.searchBlocks ?? 0) >= SEARCH_BLOCK_LIMIT) return { content: toolText(language, 'web.search_unavailable'), isError: true };
+    if ((ctx.searchBlocks ?? 0) >= SEARCH_BLOCK_LIMIT) return { content: toolText(language, 'web.search_unavailable'), isError: true, noRemoteContent: true };
     try {
       const wait = web(ctx).throttle.take(w.maxSearchesPerHour);
       if (wait) await new Promise<void>((resolve, reject) => {
@@ -124,7 +128,7 @@ export const webSearch: ToolDef<{ query: string; max_results?: number }> = {
           ctx.services?.notify?.({ kind: 'info', title: toolText(language, 'web.search_blocked_title'), body: toolText(language, 'web.search_blocked_body'), link: '#/settings', dedupKey: 'search-blocked' });
         }
       } else ctx.searchBlocks = 0;
-      return failure(error, language);
+      return webFailure(error, language);
     }
   },
 };
