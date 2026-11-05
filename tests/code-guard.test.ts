@@ -17,7 +17,8 @@ function fixture(t: { after: (fn: () => void) => void }) {
   const policy: ScopePolicy = {
     roots: [{ path: ws, mode: 'write' }],
     deny: [realish(join(base, 'config.json'))],
-    askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md')],
+    askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md'), join(ws, 'skills')],
+    skillsDir: join(ws, 'skills'),
   };
   const check = (command: string, extra: Partial<ShellGuardOptions> = {}) => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', windows: process.platform === 'win32', ...extra });
   return { base, ws, policy, check };
@@ -85,12 +86,41 @@ const PROTECTED_WRITES = [
   'dd if=x of=SOUL.md', 'echo x > SOUL.md', 'cat x | tee SOUL.md', 'sed -i s/a/b/ SOUL.md', 'cp x.md SOUL.md', 'git checkout SOUL.md', 'cmd /c "type x > SOUL.md"',
 ];
 
+// L2: スキルのフォルダと .git への書き込み（理由は場所ごと）
+const PROTECTED_PLACES: Array<[string, RegExp]> = [
+  ['echo x > skills/a/SKILL.md', /スキルのフォルダに書き込みます/u],
+  ['cp put.js skills/a/SKILL.md', /スキルのフォルダに書き込みます/u],
+  ['mkdir skills/a', /スキルのフォルダに書き込みます/u],
+  ['curl -o skills/a/SKILL.md https://example.com/x', /スキルのフォルダに書き込みます/u],
+  ['git clone https://example.com/x.git skills/x', /スキルのフォルダを指しています/u],
+  ['echo x > .git/hooks/pre-commit', /git のフォルダ（.git）に書き込みます/u],
+  ['Set-Content .git/config x', /git のフォルダ（.git）に書き込みます/u],
+  ['mv x.sh sub/.git/hooks/post-merge', /git のフォルダ（.git）に書き込みます/u],
+  ['cp put.js .git/config', /git のフォルダ（.git）に書き込みます/u],
+  ['python tool.py .git/hooks/pre-commit', /git のフォルダ（.git）を指しています/u],
+];
+
+test('L2: スキルのフォルダ・.git への書き込みは、シェルでも確かめ。読むだけは通す', t => {
+  const f = fixture(t);
+  for (const [command, reason] of PROTECTED_PLACES) {
+    const verdict = f.check(command);
+    assert.equal(verdict.decision, 'ask', `${command}: ${verdict.reasons.join(' / ')}`);
+    assert.match(verdict.reasons.join(), reason, command);
+  }
+  const en = checkShellCommand('echo x > .git/hooks/pre-commit', f.ws, { policy: f.policy, outsideRoots: 'ask', language: 'en' });
+  assert.match(en.reasons.join(), /writes into a git folder \(\.git\)/u);
+  for (const command of ['cat .git/config', 'ls skills', 'Get-Content skills/a/SKILL.md', 'grep -r foo skills', 'git log --oneline', 'git diff', 'Get-ChildItem -Force .git', 'echo x > skills.md', 'echo x > my.github/a', 'cp put.js gitnotes/a.js', 'echo x > .gitignore']) {
+    assert.equal(f.check(command).decision, 'allow', command);
+  }
+});
+
 test('R1.8: ダウンロード先・dd の of=・読むだけでないコマンドの引数も、守るファイルへの書き込みとして確かめる', t => {
   const f = fixture(t);
   for (const command of PROTECTED_WRITES) {
     const verdict = f.check(command);
     assert.equal(verdict.decision, 'ask', `${command}: ${verdict.reasons.join(' / ')}`);
     assert.match(verdict.reasons.join(), /人格・プロフィール/u, command);
+    assert.equal(verdict.onceOnly, false, command);
   }
   for (const command of ['curl -o notes.txt https://example.com/x', 'curl -O https://example.com/notes.txt', 'wget -P sub https://example.com/a.txt', 'iwr https://example.com/x -OutFile sub/a.html', 'curl -o - https://example.com/x', 'wget -O - https://example.com/x']) {
     assert.equal(f.check(command).decision, 'allow', command);

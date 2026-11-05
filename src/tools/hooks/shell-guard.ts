@@ -4,7 +4,7 @@ import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
 import { codeFindings, readOnlyInvocation } from './code-guard.ts';
 import { segments, splitCommand, type Segment } from './parse-cmd.ts';
-import { expandPath, isInside, needsWriteApproval, placePath, type Placement, type ScopePolicy } from './scope.ts';
+import { expandPath, isInside, placePath, writeApprovalKind, type Placement, type ProtectedKind, type ScopePolicy } from './scope.ts';
 
 export type Decision = 'allow' | 'ask' | 'deny';
 const RANK: Record<Decision, number> = { allow: 0, ask: 1, deny: 2 };
@@ -63,6 +63,8 @@ const INTERPRETERS: Array<[RegExp, RegExp]> = [
 ];
 const NETWORK_FETCH = new Set(['curl', 'wget', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm']);
 const SHELL_SINKS = new Set(['sh', 'bash', 'zsh', 'pwsh', 'powershell', 'iex', 'invoke-expression', 'cmd', 'python', 'python3', 'node', 'perl', 'ruby']);
+const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git' };
+const TOUCH_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.touch_persona', skill: 'guard.touch_skill', git: 'guard.touch_git' };
 const NULL_SINKS = /^(?:\/dev\/null|\$null|nul|NUL)$/u;
 const URLISH = /^[a-z][a-z0-9+.-]*:\/\//iu;
 
@@ -320,8 +322,11 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       if (DELETE_CMDS.has(seg.cmd) && isCriticalTarget(expanded.path, opts.policy)) { add('deny', text('guard.irreversible', { path: expanded.path })); continue; }
       if (placement.kind === 'outside') add(opts.outsideRoots, text('guard.touches_outside', { path: expanded.path }));
       else if (write && placement.mode === 'read') add('deny', text('guard.write_readonly', { path: expanded.path }));
-      else if (write && needsWriteApproval(expanded.path, opts.policy)) add('ask', text('guard.write_persona', { path: expanded.path }));
-      else if (!write && !readOnlyInvocation(seg) && needsWriteApproval(expanded.path, opts.policy)) add('ask', text('guard.touch_persona', { path: expanded.path }));
+      else {
+        const protectedKind = writeApprovalKind(expanded.path, opts.policy);
+        if (protectedKind && write) add('ask', text(WRITE_KEYS[protectedKind], { path: expanded.path }));
+        else if (protectedKind && !readOnlyInvocation(seg)) add('ask', text(TOUCH_KEYS[protectedKind], { path: expanded.path }));
+      }
     }
   }
   return done();

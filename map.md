@@ -72,7 +72,7 @@
 - 使うもの: `memory`（振り返りの指示文）、`db`、`croner`。`engine`（`ChatEngine`）・`notify`・`curiosity`・`config` は `App` から渡される
 
 ### 道具 — `src/tools`
-- `types.ts`（道具の型。効果は `read` `write` `exec` `network` `meta`、使える場面は `chat` `task` `review`）、`registry.ts`（登録）、`policy.ts`（触れてよいフォルダと禁止パス）、`approvals.ts`（承認待ちの管理。コードを動かす確かめ `onceOnly` は「この会話では許可」を受けても今回だけとして扱い、見せるファイルの中身 `preview` を持つ。画面と SSE に渡す形は `approvalPublic` の 1 か所）。
+- `types.ts`（道具の型。効果は `read` `write` `exec` `network` `meta`、使える場面は `chat` `task` `review`）、`registry.ts`（登録）、`policy.ts`（触れてよいフォルダと禁止パス。書く前に確認する場所: 人格 `SOUL.md` `USER.md`・スキルのフォルダ `workspace/skills/`・`.git` の段があるパス。スキルの正規の道は `skill_draft` → 画面の承認）、`approvals.ts`（承認待ちの管理。コードを動かす確かめ `onceOnly` は「この会話では許可」を受けても今回だけとして扱い、見せるファイルの中身 `preview` を持つ。画面と SSE に渡す形は `approvalPublic` の 1 か所）。
 - `pipeline.ts`: 道具 1 回の流れ。引数の検査 → 事前の判定 → 外から読んだ内容のあとは確認を求める（書き込み・実行の道具と、`escalateOnTaint` を持つ道具 = 記憶の追加・書き換え・削除 `memory_save` `memory_update` `memory_forget`）→ 実行前フック → 承認（コードを動かす確かめは、会話の許可を見ず、承認のあとにもう一度判定して、見せたファイルの中身が変わっていたら動かさない）→ 実行 → 実行後フック → `tool_calls` に記録。振り返りでは書き込み・実行・通信の道具を使わせない。
 - 中の部品:
   - `builtin/`: 組み込みの道具 24 個（`files` `shell` `web` `memory` `tasks` `curiosity` `skills`）。

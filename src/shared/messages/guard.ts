@@ -31,6 +31,10 @@ const ja = {
   'guard.write_readonly': '読み取り専用のフォルダに書き込もうとしています（{path}）',
   'guard.write_persona': '人格・プロフィールのファイルを書き換えます（{path}）',
   'guard.touch_persona': '人格・プロフィールのファイルを指しています（{path}）。読むだけのコマンドではないので、書き換えるかもしれません',
+  'guard.write_skill': 'スキルのフォルダに書き込みます（{path}）。ここに置くと、画面で確かめていないスキルとして使われます',
+  'guard.touch_skill': 'スキルのフォルダを指しています（{path}）。読むだけのコマンドではないので、書き込むかもしれません。ここに置くと、画面で確かめていないスキルとして使われます',
+  'guard.write_git': 'git のフォルダ（.git）に書き込みます（{path}）。git のフックや設定はコマンドを動かせます',
+  'guard.touch_git': 'git のフォルダ（.git）を指しています（{path}）。読むだけのコマンドではないので、書き込むかもしれません。git のフックや設定はコマンドを動かせます',
 
   'code.file_run': 'ファイルに書かれたコードを動かします（{path}）。中身は Clive が書き換えられるので、毎回確かめます',
   'code.stdin_run': '標準入力から渡したコードを {cmd} で動かします。中身はコマンドの文字から分からないので、毎回確かめます',
@@ -84,6 +88,8 @@ const ja = {
   'file.readonly': '読み取り専用のフォルダです（{root}）',
   'file.symlink': 'シンボリックリンクには書き込みません',
   'file.persona': '人格・プロフィールのファイル（SOUL.md / USER.md）なので、書き換える前に確認します',
+  'file.skill': 'スキルのフォルダなので、書き込む前に確認します。ここに置くと、画面で確かめていないスキルとして使われます（スキルは skill_draft で下書きとして出すと、画面で承認できます）',
+  'file.git': 'git のフォルダ（.git）なので、書き込む前に確認します。git のフックや設定はコマンドを動かせます',
 
   'shell.disabled': 'シェルの実行は設定で無効になっています',
   'shell.cwd_unresolved': 'cwd が判定できません: {detail}',
@@ -146,6 +152,10 @@ const en: Record<keyof typeof ja, string> = {
   'guard.write_readonly': 'It tries to write into a read-only folder ({path})',
   'guard.write_persona': 'It rewrites a persona or profile file ({path})',
   'guard.touch_persona': 'It points at a persona or profile file ({path}). The command is not a read-only one, so it may rewrite the file',
+  'guard.write_skill': 'It writes into the skills folder ({path}). A skill placed here is used as a skill that has not been checked on screen',
+  'guard.touch_skill': 'It points at the skills folder ({path}). The command is not a read-only one, so it may write there. A skill placed here is used as a skill that has not been checked on screen',
+  'guard.write_git': 'It writes into a git folder (.git) ({path}). Git hooks and settings can run commands',
+  'guard.touch_git': 'It points at a git folder (.git) ({path}). The command is not a read-only one, so it may write there. Git hooks and settings can run commands',
 
   'code.file_run': 'It runs code written in a file ({path}). Clive can rewrite that file, so it is checked with you every time',
   'code.stdin_run': 'It runs code passed through standard input with {cmd}. The command text does not show what the code is, so it is checked with you every time',
@@ -199,6 +209,8 @@ const en: Record<keyof typeof ja, string> = {
   'file.readonly': 'This folder is read only ({root})',
   'file.symlink': 'Writing to a symbolic link is not allowed',
   'file.persona': 'This is a persona or profile file (SOUL.md / USER.md), so it is checked with you before it is rewritten',
+  'file.skill': 'This is the skills folder, so it is checked with you before anything is written. A skill placed here is used as a skill that has not been checked on screen (offer a skill as a draft with skill_draft to have it approved on screen)',
+  'file.git': 'This is a git folder (.git), so it is checked with you before anything is written. Git hooks and settings can run commands',
 
   'shell.disabled': 'Running the shell is disabled in the settings',
   'shell.cwd_unresolved': 'The cwd cannot be determined: {detail}',

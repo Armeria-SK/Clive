@@ -5,8 +5,10 @@ import { atomicWriteFile } from '../../config/store.ts';
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import { expandPath, needsWriteApproval, placePath } from '../hooks/scope.ts';
+import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
+
+const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git' } as const;
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_WRITE_CHARS = 1_000_000;
@@ -25,9 +27,8 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   }
   if (need === 'write' && placement.mode === 'read') return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.readonly', { root: placement.root })] } };
   if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.symlink')] } };
-  if (need === 'write' && needsWriteApproval(abs, ctx.policy)) {
-    return { abs, check: { decision: 'ask', reasons: [guardText(language, 'file.persona')] } };
-  }
+  const protectedKind = need === 'write' ? writeApprovalKind(abs, ctx.policy) : undefined;
+  if (protectedKind) return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])] } };
   return { abs, check: { decision: 'allow', reasons: [] } };
 }
 

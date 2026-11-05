@@ -89,13 +89,27 @@ export function isSecretPath(abs: string): boolean {
 export interface ScopePolicy {
   roots: ResolvedRoot[];
   deny: string[];
+  // 書き込む前に承認を求める場所（人格・プロフィール・スキルのフォルダ）。.git の段があるパスは、ここに無くても同じに扱う
   askOnWrite?: string[];
+  // askOnWrite のうち、スキルのフォルダ（理由の文を分けるため）
+  skillsDir?: string;
   language?: Language;
 }
 
-export function needsWriteApproval(abs: string, policy: ScopePolicy): boolean {
+// 書き込む前に承認を求める場所の種類。persona: SOUL.md・USER.md、skill: workspace/skills/、git: .git の段があるパス（フックや設定でコマンドを動かせる）
+export type ProtectedKind = 'persona' | 'skill' | 'git';
+
+const hasGitSegment = (p: string): boolean => p.split(/[\\/]/u).some(part => fold(part) === '.git');
+
+export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKind | undefined {
   const real = realish(abs);
-  return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs));
+  if (hasGitSegment(abs) || hasGitSegment(real)) return 'git';
+  if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';
+  return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
+}
+
+export function needsWriteApproval(abs: string, policy: ScopePolicy): boolean {
+  return writeApprovalKind(abs, policy) !== undefined;
 }
 
 export type Placement =

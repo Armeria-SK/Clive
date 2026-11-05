@@ -268,6 +268,71 @@ test('V6: 裏で動くタスクも、コードを動かす前は人の許可を�
   assert.deepEqual((s.db.prepare('SELECT status FROM approvals').all() as Array<{ status: string }>).map(r => r.status), ['expired']);
 });
 
+test('V5: スキルのフォルダと .git への書き込みは、シェルなしの file_write・file_edit でも確かめになる（理由は場所ごと）', async t => {
+  const s = setup(t);
+  mkdirSync(join(s.paths.workspace, 'skills', 'ok'), { recursive: true });
+  writeFileSync(join(s.paths.workspace, 'skills', 'ok', 'SKILL.md'), 'old');
+  mkdirSync(join(s.paths.workspace, 'proj', '.git', 'hooks'), { recursive: true });
+  writeFileSync(join(s.paths.workspace, 'proj', '.git', 'config'), '[core]');
+  const cases: Array<[string, RegExp]> = [
+    ['skills/evil/SKILL.md', /スキルのフォルダ/u],
+    ['skills/ok/extra.md', /スキルのフォルダ/u],
+    ['.git/hooks/pre-commit', /git のフォルダ/u],
+    ['proj/.git/hooks/post-checkout', /git のフォルダ/u],
+  ];
+  if (process.platform === 'win32') cases.push(['proj/.GIT/config', /git のフォルダ/u]);
+  for (const [path, reason] of cases) {
+    const pending = s.call('file_write', { path, content: 'x' });
+    const request = await decideNext(s, 'deny');
+    assert.match(request.reasons.join(), reason, path);
+    assert.equal(request.onceOnly, false, '確かめはこれまでの承認と同じ（コードを動かす確かめではない）');
+    assert.match((await pending).output.content, /拒否しました/u, path);
+    assert.equal(existsSync(join(s.paths.workspace, path)) && readFileSync(join(s.paths.workspace, path), 'utf8') === 'x', false, `${path} に書かれてしまった`);
+  }
+
+  const edit = s.call('file_edit', { path: 'skills/ok/SKILL.md', old: 'old', new: 'new' });
+  assert.match((await decideNext(s, 'deny')).reasons.join(), /スキルのフォルダ/u);
+  await edit;
+  assert.equal(readFileSync(join(s.paths.workspace, 'skills', 'ok', 'SKILL.md'), 'utf8'), 'old');
+
+  // 許可すれば書ける（人が確かめたあと）
+  const approved = s.call('file_write', { path: 'skills/evil/SKILL.md', content: 'x' });
+  await decideNext(s, 'once');
+  await approved;
+  assert.equal(readFileSync(join(s.paths.workspace, 'skills', 'evil', 'SKILL.md'), 'utf8'), 'x');
+
+  // ふつうのファイル・読むこと・似た名前は、今までどおり確かめなし
+  for (const path of ['notes/a.md', 'skills.md', 'my-skills/a.md', 'gitnotes/.github/a.md', '.gitignore']) {
+    const outcome = await s.call('file_write', { path, content: 'x' });
+    assert.equal(outcome.decision, 'allow', path);
+  }
+  assert.equal((await s.call('file_read', { path: 'skills/ok/SKILL.md' })).decision, 'allow');
+  assert.equal((await s.call('file_read', { path: 'proj/.git/config' })).decision, 'allow');
+  assert.equal((await s.call('file_list', { path: 'skills' })).decision, 'allow');
+});
+
+test('V5: シェルでも、スキルのフォルダと .git への書き込み・読むだけでないコマンドは確かめになる。読むだけは通す', async t => {
+  const s = setup(t);
+  mkdirSync(join(s.paths.workspace, 'skills'), { recursive: true });
+  const asks: Array<[string, RegExp]> = [
+    ['echo x > skills/a/SKILL.md', /スキルのフォルダに書き込みます/u],
+    ['Set-Content -Path .git/config -Value x', /git のフォルダ（.git）に書き込みます/u],
+    ['cp notes.md skills/a/SKILL.md', /スキルのフォルダ/u],
+    ['git clone https://example.com/x.git skills/x', /スキルのフォルダを指しています/u],
+    ['python tool.py .git/hooks/pre-commit', /git のフォルダ/u],
+  ];
+  for (const [command, reason] of asks) {
+    const pending = s.call('shell_run', { command });
+    const request = await decideNext(s, 'deny');
+    assert.match(request.reasons.join(), reason, command);
+    await pending;
+  }
+  for (const command of ['Get-Content skills/a/SKILL.md', 'ls skills', 'git log --oneline -1', 'Get-ChildItem -Force .git']) {
+    const outcome = await s.call('shell_run', { command });
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+  }
+});
+
 test('taint: Web や添付の内容を読んだ後は、書き込みも承認制になる', async t => {
   const s = setup(t);
   const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
