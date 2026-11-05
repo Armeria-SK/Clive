@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { findGitDir, inspectRepo, parseGitConfig, unusualKey } from '../src/tools/hooks/git-repo.ts';
@@ -230,7 +230,7 @@ test('本物の git: commondir だけのフォルダは git のフォルダで�
   git(['--git-dir=c', '--work-tree=wt', '-c', 'user.name=t', '-c', 'user.email=t@e', 'commit', '-q', '-m', 'one']);
   const marker = join(root, 'marker');
   const hook = join(root, 'hook.sh');
-  writeFileSync(hook, `#!/bin/sh\necho ran > "${marker.replaceAll('\\', '/')}"\ncat "$1"\n`);
+  writeFileSync(hook, `#!/bin/sh\necho ran > "${marker.replaceAll('\\', '/')}"\ncat "$1"\n`, { mode: 0o755 });
   appendFileSync(join(root, 'c', 'config'), `[diff "x"]\n\ttextconv = ${hook.replaceAll('\\', '/')}\n`);
   mkdirSync(join(root, 'c', 'info'), { recursive: true });
   writeFileSync(join(root, 'c', 'info', 'attributes'), '* diff=x\n');
@@ -243,4 +243,98 @@ test('本物の git: commondir だけのフォルダは git のフォルダで�
   assert.equal(info.badKey, 'diff.x.textconv');
   git(['-C', 'x', 'log', '-p', '--oneline']);
   assert.equal(existsSync(marker), true, '前提: 本物の git は textconv のコードを動かす（ガードが見つけないと、許す になってしまう形）');
+});
+
+// 審査で見つかった: git の validate_headref は HEAD の中身も見る（`ref:` のあとの refs/、先頭の 40 桁以上の 16 進数、refs/ へのシンボリックリンク）。
+// HEAD があるだけで git のフォルダとしていたので、HEAD が不正なおとりのフォルダ a/b でガードは止まり、git は b を飛ばして上の裏のリポジトリ a を使った（a の設定の textconv が `git log -p` で動く）
+const HEADS: Array<[string, string]> = [
+  ['ふつう', 'ref: refs/heads/main\n'], ['改行なし', 'ref: refs/heads/main'], ['ref: と refs/ の間が空白なし', 'ref:refs/heads/x'], ['タブ', 'ref:\trefs/heads/x'], ['refs/ だけ', 'ref: refs/'],
+  ['40 桁', 'a'.repeat(40)], ['40 桁のあとにごみ', `${'b'.repeat(40)} trailing`], ['64 桁', 'c'.repeat(64)], ['大文字の 40 桁', 'A'.repeat(40)],
+  ['ごみ', 'x'], ['空', ''], ['refs/ でない', 'ref: heads/main'], ['39 桁', 'a'.repeat(39)], ['先頭に空白', ' ref: refs/heads/x'], ['refs の後ろに / なし', 'ref: refs'],
+  ['REFS/', 'ref: REFS/heads/x'], ['先頭に改行', '\nref: refs/heads/x'], ['Ref:', 'Ref: refs/heads/x'], ['全角空白（UTF-8）', 'ref:\u3000refs/heads/x'], ['0xA0 の 1 バイト', 'ref:\u00a0refs/heads/x'], ['0x85 の 1 バイト', 'ref:\u0085refs/heads/x'], ['垂直タブ', 'ref:\vrefs/heads/x'], ['フォームフィード', 'ref:\frefs/heads/x'], ['CR', 'ref:\rrefs/heads/x'],
+];
+
+function decoy(t: { after: (fn: () => void) => void }, head: string | Buffer): { a: string; b: string } {
+  const root = tempDir(t);
+  const a = makeGitDir(join(root, 'a'), PLAIN);
+  const b = join(a, 'b');
+  mkdirSync(join(b, 'objects'), { recursive: true });
+  mkdirSync(join(b, 'refs'), { recursive: true });
+  writeFileSync(join(b, 'HEAD'), head);
+  return { a, b };
+}
+
+test('HEAD の中身: 本物の git が b を git のフォルダとするときだけ、ガードも b をふつうの git のフォルダとする。そうでなければ今回だけ（読めない）か、上を使う', { skip: !gitAvailable && 'git が無い' }, t => {
+  const wrong: string[] = [];
+  for (const [label, head] of HEADS) {
+    const { a, b } = decoy(t, label.includes('UTF-8') ? head : Buffer.from(head, 'latin1'));
+    const real = spawnSync('git', ['-C', b, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim().replaceAll('\\', '/');
+    const gitUsesB = real.replace(/\/+$/u, '') === b.replaceAll('\\', '/');
+    const found = findGitDir(b);
+    const guardOkAtB = found?.gitDir === b && found.broken !== true;
+    if (gitUsesB !== guardOkAtB) wrong.push(`${label}: git は ${gitUsesB ? 'b' : '上'} を使う、ガードは ${guardOkAtB ? 'b' : found?.broken ? '読めない' : '上'}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('HEAD が不正なおとり a/b: 上の裏のリポジトリ a の設定の textconv が動く。ガードは今回だけ（読めない）にする', t => {
+  const { a, b } = decoy(t, 'x');
+  appendFileSync(join(a, 'config'), '[diff "x"]\n\ttextconv = ./conv.sh\n');
+  const info = inspectRepo(b);
+  assert.equal(info.found, true);
+  assert.equal(info.unreadable || !info.configOk, true, JSON.stringify(info));
+  // git は b を飛ばして上を使うが、git の版で認める範囲が変わりうるので、b は「読めない」（今回だけ）にする
+  assert.equal(findGitDir(b)?.broken, true);
+  assert.equal(info.unreadable, true);
+  // 上の a だけを調べても、textconv は見つかる
+  assert.equal(inspectRepo(a).configOk, false);
+  // HEAD が有効なら、b 自身の設定を調べる
+  writeFileSync(join(b, 'HEAD'), 'ref: refs/heads/main\n');
+  assert.equal(findGitDir(b)?.gitDir, b);
+  assert.equal(inspectRepo(b).configOk, true, 'b の設定は空');
+});
+
+test('HEAD が不正で objects/ と refs/ が無いフォルダは、git のフォルダではないので上へ進む。HEAD が無いフォルダも同じ', t => {
+  const root = tempDir(t);
+  const a = makeGitDir(join(root, 'a'), PLAIN);
+  const b = join(a, 'b');
+  mkdirSync(b);
+  writeFileSync(join(b, 'HEAD'), 'garbage');
+  assert.equal(findGitDir(b)?.gitDir, a);
+  const c = join(a, 'c');
+  mkdirSync(join(c, 'objects'), { recursive: true });
+  mkdirSync(join(c, 'refs'), { recursive: true });
+  assert.equal(findGitDir(c)?.gitDir, a, 'HEAD が無ければ上へ（git と同じ）');
+});
+
+test('HEAD が refs/ へのシンボリックリンクなら有効、それ以外なら不正（POSIX）', { skip: (process.platform === 'win32' || !gitAvailable) && 'シンボリックリンクを作れない環境、または git が無い' }, t => {
+  const ok = decoy(t, '');
+  rmSync(join(ok.b, 'HEAD'));
+  symlinkSync('refs/heads/main', join(ok.b, 'HEAD'));
+  const real = spawnSync('git', ['-C', ok.b, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim();
+  assert.equal(real, ok.b, '本物の git は b を使う');
+  assert.equal(findGitDir(ok.b)?.gitDir, ok.b);
+  assert.equal(findGitDir(ok.b)?.broken, undefined);
+  const bad = decoy(t, '');
+  rmSync(join(bad.b, 'HEAD'));
+  symlinkSync('elsewhere', join(bad.b, 'HEAD'));
+  assert.equal(spawnSync('git', ['-C', bad.b, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim(), bad.a, '本物の git は上を使う');
+  assert.equal(findGitDir(bad.b)?.broken, true);
+});
+
+test('HEAD がフォルダのとき: 本物の git は認めず上を使う。ガードは今回だけ（読めない）にする', { skip: !gitAvailable && 'git が無い' }, t => {
+  const { a, b } = decoy(t, '');
+  rmSync(join(b, 'HEAD'));
+  mkdirSync(join(b, 'HEAD'));
+  assert.equal(spawnSync('git', ['-C', b, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim().replaceAll('\\', '/'), a.replaceAll('\\', '/'), '本物の git は上を使う');
+  assert.equal(findGitDir(b)?.broken, true);
+});
+
+test('HEAD が読めないとき（POSIX）: 本物の git は認めず上を使う。ガードは今回だけ（読めない）にする', { skip: (process.platform === 'win32' || process.getuid?.() === 0 || !gitAvailable) && '読めなくできない環境、または git が無い' }, t => {
+  const { a, b } = decoy(t, 'ref: refs/heads/main\n');
+  chmodSync(join(b, 'HEAD'), 0);
+  try {
+    assert.equal(spawnSync('git', ['-C', b, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim(), a, '本物の git は上を使う');
+    assert.equal(findGitDir(b)?.broken, true);
+  } finally { chmodSync(join(b, 'HEAD'), 0o644); }
 });

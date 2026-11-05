@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -217,5 +217,50 @@ for (const shell of ['powershell', 'bash'] as const) {
     assert.equal(clean.decidedBy !== 'user', true, '問題のないリポジトリで承認を求めた');
     assert.equal(clean.output.isError, false, clean.output.content);
     assert.equal(existsSync(marker), false);
+  });
+}
+
+// 審査の追加の指摘: HEAD が不正なおとりのフォルダ（bare/dec）で、ガードは止まり、git は飛ばして上の裏のリポジトリ bare を使う。bare の設定の textconv が `git log -p` で動く。
+// 本物の git で、今回だけの確かめを断れば動かないこと、HEAD が有効な（本物の）リポジトリは確かめなしで動くことを確かめる
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: HEAD が不正なおとりの下で、上の裏のリポジトリの textconv は、今回だけの確かめになり、断れば動かない`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const fwd = (p: string): string => p.replaceAll('\\', '/');
+    const bare = join(root, 'bare');
+    const work = join(root, 'wt');
+    const marker = join(root, 'marker');
+    const conv = join(root, 'conv.sh');
+    mkdirSync(work);
+    spawnSync('git', ['init', '-q', '--bare', bare]);
+    const g = (...args: string[]) => spawnSync('git', ['--git-dir', bare, '--work-tree', work, '-c', 'user.name=t', '-c', 'user.email=t@e', ...args]);
+    for (const text of ['one\n', 'two\n']) {
+      writeFileSync(join(work, 'f.txt'), text);
+      g('add', 'f.txt');
+      g('commit', '-q', '-m', text.trim());
+    }
+    writeFileSync(conv, `#!/bin/sh\necho ran > "${fwd(marker)}"\ncat "$1"\n`, { mode: 0o755 });
+    mkdirSync(join(bare, 'info'), { recursive: true });
+    writeFileSync(join(bare, 'info', 'attributes'), '* diff=x\n');
+    appendFileSync(join(bare, 'config'), `[diff "x"]\n\ttextconv = ${fwd(conv)}\n`);
+    const decoy = join(bare, 'dec');
+    mkdirSync(join(decoy, 'objects'), { recursive: true });
+    mkdirSync(join(decoy, 'refs'), { recursive: true });
+    writeFileSync(join(decoy, 'HEAD'), 'x');
+    // 前提: 本物の git は、おとりを飛ばして上の bare を使い、その設定の textconv を動かす
+    spawnSync('git', ['-C', decoy, 'log', '-p', '--oneline']);
+    assert.equal(existsSync(marker), true, '前提: 本物の git は、上の裏のリポジトリの textconv を動かす');
+    rmSync(marker);
+    const ps = shell === 'powershell';
+    for (const command of ps ? ['git -C bare/dec log -p', 'cd bare/dec; git log -p', 'Set-Location bare/dec; git show'] : ['git -C bare/dec log -p', 'cd bare/dec && git log -p', 'git -C bare/dec show']) {
+      await expectAsk(s, command);
+      assert.equal(existsSync(marker), false, `${command}: 断ったのに、上のリポジトリの設定のコードが動いた`);
+    }
+    // HEAD が有効なら、dec は本物のリポジトリ（設定は空）。確かめなしで通る
+    writeFileSync(join(decoy, 'HEAD'), 'ref: refs/heads/main\n');
+    const real = await s.call('git -C bare/dec status --short');
+    assert.equal(real.decision, 'allow', real.output.content);
+    assert.equal(real.decidedBy !== 'user', true, '本物のリポジトリで承認を求めた');
   });
 }

@@ -1,7 +1,7 @@
 // git のリポジトリの設定を調べる（security-self-api.md §11.3.3）。git は起こさず、ファイルを読むだけ。
 // 設定の項目がすべて「ふつうの設定」の一覧に入っていなければ、そのリポジトリでの git はすべて今回だけ（設定でコードを動かせるため）。
 
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { RepoInfo } from './allowlist-core.ts';
 
@@ -139,13 +139,33 @@ function adminFile(dir: string, name: string): string | undefined | null {
 
 type Examined = { state: 'no' } | { state: 'ok'; commonDir: string } | { state: 'broken' };
 
-// git の is_git_directory と同じ: HEAD があり、objects/ と refs/ が（commondir があればその先に）ある。commondir・gitdir が読めないときは broken（今回だけ）
+// git の validate_headref と同じ（refs.c）: HEAD が refs/ へのシンボリックリンク、`ref:` のあと（git の isspace: 空白・タブ・改行・CR だけ。垂直タブとフォームフィードは空白ではない）を読み飛ばして refs/、または先頭が 40 桁以上の 16 進数。
+// none: HEAD が無い。invalid: あるが git は認めない
+function headState(p: string): 'none' | 'valid' | 'invalid' {
+  const file = join(p, 'HEAD');
+  let st;
+  try { st = lstatSync(file); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR' ? 'none' : 'invalid'; }
+  try {
+    if (st.isSymbolicLink()) return readlinkSync(file).startsWith('refs/') ? 'valid' : 'invalid';
+    if (!st.isFile()) return 'invalid';
+    const fd = openSync(file, 'r');
+    try {
+      const buffer = Buffer.alloc(255);
+      const head = buffer.toString('latin1', 0, readSync(fd, buffer, 0, buffer.length, 0));
+      return /^ref:[ \t\n\r]*refs\//u.test(head) || /^[0-9A-Fa-f]{40}/u.test(head) ? 'valid' : 'invalid';
+    } finally { closeSync(fd); }
+  } catch { return 'invalid'; }
+}
+
+// git の is_git_directory と同じ: HEAD があり（validate_headref を通り）、objects/ と refs/ が（commondir があればその先に）ある。commondir・gitdir が読めないときは broken（今回だけ）。
+// objects/ と refs/ があるのに HEAD を git が認めないフォルダは、git は飛ばして上を使うが、git の版で認める範囲が変わりうるので broken（今回だけ）にする
 function examine(p: string): Examined {
-  if (!isFile(join(p, 'HEAD'))) return { state: 'no' };
+  const head = headState(p);
+  if (head === 'none') return { state: 'no' };
   const commondir = adminFile(p, 'commondir');
   if (commondir === null || adminFile(p, 'gitdir') === null) return { state: 'broken' };
   const commonDir = commondir === undefined ? p : isAbsolute(commondir) ? commondir : resolve(p, commondir);
-  if (isDir(join(commonDir, 'objects')) && isDir(join(commonDir, 'refs'))) return { state: 'ok', commonDir };
+  if (isDir(join(commonDir, 'objects')) && isDir(join(commonDir, 'refs'))) return head === 'valid' ? { state: 'ok', commonDir } : { state: 'broken' };
   return commondir === undefined ? { state: 'no' } : { state: 'broken' };
 }
 
