@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, type ModelView, type Profile, type SettingsView } from './api.ts';
-import { useSaveShortcut } from './hooks.ts';
+import { useEscapeLayer, useSaveShortcut } from './hooks.ts';
 import { Icon } from './icons.tsx';
 import { applyServerSettings, formatDateTimeSmart, getLanguagePreference, useT } from './i18n/index.ts';
 import { adoptLanguageInDraft, withAdoptedLanguage } from './language.ts';
 import { modLabel } from './keys.ts';
+import { AccessConfirm } from './settings/AccessConfirm.tsx';
+import { accessKey, accessWidening, type Access } from './settings/access.ts';
 import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merge.ts';
 import {
   blockUnload, countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
@@ -38,6 +40,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [reverts, setReverts] = useState(0);
   const [conflicted, setConflicted] = useState(false);
+  const [confirm, setConfirm] = useState<{ items: Access[]; key: string } | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pendingField = useRef<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
@@ -74,7 +77,8 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
     addEventListener('beforeunload', blockUnload);
     return () => removeEventListener('beforeunload', blockUnload);
   }, [dirty > 0]);
-  const update = useCallback((change: (config: Config) => Config) => { setDraft(current => (current ? change(current) : current)); }, []);
+  // 編集が変わったら、出していた確認は取り下げる（確認した内容と、これから書く内容が食い違わないように）
+  const update = useCallback((change: (config: Config) => Config) => { setConfirm(null); setDraft(current => (current ? change(current) : current)); }, []);
 
   async function probe() {
     setProbing(true);
@@ -83,7 +87,8 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
 
   // 保存は「画面を開いたあとにほかの場所が変えた値」を巻き戻さない。直前に最新の設定を読み直し、自分が触った所だけを当てる。
   // 触った所をほかの場所も先に変えていたら、何も書かずに、その行を示す。
-  async function save() {
+  // confirmedKey: 広がる内容を確かめてもらった印。いまの最新の設定で数え直した広がりが、確かめたものと同じときだけ書く。
+  async function save(confirmedKey?: string) {
     if (!saved || !draft || busy || dirty === 0) return;
     setBusy(true); setProblems([]); setConflicted(false);
     try {
@@ -95,6 +100,13 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
         setConflicted(true);
         return;
       }
+      // 範囲が広がる保存（触れないパスを外す・フォルダやシェルや外からの入口を足す・フックを足す、など）は、広がるものを並べて確かめてから書く
+      const widening = accessWidening(latest, merged.config);
+      if (widening.length && accessKey(widening) !== confirmedKey) {
+        setConfirm({ items: widening, key: accessKey(widening) });
+        return;
+      }
+      setConfirm(null);
       const profileOnly = profilePatch(edits);
       let next: Config;
       if (deepEqual(merged.config, latest)) {
@@ -118,10 +130,11 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
       setProblems(texts.map(text => parseProblem(text, draft)));
     } finally { setBusy(false); }
   }
-  useSaveShortcut(() => { void save(); });
+  useSaveShortcut(() => { if (!confirm) void save(); });
+  useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
 
   // 元に戻したら、画面の中だけに残っている入力（JSON の欄に書きかけの文字など）も捨てる
-  const revert = () => { if (saved) { setDraft(saved); setProblems([]); setConflicted(false); setReverts(n => n + 1); } };
+  const revert = () => { if (saved) { setDraft(saved); setProblems([]); setConflicted(false); setConfirm(null); setReverts(n => n + 1); } };
   const goProblem = (problem: Problem) => {
     if (problem.section) setSection(problem.section);
     if (problem.modelId) setSelectedModel(problem.modelId);
@@ -215,7 +228,8 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
             />
           </div>
         </div>
-        {dirty > 0 && (
+        {confirm && <AccessConfirm items={confirm.items} busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void save(confirm.key)} />}
+        {dirty > 0 && !confirm && (
           <div className="set-bar" role="region" aria-label={t('settings.bar.label')}>
             <span className="set-bar-dot" />
             <span className="set-bar-text">{t('settings.bar.changes', dirty)}</span>

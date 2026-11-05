@@ -159,3 +159,7 @@
 .lang-prompt-text { flex: 1; min-width: 200px; }
 .lang-prompt-hint { color: var(--color-text-muted); font-size: 12px; }
 .set-reload { align-self: flex-start; margin-top: 6px; }
+.set-widen { display: flex; flex: none; flex-direction: column; gap: 8px; margin: 0 28px 14px; padding: 12px 14px; border: 1px solid var(--color-accent); border-radius: var(--radius-md); background: var(--color-surface); }
+.set-widen ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.set-widen-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.shell[data-mode="narrow"] .set-widen { margin: 0 14px 12px; }
