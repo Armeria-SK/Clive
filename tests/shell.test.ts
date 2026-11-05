@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ModelView, WorkerStatus } from '../web/src/api.ts';
 import { presenceOf } from '../web/src/avatar.ts';
-import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, convMark, isChatRun, type RunContext } from '../web/src/conversation-state.ts';
+import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, convMark, isChatGenerating, isChatRun, type RunContext } from '../web/src/conversation-state.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { formatElapsed, formatRelativeCompact, setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
@@ -266,6 +266,9 @@ test('presenceOf: 様子の一言は辞書から出て、言語に追従し、�
   assert.equal(presenceOf({ ...base, quiet: true }).line, 'お休み中（静かにする時間帯です）');
   assert.equal(presenceOf({ ...base, paused: true }).sleeping, true);
   assert.equal(presenceOf({ ...base, approvals: 1 }).runtime, 'wait');
+  assert.equal(presenceOf({ ...base, generating: true, approvals: 1 }).line, '返事を考えています', '返事を作っている最中が先（ただし承認待ちの会話は generating に数えない。下の isChatGenerating）');
+  assert.equal(presenceOf({ ...base, runningTask: '週報', approvals: 1 }).line, '承認を待っています（1 件）', 'タスクの実行中でも、承認待ちが優先');
+  assert.equal(presenceOf({ ...base, runningTask: '週報', approvals: 1 }).runtime, 'wait');
   setLanguagePreference('en');
   assert.equal(presenceOf(base).line, 'Taking a break');
   assert.equal(presenceOf({ ...base, runningTask: 'Weekly report' }).line, 'Working on task "Weekly report"');
@@ -370,4 +373,18 @@ test('notificationIcon / notificationKindLabel: サーバーの通知の種類�
   assert.equal(notificationIcon('task_failed'), 'circleX');
   assert.equal(notificationIcon('from-the-future'), 'info');
   assert.equal(notificationKindLabel('from-the-future'), null);
+});
+
+test('isChatGenerating: 承認待ちの会話は「返事を作っている」に数えず、タスクと振り返りの実行も数えない', () => {
+  const drafts = [{ runId: 'r1', conversationId: 'c1' }];
+  assert.equal(isChatGenerating(drafts, [], undefined), true);
+  assert.equal(isChatGenerating(drafts, [{ conversationId: 'c1' }], undefined), false, '下書きが残っていても、承認待ちなら作っていない');
+  assert.equal(isChatGenerating(drafts, [{ conversationId: 'other' }], undefined), true, '別の会話の承認待ちは関係ない');
+  assert.equal(isChatGenerating(drafts, [], 'r1'), false, '実行中のタスク・振り返りの実行は数えない');
+  assert.equal(isChatGenerating([...drafts, { runId: 'r2', conversationId: 'c2' }], [{ conversationId: 'c1' }], undefined), true, '承認待ちでない会話が 1 つでもあれば作っている');
+  assert.equal(isChatGenerating([], [], undefined), false);
+  const base = { generating: false, runningTask: null, approvals: 0, waitingTasks: 0, paused: false, quiet: false, celebrating: false };
+  reset();
+  const line = (generating: boolean) => presenceOf({ ...base, generating, approvals: 1 }).line;
+  assert.equal(line(isChatGenerating(drafts, [{ conversationId: 'c1' }], undefined)), '承認を待っています（1 件）', '姿と一言も、承認待ちが勝つ');
 });

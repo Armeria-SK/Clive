@@ -18,6 +18,16 @@ export function convMark(
   return null;
 }
 
+// 姿と一言のための「返事を作っている最中」。承認待ちの会話は、止まって待っているので含めない（承認が優先）。
+// タスクと振り返りの実行（worker.running）も含めない。
+export function isChatGenerating(
+  drafts: ReadonlyArray<{ runId: string; conversationId: string }>,
+  approvals: ReadonlyArray<{ conversationId: string }>,
+  workerRunId: string | undefined,
+): boolean {
+  return drafts.some(d => d.runId !== workerRunId && convMark(drafts, approvals, d.conversationId) === 'generating');
+}
+
 export interface RunContext {
   // 会話の ID から、その会話を使っているタスクの ID（タスクの実行の会話は、会話の一覧には出ない）
   taskConversations: ReadonlyMap<string, string>;

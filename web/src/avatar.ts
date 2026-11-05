@@ -45,8 +45,8 @@ const cut = (text: string, n: number): string => {
 export function presenceOf(p: Presence): { runtime: Runtime; sleeping: boolean; line: string } {
   if (p.celebrating) return { runtime: 'celebrate', sleeping: false, line: t('presence.celebrate') };
   if (p.generating) return { runtime: 'work', sleeping: false, line: t('presence.generating') };
-  if (p.runningTask) return { runtime: 'work', sleeping: false, line: t('presence.task', cut(p.runningTask, TITLE_CHARS)) };
   if (p.approvals) return { runtime: 'wait', sleeping: false, line: t('presence.approvals', p.approvals) };
+  if (p.runningTask) return { runtime: 'work', sleeping: false, line: t('presence.task', cut(p.runningTask, TITLE_CHARS)) };
   if (p.waitingTasks) return { runtime: 'wait', sleeping: false, line: t('presence.waiting', p.waitingTasks) };
   if (p.paused) return { runtime: 'idle', sleeping: true, line: t('presence.paused') };
   if (p.quiet) return { runtime: 'idle', sleeping: true, line: t('presence.quiet') };

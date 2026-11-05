@@ -6,7 +6,7 @@ import { Chat, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
 import { useEscapeLayer } from './hooks.ts';
 import { useT, type DictKey } from './i18n/index.ts';
-import { approvalTargetHash, isChatRun, type RunContext } from './conversation-state.ts';
+import { approvalTargetHash, isChatGenerating, isChatRun, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
@@ -333,7 +333,7 @@ export function App() {
 
   const { connected, reconnect } = useRunEvents(onEvent, onResync);
   const presence = presenceOf({
-    generating: drafts.some(d => d.runId !== worker?.running?.runId),
+    generating: isChatGenerating(drafts, approvals, worker?.running?.runId),
     runningTask: worker?.running?.title ?? null,
     approvals: approvals.length,
     waitingTasks: waiting.size,
