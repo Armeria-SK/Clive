@@ -10,6 +10,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { gitVersionAtLeast } from '../src/tools/shell/git-env.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
@@ -326,5 +327,41 @@ for (const shell of ['powershell', 'bash'] as const) {
       if (saved === undefined) delete process.env[key]; else process.env[key] = saved;
     }
     assert.equal(existsSync(marker), false, 'PATH の . が cd の先を指して、置いた git が動いた');
+  });
+}
+
+// 審査の指摘（深い審査）: objects・refs がファイルでも、Windows の git は git のフォルダとして認め、その設定の diff.external が許可された `git diff --no-index` で動く。
+// 本物の git で、今回だけの確かめを断れば動かないこと、確かめを許しても safe.bareRepository=explicit でそのフォルダの設定は読まれないことを確かめる
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: objects・refs がファイルの偽の git フォルダの diff.external は、今回だけの確かめになり、断れば動かない。許しても動かない`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const fwd = (p: string): string => p.replaceAll('\\', '/');
+    const marker = join(root, 'marker');
+    const ext = join(root, 'ext.sh');
+    writeFileSync(ext, `#!/bin/sh\necho ran > "${fwd(marker)}"\nexit 0\n`, { mode: 0o755 });
+    const fake = join(root, 'fake');
+    mkdirSync(fake);
+    writeFileSync(join(fake, 'HEAD'), 'ref: refs/heads/main');
+    writeFileSync(join(fake, 'objects'), '', { mode: 0o755 });
+    writeFileSync(join(fake, 'refs'), '', { mode: 0o755 });
+    writeFileSync(join(fake, 'config'), `[diff]\n\texternal = ${fwd(ext)}\n`);
+    // 前提: 素の git は、このフォルダの設定の diff.external を動かす（Windows。Linux では実行権限のあるファイルで同じ）
+    spawnSync('git', ['-C', fake, 'diff', '--no-index', '../a.txt', '../notes.md']);
+    assert.equal(existsSync(marker), true, '前提: 本物の git は、偽の git フォルダの diff.external を動かす');
+    rmSync(marker);
+    const command = 'git -C fake diff --no-index ../a.txt ../notes.md';
+    await expectAsk(s, command);
+    assert.equal(existsSync(marker), false, '断ったのに、偽の git フォルダの設定のコードが動いた');
+    // 確かめを許しても、safe.bareRepository=explicit（git 2.38 以上）で、そのフォルダを git のフォルダとして見つけない
+    if (!gitVersionAtLeast(spawnSync('git', ['--version'], { encoding: 'utf8' }).stdout, 2, 38)) return;
+    const pending = s.call(command);
+    for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+    const request = s.approvals.pending()[0];
+    assert.ok(request, '承認の依頼が来ていない');
+    s.approvals.decide(request.id, 'once');
+    await pending;
+    assert.equal(existsSync(marker), false, '許したあとも、偽の git フォルダの設定のコードが動いた');
   });
 }

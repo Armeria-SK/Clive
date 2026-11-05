@@ -186,7 +186,7 @@ test('コマンドレベルの上書き: プログラムを動かす決まった
   const list = overridesOf(run.env);
   const map = new Map(list);
   for (const [key, value] of [['core.fsmonitor', 'false'], ['core.pager', 'cat'], ['core.editor', 'true'], ['sequence.editor', 'true'], ['core.sshCommand', 'ssh'], ['core.askPass', ''], ['core.gitProxy', 'none'],
-    ['gpg.program', 'gpg'], ['gpg.openpgp.program', 'gpg'], ['gpg.x509.program', 'gpgsm'], ['gpg.ssh.program', 'ssh-keygen'], ['gpg.ssh.defaultKeyCommand', 'ssh-add -L'], ['protocol.ext.allow', 'never'], ['log.showSignature', 'false']] as const) {
+    ['gpg.program', 'gpg'], ['gpg.openpgp.program', 'gpg'], ['gpg.x509.program', 'gpgsm'], ['gpg.ssh.program', 'ssh-keygen'], ['gpg.ssh.defaultKeyCommand', 'ssh-add -L'], ['protocol.ext.allow', 'never'], ['log.showSignature', 'false'], ['safe.bareRepository', 'explicit']] as const) {
     assert.equal(map.get(key), value, key);
   }
   const hooks = map.get('core.hooksPath')!;

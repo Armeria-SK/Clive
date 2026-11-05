@@ -108,6 +108,9 @@ function overrides(hooksDir: string, helpers: readonly string[]): Array<[string,
     ['core.sshCommand', 'ssh'], ['core.askPass', ''], ['core.gitProxy', 'none'],
     ['gpg.program', 'gpg'], ['gpg.openpgp.program', 'gpg'], ['gpg.x509.program', 'gpgsm'], ['gpg.ssh.program', 'ssh-keygen'], ['gpg.ssh.defaultKeyCommand', 'ssh-add -L'],
     ['protocol.ext.allow', 'never'], ['log.showSignature', 'false'],
+    // 名前を明示した裏のリポジトリ（--git-dir）だけを使う。上のフォルダをたどって、裏のリポジトリを見つけない（git 2.38 以上）。
+    // objects/・refs/ の見え方など、リポジトリの見つけ方が git とずれても、見つけたつもりのないフォルダの設定は読まれない
+    ['safe.bareRepository', 'explicit'],
     // 認証の補助は足し算なので、先に空にして（リポジトリの設定の補助を捨てる）、洗い出した設定にある安全な補助だけを足し直す
     ['credential.helper', ''], ...helpers.map((helper): [string, string] => ['credential.helper', helper]),
   ];

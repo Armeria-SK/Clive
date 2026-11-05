@@ -338,3 +338,108 @@ test('HEAD が読めないとき（POSIX）: 本物の git は認めず上を使
     assert.equal(findGitDir(b)?.broken, true);
   } finally { chmodSync(join(b, 'HEAD'), 0o644); }
 });
+
+// 審査の指摘（深い審査）: git の is_git_directory は objects/・refs/ を access() で見るだけで、Windows ではファイルでも通る。
+// そのフォルダの設定の diff.external が、許可された `git diff --no-index` で動く。フォルダでないものがあれば「読めない」（今回だけ）にする
+const EVIL_EXT = `${PLAIN}[diff]\n\texternal = /evil/ext.sh\n`;
+
+function folderWith(t: { after: (fn: () => void) => void }, objects: 'dir' | 'file' | 'none', refs: 'dir' | 'file' | 'none'): string {
+  const root = tempDir(t);
+  const fake = join(root, 'fake');
+  mkdirSync(fake);
+  writeFileSync(join(fake, 'HEAD'), 'ref: refs/heads/main');
+  writeFileSync(join(fake, 'config'), EVIL_EXT);
+  for (const [name, kind] of [['objects', objects], ['refs', refs]] as const) {
+    if (kind === 'dir') mkdirSync(join(fake, name));
+    else if (kind === 'file') writeFileSync(join(fake, name), '', { mode: 0o755 });
+  }
+  return fake;
+}
+
+test('objects/・refs/ がフォルダでないとき: 本物の git が git のフォルダとするなら、ガードは設定を調べて今回だけにする（フォルダでないものがあれば「読めない」）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const kinds = ['dir', 'file', 'none'] as const;
+  const wrong: string[] = [];
+  for (const objects of kinds) for (const refs of kinds) {
+    const fake = folderWith(t, objects, refs);
+    const real = spawnSync('git', ['-C', fake, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim().replaceAll('\\', '/');
+    const gitUses = real.replace(/\/+$/u, '') === fake.replaceAll('\\', '/');
+    const info = inspectRepo(fake);
+    const looksLikeGit = objects === 'file' || refs === 'file';
+    // git が使う、または git のフォルダに見えるのに、ガードが「ふつうの設定」として通すことは無い
+    const passes = info.found && !info.unreadable && info.configOk;
+    if ((gitUses || looksLikeGit) && (passes || (!info.found && looksLikeGit))) wrong.push(`objects=${objects} refs=${refs}: git は ${gitUses ? 'このフォルダ' : '別'}、ガードは ${JSON.stringify(info)}`);
+    if (objects === 'dir' && refs === 'dir') assert.equal(info.badKey, 'diff.external', 'どちらもフォルダなら、設定を読む');
+    if ((objects === 'file' || refs === 'file') && looksLikeGit) assert.equal(info.unreadable, true, `objects=${objects} refs=${refs}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('深さの上限（64 階層）に着いても、上のリポジトリを見落とさない（読めない、今回だけ）', t => {
+  const root = tempDir(t);
+  makeGitDir(join(root, '.git'), EVIL_EXT);
+  let dir = root;
+  for (let i = 0; i < 70; i++) dir = join(dir, 'd');
+  mkdirSync(dir, { recursive: true });
+  const info = inspectRepo(dir);
+  assert.equal(info.found, true, '上限で「リポジトリなし」にしてはいけない');
+  assert.equal(info.unreadable || !info.configOk, true, JSON.stringify(info));
+  // 上限の内側なら、ふつうに見つかる
+  let near = root;
+  for (let i = 0; i < 10; i++) near = join(near, 'd');
+  assert.equal(findGitDir(near)?.gitDir, join(root, '.git'));
+});
+
+// commondir・gitdir ファイルは、git と同じに、末尾の改行と CR だけを落とす（空白・NBSP は落とさない）
+const ADMIN: Array<[string, string]> = [
+  ['LF', '../c\n'], ['CRLF', '../c\r\n'], ['改行なし', '../c'], ['改行が続く', '../c\n\n'], ['CR だけ', '../c\r'],
+  ['末尾に空白', '../c '], ['末尾に NBSP', '../c '], ['末尾にタブ', '../c\t'], ['先頭に空白', ' ../c'], ['途中に改行', '../c\nx'], ['空', ''], ['末尾に全角空白', '../c　'],
+];
+
+function worktreeLike(t: { after: (fn: () => void) => void }, commondir: string): string {
+  const root = tempDir(t);
+  makeGitDir(join(root, 'c'), `${PLAIN}[diff]\n\texternal = /evil/ext.sh\n`);
+  const w = join(root, 'w');
+  mkdirSync(w);
+  writeFileSync(join(w, 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(w, 'commondir'), commondir);
+  return w;
+}
+
+test('commondir ファイル: 本物の git が使うときだけ、ガードも使う。末尾の空白・NBSP は git も落とさない', { skip: !gitAvailable && 'git が無い' }, t => {
+  const wrong: string[] = [];
+  for (const [label, content] of ADMIN) {
+    const w = worktreeLike(t, content);
+    const real = spawnSync('git', ['-C', w, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim().replaceAll('\\', '/');
+    const gitUses = real.replace(/\/+$/u, '') === w.replaceAll('\\', '/');
+    const found = findGitDir(w);
+    const guardOk = found?.gitDir === w && found.broken !== true;
+    // 危ないのは 2 つ: git が使うのにガードが使わず上へ進む、ガードが使うのに git が使わない。ガードが「読めない」（今回だけ）にするのは安全側
+    // （Windows は末尾の空白を落とすので、末尾の空白の commondir を git が使う。Linux は使わない）
+    const brokenHere = found?.gitDir === w && found.broken === true;
+    if ((gitUses && !guardOk && !brokenHere) || (!gitUses && guardOk)) wrong.push(`${label}: git は ${gitUses ? 'w を使う' : '使わない'}、ガードは ${guardOk ? 'w を使う' : brokenHere ? '読めない' : '上へ'}`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('.git ファイル（gitdir:）: 本物の git が使うときだけ、ガードも使う', { skip: !gitAvailable && 'git が無い' }, t => {
+  const files: Array<[string, string]> = [
+    ['LF', 'gitdir: ../gd\n'], ['CRLF', 'gitdir: ../gd\r\n'], ['改行なし', 'gitdir: ../gd'], ['改行が続く', 'gitdir: ../gd\n\n'],
+    ['gitdir: の後ろの空白なし', 'gitdir:../gd\n'], ['空白 2 つ', 'gitdir:  ../gd\n'], ['末尾に空白', 'gitdir: ../gd \n'], ['末尾に NBSP', 'gitdir: ../gd \n'],
+    ['大文字', 'GITDIR: ../gd\n'], ['2 行目', 'gitdir: ../gd\nextra\n'], ['空', ''], ['タブ', 'gitdir:\t../gd\n'],
+  ];
+  const wrong: string[] = [];
+  for (const [label, content] of files) {
+    const root = tempDir(t);
+    makeGitDir(join(root, 'gd'), `${PLAIN}[diff]\n\texternal = /evil/ext.sh\n`);
+    const repo = join(root, 'repo');
+    mkdirSync(repo);
+    writeFileSync(join(repo, '.git'), content);
+    const real = spawnSync('git', ['-C', repo, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' }).stdout.trim().replaceAll('\\', '/');
+    const gitUses = real.replace(/\/+$/u, '') === join(root, 'gd').replaceAll('\\', '/');
+    const found = findGitDir(repo);
+    const guardOk = found?.gitDir === join(root, 'gd') && found.broken !== true;
+    const brokenHere = found?.broken === true;
+    if ((gitUses && !guardOk && !brokenHere) || (!gitUses && guardOk)) wrong.push(`${label}: git は ${gitUses ? 'gd を使う' : '使わない'}、ガードは ${guardOk ? 'gd を使う' : brokenHere ? '読めない' : '上へ'}`);
+  }
+  assert.deepEqual(wrong, []);
+});

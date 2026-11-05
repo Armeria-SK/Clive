@@ -125,16 +125,25 @@ interface Found { gitDir: string; commonDir: string; broken?: boolean }
 
 const MAX_ADMIN_FILE = 4096;
 
-// git のフォルダの中の commondir・gitdir ファイルの中身。無ければ undefined、あるのに読めない・大きすぎる・空・複数行なら null
+// git のフォルダの中の commondir・gitdir ファイルの中身。git と同じに、末尾の改行と CR だけを落とす（空白・NBSP は落とさない。落とすと、git が使わないフォルダを使うことになる）。
+// 無ければ undefined、あるのに読めない・大きすぎる・空・途中に改行や NUL があるなら null
 function adminFile(dir: string, name: string): string | undefined | null {
   const file = join(dir, name);
   let st;
   try { st = lstatSync(file); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' || (error as NodeJS.ErrnoException).code === 'ENOTDIR' ? undefined : null; }
   if (!st.isFile() || st.size > MAX_ADMIN_FILE) return null;
   try {
-    const text = readFileSync(file, 'utf8').trimEnd();
-    return text === '' || /[\r\n]/u.test(text) ? null : text;
+    const text = readFileSync(file, 'utf8').replace(/[\r\n]+$/u, '');
+    return text === '' || /[\r\n\0]/u.test(text) ? null : text;
   } catch { return null; }
+}
+
+// フォルダ / フォルダでない（ファイルなど、調べられないものも含む）/ 無い
+function kindOf(p: string): 'dir' | 'other' | 'none' {
+  try { return statSync(p).isDirectory() ? 'dir' : 'other'; } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'none' : 'other';
+  }
 }
 
 type Examined = { state: 'no' } | { state: 'ok'; commonDir: string } | { state: 'broken' };
@@ -165,15 +174,24 @@ function examine(p: string): Examined {
   const commondir = adminFile(p, 'commondir');
   if (commondir === null || adminFile(p, 'gitdir') === null) return { state: 'broken' };
   const commonDir = commondir === undefined ? p : isAbsolute(commondir) ? commondir : resolve(p, commondir);
-  if (isDir(join(commonDir, 'objects')) && isDir(join(commonDir, 'refs'))) return head === 'valid' ? { state: 'ok', commonDir } : { state: 'broken' };
+  const objects = kindOf(join(commonDir, 'objects'));
+  const refs = kindOf(join(commonDir, 'refs'));
+  if (objects === 'dir' && refs === 'dir') return head === 'valid' ? { state: 'ok', commonDir } : { state: 'broken' };
+  // git は objects/・refs/ を access() で見るだけなので、Windows ではファイルでも git のフォルダになる。フォルダでないものがあれば broken（今回だけ）
+  if (objects === 'other' || refs === 'other') return { state: 'broken' };
   return commondir === undefined ? { state: 'no' } : { state: 'broken' };
 }
 
+// git の read_gitfile と同じ: 先頭が「gitdir: 」（空白 1 つ）で、そのあと全部（末尾の改行と CR は落とす）が場所。違う書き方は broken（今回だけ）
 function viaGitFile(file: string): Found {
   try {
-    const m = /^gitdir:\s*(.+?)\s*$/u.exec(readFileSync(file, 'utf8').split('\n')[0] ?? '');
-    if (!m) return { gitDir: dirname(file), commonDir: dirname(file), broken: true };
-    const target = isAbsolute(m[1]!) ? m[1]! : resolve(dirname(file), m[1]!);
+    const broken: Found = { gitDir: dirname(file), commonDir: dirname(file), broken: true };
+    if (statSync(file).size > MAX_ADMIN_FILE) return broken;
+    const text = readFileSync(file, 'utf8');
+    if (!text.startsWith('gitdir: ')) return broken;
+    const place = text.slice(8).replace(/[\r\n]+$/u, '');
+    if (place === '' || /[\r\n\0]/u.test(place)) return broken;
+    const target = isAbsolute(place) ? place : resolve(dirname(file), place);
     const e = examine(target);
     return e.state === 'ok' ? { gitDir: target, commonDir: e.commonDir } : { gitDir: target, commonDir: target, broken: true };
   } catch { return { gitDir: dirname(file), commonDir: dirname(file), broken: true }; }
@@ -196,7 +214,8 @@ export function findGitDir(start: string): Found | null {
     if (parent === dir) return null;
     dir = parent;
   }
-  return null;
+  // 深さの上限に着いた: 上にあるかもしれないリポジトリを見ていないので、「なし」ではなく broken（今回だけ）
+  return { gitDir: dir, commonDir: dir, broken: true };
 }
 
 export function inspectRepo(start: string): RepoInfo {
