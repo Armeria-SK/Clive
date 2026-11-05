@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, type Approval, type Conversation, type Profile, type WorkerStatus } from './api.ts';
+import { api, type Approval, type Conversation, type NotificationItem, type Profile, type WorkerStatus } from './api.ts';
 import { ActivityPanel } from './ActivityPanel.tsx';
 import { presenceOf } from './avatar.ts';
 import { Chat, type RunNotice } from './Chat.tsx';
@@ -11,7 +11,10 @@ import { closeTopLayer, shortcutOf } from './keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
 import { NarrowHeader } from './NarrowHeader.tsx';
-import { NotificationsPage } from './Notifications.tsx';
+import { NotificationBubble } from './NotificationBubble.tsx';
+import { notificationLink } from './notification-meta.ts';
+import { NotificationsPage } from './NotificationsPage.tsx';
+import { Palette } from './Palette.tsx';
 import { PAGE_META, pickChatModel } from './pages.ts';
 import { chatHash, parseRoute } from './routes.ts';
 import { Runs } from './Runs.tsx';
@@ -42,6 +45,10 @@ export function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
   const [unread, setUnread] = useState(0);
+  const [notifications, setNotifications] = useState<NotificationItem[] | null>(null);
+  const [notificationsFailed, setNotificationsFailed] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [waiting, setWaiting] = useState<Set<string>>(new Set());
   const [taskRevision, setTaskRevision] = useState(0);
   const [notificationRevision, setNotificationRevision] = useState(0);
@@ -71,7 +78,9 @@ export function App() {
         if (task.conversation_id) taskConversations.current.set(task.conversation_id, task.id);
       }
     }).catch(() => undefined);
-    void api.notifications().then(r => setUnread(r.unread)).catch(() => undefined);
+  }, []);
+  const refreshNotifications = useCallback(() => {
+    void api.notifications().then(r => { setNotifications(r.notifications); setUnread(r.unread); setNotificationsFailed(false); }).catch(() => setNotificationsFailed(true));
   }, []);
   const refreshMeta = useCallback(() => {
     void api.models().then(r => setModelName(pickChatModel(r.models, r.routing))).catch(() => undefined);
@@ -81,6 +90,7 @@ export function App() {
     refreshList(); refreshApprovals(); refreshWorker(); refreshTasks(); refreshMeta();
     void api.profile().then(setProfile).catch(() => undefined);
   }, [refreshList, refreshApprovals, refreshWorker, refreshTasks, refreshMeta]);
+  useEffect(() => { refreshNotifications(); }, [refreshNotifications]);
   // 静かな時間帯や次に起きる時刻は時間とともに変わるので、ときどき取り直す
   useEffect(() => { const timer = setInterval(refreshWorker, 30_000); return () => clearInterval(timer); }, [refreshWorker]);
   useEffect(() => {
@@ -123,7 +133,7 @@ export function App() {
     history.replaceState(null, '', lastChatHash.current);
     setRoute(parseRoute(lastChatHash.current));
   }, [route.page, mode]);
-  useEffect(() => { setDrawerOpen(false); }, [route]);
+  useEffect(() => { setDrawerOpen(false); setNotifOpen(false); }, [route]);
   useEscapeLayer('drawer', drawerOpen, () => setDrawerOpen(false));
 
   const panelRef = useRef(panelOpen); panelRef.current = panelOpen;
@@ -138,6 +148,31 @@ export function App() {
     else showPanel(true);
   }, [showPanel]);
 
+  const openPalette = useCallback(() => { setNotifOpen(false); setPaletteOpen(true); }, []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const toggleNotifications = useCallback(() => setNotifOpen(open => !open), []);
+  const closeNotifications = useCallback(() => setNotifOpen(false), []);
+  useEscapeLayer('palette', paletteOpen, closePalette);
+  useEscapeLayer('notification', notifOpen, closeNotifications);
+  const markRead = useCallback((ids?: number[]) => {
+    void api.readNotifications(ids).then(r => {
+      setUnread(r.unread);
+      const now = Date.now();
+      setNotifications(list => list?.map(n => (!ids || ids.includes(n.id) ? { ...n, read_at: n.read_at ?? now } : n)) ?? null);
+    }).catch(() => undefined);
+  }, []);
+  const readAllNotifications = useCallback(() => markRead(), [markRead]);
+  const openNotification = useCallback((n: NotificationItem) => {
+    setNotifOpen(false);
+    if (!n.read_at) markRead([n.id]);
+    const link = notificationLink(n.link);
+    if (link) location.hash = link;
+  }, [markRead]);
+  const openActivity = useCallback(() => {
+    if (modeRef.current === 'narrow') location.hash = '#/today';
+    else togglePanel();
+  }, [togglePanel]);
+
   const draftsRef = useRef(drafts); draftsRef.current = drafts;
   const currentRef = useRef(current); currentRef.current = current;
   const conversationsRef = useRef(conversations); conversationsRef.current = conversations;
@@ -147,6 +182,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const action = shortcutOf(e);
       if (action === 'togglePanel') { e.preventDefault(); togglePanel(); return; }
+      if (action === 'palette') { e.preventDefault(); setNotifOpen(false); setPaletteOpen(open => !open); return; }
       if (action !== 'escape') return;
       if (closeTopLayer()) { e.preventDefault(); return; }
       // 返事を止めるのは、入力欄にフォーカスがあるときだけ
@@ -254,6 +290,7 @@ export function App() {
       }
       case 'notification':
         setUnread(n => n + 1);
+        setNotifications(list => [e.notification, ...(list ?? []).filter(n => n.id !== e.notification.id)].slice(0, 50));
         setNotificationRevision(n => n + 1);
         if (BROWSER_NOTIFY.has(e.notification.kind) && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
           new Notification(t('browser.notification', e.notification.title), { body: e.notification.body ?? '' });
@@ -266,8 +303,8 @@ export function App() {
     setDrafts(serverDrafts);
     setRevisions(state => Object.fromEntries(Object.entries(state).map(([k, v]) => [k, v + 1])));
     setTaskRevision(n => n + 1);
-    refreshList(); refreshApprovals(); refreshWorker(); refreshTasks(); refreshMeta();
-  }, [refreshList, refreshApprovals, refreshWorker, refreshTasks, refreshMeta]);
+    refreshList(); refreshApprovals(); refreshWorker(); refreshTasks(); refreshMeta(); refreshNotifications();
+  }, [refreshList, refreshApprovals, refreshWorker, refreshTasks, refreshMeta, refreshNotifications]);
 
   // 承認待ちや返事待ちに気づけるよう、初回だけブラウザ通知の許可を求める（拒否されたらそれまで）
   useEffect(() => {
@@ -329,17 +366,18 @@ export function App() {
         <Sidebar
           mode={mode} drawerOpen={drawerOpen} route={route} profile={profile} presence={presence}
           conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
-          waitingCount={waiting.size} unread={unread} restartRequired={restartRequired}
-          onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
+          waitingCount={waiting.size} restartRequired={restartRequired}
+          onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onSearch={openPalette} onAvatar={openPanel}
         />
         {narrow && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
         <main className="main">
           {narrow
-            ? <NarrowHeader title={title} phrase={presence.line} connected={connected} hasApproval={approvals.length > 0} unread={unread} onMenu={() => setDrawerOpen(true)} onApproval={openApproval} />
+            ? <NarrowHeader title={title} phrase={presence.line} connected={connected} hasApproval={approvals.length > 0} unread={unread} onMenu={() => setDrawerOpen(true)} onApproval={openApproval}
+                onSearch={openPalette} onNotifications={toggleNotifications} notificationsOpen={notifOpen} />
             : (
               <TabBar
                 tabs={tabState.tabs} activeKey={tabState.activeKey} conversations={conversations} drafts={drafts} approvals={approvals}
-                panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onTogglePanel={togglePanel}
+                panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onSearch={openPalette} onTogglePanel={togglePanel}
               />
             )}
           <div className="content" key={viewKey}>
@@ -357,7 +395,9 @@ export function App() {
             )}
             {route.page === 'today' && narrow && pane}
             {route.page === 'tasks' && <TasksPage key={route.taskId ?? 'list'} taskId={route.taskId} revision={taskRevision + approvals.length} worker={worker} onWorker={setWorker} />}
-            {route.page === 'notifications' && <NotificationsPage revision={notificationRevision} onRead={setUnread} />}
+            {route.page === 'notifications' && (
+              <NotificationsPage items={notifications} failed={notificationsFailed} unread={unread} onReadAll={readAllNotifications} onOpenItem={openNotification} />
+            )}
             {route.page === 'settings' && <Settings onProfile={setProfile} />}
             {route.page === 'runs' && <Runs />}
             {route.page === 'memory' && <Memory />}
@@ -371,10 +411,18 @@ export function App() {
       {!narrow && (
         <StatusBar
           connected={connected} worker={worker} runStartedAt={runningId ? runStarts[runningId] : undefined} approvals={approvals.length}
-          modelName={modelName} unread={unread} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
-          onOpenApproval={openApproval} onOpenNotifications={() => { location.hash = '#/notifications'; }}
+          modelName={modelName} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
+          onOpenApproval={openApproval} onOpenNotifications={toggleNotifications}
         />
       )}
+      <NotificationBubble
+        open={notifOpen} narrow={narrow} items={notifications} failed={notificationsFailed} unread={unread}
+        onClose={closeNotifications} onReadAll={readAllNotifications} onOpenItem={openNotification} onSeeAll={closeNotifications}
+      />
+      <Palette
+        open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
+        onClose={closePalette} onNewChat={tabState.openNewChat} onActivity={openActivity} onWorker={setWorker}
+      />
       <ToastHost mode={mode} />
       <Tooltip disabled={narrow} />
     </div>

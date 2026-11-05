@@ -9,9 +9,12 @@ interface Props {
   unread: number;
   onMenu: () => void;
   onApproval: () => void;
+  onSearch: () => void;
+  onNotifications: () => void;
+  notificationsOpen: boolean;
 }
 
-export function NarrowHeader({ title, phrase, connected, hasApproval, unread, onMenu, onApproval }: Props) {
+export function NarrowHeader({ title, phrase, connected, hasApproval, unread, onMenu, onApproval, onSearch, onNotifications, notificationsOpen }: Props) {
   const t = useT();
   return (
     <header className="narrow-head">
@@ -26,10 +29,11 @@ export function NarrowHeader({ title, phrase, connected, hasApproval, unread, on
           <Icon name="shield" size={19} /><span className="narrow-dot" />
         </button>
       )}
-      <a className="btn btn-ghost btn-icon narrow-btn narrow-bell" href="#/notifications" aria-label={t('status.notifications')}>
+      <button className="btn btn-ghost btn-icon narrow-btn" onClick={onSearch} aria-label={t('nav.search')}><Icon name="search" size={19} /></button>
+      <button className="btn btn-ghost btn-icon narrow-btn narrow-bell" onClick={onNotifications} aria-label={t('status.notifications')} aria-expanded={notificationsOpen}>
         <Icon name="bell" size={19} />
         {unread > 0 && <span className="narrow-count">{unread}</span>}
-      </a>
+      </button>
     </header>
   );
 }

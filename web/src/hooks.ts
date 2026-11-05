@@ -39,3 +39,14 @@ export function useSaveShortcut(onSave: () => void): void {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 }
+
+// 閉じるときの動きが終わるまで、部品を残しておく。open が false になってから ms のあいだは leaving が true。
+export function useExit(open: boolean, ms: number): { mounted: boolean; leaving: boolean } {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) { setMounted(true); return undefined; }
+    const timer = setTimeout(() => setMounted(false), ms);
+    return () => clearTimeout(timer);
+  }, [open, ms]);
+  return { mounted: open || mounted, leaving: !open && mounted };
+}

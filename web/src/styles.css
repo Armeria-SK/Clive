@@ -110,8 +110,8 @@ select { font: inherit; color: var(--text); background: var(--bg); border: 1px s
 .worker-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); margin: 0 0 16px; }
 .worker-bar .toggle { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }
 .task-form { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); margin: 0 0 8px; }
-.task-list, .task-events, .notification-list { list-style: none; padding: 0; margin: 0 0 12px; }
-.task-row, .task-list > li, .notification-list li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.task-list, .task-events { list-style: none; padding: 0; margin: 0 0 12px; }
+.task-row, .task-list > li { padding: 8px 0; border-bottom: 1px solid var(--line); }
 .task-row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
 .task-row > p { flex-basis: 100%; margin: 2px 0 0; }
 .task-row.status-waiting { border-left: 3px solid var(--warn); padding-left: 10px; }
@@ -120,9 +120,6 @@ select { font: inherit; color: var(--text); background: var(--bg); border: 1px s
 .answer { border: 2px solid var(--warn); border-radius: var(--radius); padding: 12px 14px; margin: 16px 0; background: color-mix(in srgb, var(--warn) 7%, var(--panel)); }
 .task-transcript { margin-top: 24px; }
 .task-transcript summary { cursor: pointer; margin-bottom: 12px; }
-.notification-list li.unread { border-left: 3px solid var(--accent); padding-left: 10px; }
-.notification-list li > p { margin: 4px 0 0; }
-.notification-list .badge { margin-right: 8px; }
 .presence { display: flex; gap: 20px; align-items: center; margin-bottom: 16px; }
 .presence h1 { margin: 0; }
 .presence p { margin: 4px 0 0; color: var(--muted); }

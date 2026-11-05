@@ -142,3 +142,80 @@ button.sb-item:hover { background: color-mix(in srgb, var(--color-text) 7%, tran
 
 .tooltip { position: fixed; z-index: 60; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--radius-md); background: var(--color-text); color: var(--color-bg); font-size: 11.5px; line-height: 1.4; white-space: nowrap; box-shadow: var(--shadow-md); pointer-events: none; }
 .tooltip-kbd { opacity: .6; letter-spacing: .05em; }
+
+/* ページ（デザインの「スキル・ツール」「実行ログ」などと同じ並び: 大きな題 + 説明 + 中身） */
+.view { overflow-y: auto; scrollbar-width: thin; }
+.view-inner { width: 100%; max-width: 900px; margin: 0 auto; padding: 34px 36px 56px; display: flex; flex-direction: column; gap: 18px; box-sizing: border-box; }
+.shell[data-mode="narrow"] .view-inner { padding: 22px 16px 40px; }
+.view-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.view-titles { display: flex; flex-direction: column; gap: 4px; }
+.view-title { margin: 0; font-family: var(--font-heading); font-size: 28px; font-weight: 400; line-height: 1.1; }
+.view-sub { font-size: 13px; color: var(--color-text-muted); }
+.view-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.view-count { font-size: 12px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.view-zone { margin: 0; }
+.view-note { margin: 0; font-size: 13px; color: var(--color-text-muted); }
+
+/* 通知の吹き出しと一覧 */
+@keyframes cl-pop-in { from { opacity: 0; transform: translateY(6px) scale(.97); } }
+@keyframes cl-pop-in-top { from { opacity: 0; transform: translateY(-6px) scale(.97); } }
+@keyframes cl-pop-out { to { opacity: 0; transform: scale(.97); } }
+.notif-catcher { position: absolute; inset: 0; z-index: 34; }
+.notif-bubble { position: absolute; z-index: 35; right: 8px; bottom: 32px; width: 380px; max-width: calc(100% - 16px); max-height: 70%; display: flex; flex-direction: column; background: var(--color-bg); border: 1px solid var(--color-divider); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; transform-origin: bottom right; animation: cl-pop-in .22s cubic-bezier(.16, 1, .3, 1); }
+.notif-bubble:focus { outline: none; }
+.notif-bubble.notif-top { top: 58px; bottom: auto; width: calc(100% - 16px); transform-origin: top right; animation-name: cl-pop-in-top; }
+.notif-bubble.leaving { animation: cl-pop-out .16s ease-in forwards; pointer-events: none; }
+.notif-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 10px 16px; flex: none; }
+.notif-head-title { font-size: 14px; font-weight: 600; }
+.notif-head-unread { font-size: 12px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.notif-readall { margin-left: auto; padding: 4px 6px; border: 0; background: transparent; color: var(--color-text); font: inherit; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--color-text) 35%, transparent); cursor: pointer; }
+.notif-readall:hover:not(:disabled) { text-decoration-color: var(--color-accent); }
+.notif-readall:disabled { opacity: .45; cursor: default; }
+.notif-list { overflow-y: auto; padding: 0 6px 6px; scrollbar-width: thin; }
+.notif-note { margin: 0; padding: 16px 10px 20px; font-size: 13px; color: var(--color-text-muted); }
+.notif-foot { flex: none; padding: 6px 16px 10px; border-top: 1px solid var(--color-divider); text-align: right; }
+.notif-foot a { font-size: 12.5px; color: var(--color-accent-text); }
+.notif-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 1px 10px; width: 100%; padding: 10px; border: 0; border-radius: var(--radius-md); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color .14s ease; }
+.notif-row:hover { background: color-mix(in srgb, var(--color-text) 5%, transparent); transition: none; }
+.notif-icon { display: inline-flex; width: 15px; height: 15px; margin-top: 2px; color: var(--color-text-muted-faint); }
+.notif-row.unread .notif-icon { color: var(--color-accent); }
+.notif-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.notif-title { font-size: 13.5px; overflow-wrap: anywhere; }
+.notif-row.unread .notif-title { font-weight: 600; }
+.notif-body { font-size: 12.5px; color: var(--color-text-muted); }
+.notif-bubble .notif-body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.notif-row-page .notif-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.notif-kind { align-self: flex-start; margin-top: 4px; }
+.notif-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.notif-time { font-size: 11px; color: var(--color-text-muted-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.notif-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
+.notif-page-list { display: flex; flex-direction: column; border-top: 1px solid var(--color-divider); }
+.notif-row-page { padding: 12px 10px; border-radius: 0; border-bottom: 1px solid var(--color-divider); }
+
+/* コマンドパレット */
+@keyframes cl-pal-in { from { opacity: 0; transform: translateY(-10px) scale(.98); } }
+@keyframes cl-pal-out { to { opacity: 0; transform: translateY(-6px) scale(.98); } }
+@keyframes cl-fade-out { to { opacity: 0; } }
+.palette-backdrop { position: absolute; inset: 0; z-index: 44; background: color-mix(in srgb, var(--color-neutral-900) 28%, transparent); animation: cl-fade .16s ease-out; }
+.palette-backdrop.leaving { animation: cl-fade-out .14s forwards; }
+.palette-wrap { position: absolute; inset: 0; z-index: 45; display: flex; justify-content: center; align-items: flex-start; padding: 84px 24px 24px; pointer-events: none; }
+.shell[data-mode="narrow"] .palette-wrap { padding: 10px; }
+.palette { pointer-events: auto; width: min(620px, 100%); max-height: 64%; display: flex; flex-direction: column; background: var(--color-bg); border: 1px solid var(--color-divider); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; animation: cl-pal-in .26s cubic-bezier(.16, 1, .3, 1); }
+.shell[data-mode="narrow"] .palette { max-height: 82%; }
+.palette.leaving { animation: cl-pal-out .14s ease-in forwards; }
+.palette-search { display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--color-divider); flex: none; }
+.palette-search-icon { display: inline-flex; opacity: .55; }
+.palette-search input { flex: 1; min-width: 0; height: 54px; border: 0; outline: none; background: transparent; color: inherit; caret-color: var(--color-accent); font: inherit; font-size: 15.5px; }
+.palette-esc { padding: 0 5px; border: 1px solid var(--color-divider); border-radius: var(--radius-sm); font-size: 11px; color: var(--color-text-muted-faint); }
+.palette-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; scrollbar-width: thin; }
+.palette-empty { padding: 24px 12px; font-size: 13px; color: var(--color-text-muted); overflow-wrap: anywhere; }
+.palette-group { padding: 10px 10px 4px; font-size: 11px; letter-spacing: .12em; color: var(--color-accent-text); }
+.palette-item { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 12px; align-items: center; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-md); background: transparent; color: inherit; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.palette-item.active { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.palette-item-icon { display: inline-flex; width: 15px; height: 15px; opacity: .7; }
+.palette-item-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-item-sub { margin-left: 10px; font-size: 12px; color: var(--color-text-muted-faint); }
+.palette-item-hint { font-size: 11px; color: var(--color-text-muted-faint); font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+.palette-foot { display: flex; gap: 16px; padding: 8px 16px; flex: none; border-top: 1px solid var(--color-divider); font-size: 11px; color: var(--color-text-muted-faint); }
+.nav-kbd { font-size: 11px; letter-spacing: .04em; color: var(--color-text-muted-faint); }
+button.nav-item { width: 100%; border: 0; background: transparent; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }

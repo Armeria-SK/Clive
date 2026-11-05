@@ -23,7 +23,7 @@ export function isComposing(e: { isComposing?: boolean; keyCode?: number }): boo
 }
 
 export interface ShortcutEvent { key: string; metaKey: boolean; ctrlKey: boolean; isComposing?: boolean; keyCode?: number }
-export type ShortcutAction = 'togglePanel' | 'escape' | 'save';
+export type ShortcutAction = 'togglePanel' | 'escape' | 'save' | 'palette';
 
 export function shortcutOf(e: ShortcutEvent): ShortcutAction | null {
   if (isComposing(e)) return null;
@@ -32,6 +32,7 @@ export function shortcutOf(e: ShortcutEvent): ShortcutAction | null {
   if (e.metaKey || e.ctrlKey) {
     if (key === '/') return 'togglePanel';
     if (key === 's') return 'save';
+    if (key === 'k') return 'palette';
   }
   return null;
 }

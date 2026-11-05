@@ -8,6 +8,8 @@ import { formatElapsed, formatRelativeCompact, setLanguagePreference, setTimezon
 import { ja } from '../web/src/i18n/ja.ts';
 import { closeTopLayer, ESC_ORDER, isComposing, modLabel, registerEscape, shortcutOf } from '../web/src/keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference } from '../web/src/layout.ts';
+import { notificationIcon, notificationKindLabel, notificationLink } from '../web/src/notification-meta.ts';
+import { filterPalette, flattenPalette, moveIndex, type PaletteGroup, type PaletteGroupKey, type PaletteItem } from '../web/src/palette.ts';
 import { PAGE_META, pickChatModel, workerState } from '../web/src/pages.ts';
 import { chatHash, parseRoute, routeHash } from '../web/src/routes.ts';
 import { closeTab, dropChats, findGoneChats, loadTabs, MAX_TABS, openTab, sanitizeTabs, saveTabs, toTab, unlistedChatIds, type ChatProbe, type Tab } from '../web/src/tabs.ts';
@@ -272,7 +274,7 @@ test('presenceOf: 様子の一言は辞書から出て、言語に追従し、�
 });
 
 test('辞書: 枠の文字は ja と en の両方にあり、en は ja の写しではない', () => {
-  const framed = Object.keys(ja).filter(k => /^(nav|tab|panel|status|worker|theme|toast|presence)\./u.test(k));
+  const framed = Object.keys(ja).filter(k => /^(nav|tab|panel|status|worker|theme|toast|presence|palette|notifications|task)\./u.test(k));
   assert.ok(framed.length > 50, `枠の文字が ${framed.length} 件しか読めていない`);
   const same: string[] = [];
   for (const key of framed) {
@@ -310,4 +312,62 @@ test('workerState / pickChatModel: 状態バーに出す状態とモデル', () 
   assert.equal(pickChatModel(models, { chat: ['zzz', 'c'] }), 'model-c', '設定に無い ID は飛ばす');
   assert.equal(pickChatModel(models, { chat: [] }), null);
   assert.equal(pickChatModel([], { chat: ['a'] }), null);
+});
+
+const paletteItem = (id: string, label: string, sub = ''): PaletteItem => ({ id, label, sub, hint: '', icon: 'msg', run: () => undefined });
+const paletteGroups = (): PaletteGroup[] => {
+  const group = (key: PaletteGroupKey, items: PaletteItem[]): PaletteGroup => ({ key, label: key, items });
+  return [
+    group('actions', ['新しい会話', '設定を開く', '実行ログを開く', 'ダークにする', 'ワーカーを一時停止', 'スキル・ツールを開く'].map((label, i) => paletteItem(`a${i}`, label))),
+    group('conversations', Array.from({ length: 7 }, (_, i) => paletteItem(`c${i}`, `会話 ${i}`))),
+    group('tasks', [paletteItem('t0', '週報をまとめる'), paletteItem('t1', 'Backup the notes')]),
+    group('skills', [paletteItem('s0', 'daily-report', '毎日の報告を作る手順'), paletteItem('s1', 'ｗｅｅｋｌｙ', '全角で書かれたスキル')]),
+  ];
+};
+
+test('filterPalette: 空欄のときは操作はすべて、ほかの群は 4 件まで。語で絞ると全部から探し、空の群は出さない', () => {
+  const empty = filterPalette(paletteGroups(), '   ');
+  assert.deepEqual(empty.map(g => [g.key, g.items.length]), [['actions', 6], ['conversations', 4], ['tasks', 2], ['skills', 2]]);
+  const conv = filterPalette(paletteGroups(), '会話');
+  assert.deepEqual(conv.map(g => [g.key, g.items.length]), [['actions', 1], ['conversations', 7]], '絞ったときは 4 件で切らない。操作の「新しい会話」も当たる');
+  assert.deepEqual(filterPalette(paletteGroups(), 'BACKUP').map(g => g.key), ['tasks'], '大文字小文字を区別しない');
+  assert.deepEqual(filterPalette(paletteGroups(), '手順').flatMap(g => g.items.map(i => i.id)), ['s0'], '説明（sub）でも当たる');
+  assert.deepEqual(filterPalette(paletteGroups(), 'weekly').flatMap(g => g.items.map(i => i.id)), ['s1'], '全角の英字を半角で探しても当たる');
+  assert.deepEqual(filterPalette(paletteGroups(), 'ｄａｉｌｙ').flatMap(g => g.items.map(i => i.id)), ['s0'], '半角のものを全角で探しても当たる');
+  assert.deepEqual(filterPalette(paletteGroups(), '当てはまらない語'), []);
+  assert.deepEqual(flattenPalette(filterPalette(paletteGroups(), 'daily')).map(i => i.id), ['s0']);
+});
+
+test('moveIndex: ↑↓ は端で止まり、巻き戻らない', () => {
+  assert.equal(moveIndex(0, 1, 3), 1);
+  assert.equal(moveIndex(2, 1, 3), 2);
+  assert.equal(moveIndex(0, -1, 3), 0);
+  assert.equal(moveIndex(2, -1, 3), 1);
+  assert.equal(moveIndex(5, 1, 0), 0);
+});
+
+test('shortcutOf: ⌘/Ctrl+K はコマンドパレット。日本語の変換中は使わない', () => {
+  const key = (k: string, extra: object = {}) => ({ key: k, metaKey: false, ctrlKey: false, ...extra });
+  assert.equal(shortcutOf(key('k', { ctrlKey: true })), 'palette');
+  assert.equal(shortcutOf(key('K', { metaKey: true })), 'palette');
+  assert.equal(shortcutOf(key('k')), null, '修飾キーなしの k は入力');
+  assert.equal(shortcutOf(key('k', { ctrlKey: true, isComposing: true })), null);
+});
+
+test('notificationLink: 通知のリンクは、画面の経路として読めるものだけ開く（古い経路を含む）', () => {
+  for (const link of ['#/tasks', '#/tasks/abc', '#/review', '#/settings', '#/c/xyz', '#/notifications', '#/curiosity', '#/today', '#/memory']) assert.equal(notificationLink(link), link, link);
+  assert.equal(notificationLink('#/settings/models'), '#/settings/models', '正規の経路の下の続きは通す');
+  for (const bad of [null, '', 'https://example.com/', 'javascript:alert(1)', '#', '#/nonsense', '#/c/', '//evil.example', '#//evil']) assert.equal(notificationLink(bad), null, String(bad));
+});
+
+test('notificationIcon / notificationKindLabel: サーバーの通知の種類ごとに絵と名前があり、知らない種類は「お知らせ」の絵になる', () => {
+  for (const kind of ['task_done', 'task_waiting', 'task_failed', 'approval_needed', 'health_alert', 'info']) {
+    assert.ok(notificationIcon(kind), `${kind}: 絵が無い`);
+    const label = notificationKindLabel(kind);
+    assert.ok(label && typeof (ja as Record<string, unknown>)[label] === 'string' && typeof (en as Record<string, unknown>)[label] === 'string', `${kind}: 名前が辞書に無い`);
+  }
+  assert.equal(notificationIcon('approval_needed'), 'shield');
+  assert.equal(notificationIcon('task_failed'), 'circleX');
+  assert.equal(notificationIcon('from-the-future'), 'info');
+  assert.equal(notificationKindLabel('from-the-future'), null);
 });

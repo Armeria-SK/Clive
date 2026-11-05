@@ -13,6 +13,7 @@ interface Props {
   approvals: number;
   modelName: string | null;
   unread: number;
+  notificationsOpen: boolean;
   onReconnect: () => void;
   onOpenPanel: () => void;
   onOpenRunning: () => void;
@@ -20,7 +21,7 @@ interface Props {
   onOpenNotifications: () => void;
 }
 
-function Item({ icon, iconClass, tip, onClick, children, accent }: { icon: IconName; iconClass?: string; tip: string; onClick?: () => void; children?: ReactNode; accent?: boolean }) {
+function Item({ icon, iconClass, tip, onClick, children, accent, expanded }: { icon: IconName; iconClass?: string; tip: string; onClick?: () => void; children?: ReactNode; accent?: boolean; expanded?: boolean }) {
   const body = (
     <>
       <span className={`sb-icon${iconClass ? ` ${iconClass}` : ''}`}><Icon name={icon} size={12} /></span>
@@ -28,7 +29,7 @@ function Item({ icon, iconClass, tip, onClick, children, accent }: { icon: IconN
     </>
   );
   if (!onClick) return <span className="sb-item" data-tip={tip}>{body}</span>;
-  return <button className={`sb-item${accent ? ' accent' : ''}`} data-tip={tip} aria-label={tip} onClick={onClick}>{body}</button>;
+  return <button className={`sb-item${accent ? ' accent' : ''}`} data-tip={tip} aria-label={tip} aria-expanded={expanded} onClick={onClick}>{body}</button>;
 }
 
 export function StatusBar(props: Props) {
@@ -59,7 +60,7 @@ export function StatusBar(props: Props) {
       <div className="sb-group">
         {approvals > 0 && <Item icon="shield" iconClass="on" tip={t('status.approvalsTip')} onClick={props.onOpenApproval} accent>{t('status.approvals', approvals)}</Item>}
         {modelName && <Item icon="cpu" tip={t('status.modelTip')}><span className="sb-mono">{modelName}</span></Item>}
-        <Item icon="bell" iconClass={unread ? 'on' : undefined} tip={t('status.notifications')} onClick={props.onOpenNotifications}>{String(unread)}</Item>
+        <Item icon="bell" iconClass={unread ? 'on' : undefined} tip={t('status.notifications')} onClick={props.onOpenNotifications} expanded={props.notificationsOpen}>{String(unread)}</Item>
         <Item icon={effective === 'dark' ? 'sun' : 'moon'} tip={effective === 'dark' ? t('theme.toLight') : t('theme.toDark')} onClick={toggleTheme} />
       </div>
     </footer>
