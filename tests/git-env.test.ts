@@ -273,6 +273,37 @@ test('コマンドレベルの上書き: 持ち主が許したコマンドでは
   owner.cleanup();
 });
 
+test('本物の git: .git/hooks の pre-commit は、フックの上書きがあると動かず、持ち主が許した実行（ownerHooks）だと動く。拒めば commit も止まる', { skip: !gitAvailable && 'git が無い' }, t => {
+  const root = tempDir(t);
+  const home = join(root, 'home');
+  const repo = join(root, 'repo');
+  mkdirSync(home);
+  mkdirSync(repo);
+  const marker = join(root, 'hook-ran');
+  const baseEnv: Record<string, string> = {
+    ...(process.env as Record<string, string>), HOME: home, USERPROFILE: home, GIT_TERMINAL_PROMPT: '0',
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e',
+  };
+  for (const key of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete baseEnv[key];
+  const git = (args: string[], env: Record<string, string>) => spawnSync('git', args, { cwd: repo, encoding: 'utf8', env });
+  assert.equal(git(['init', '-q'], baseEnv).status, 0);
+  const hook = (exitCode: number): void => writeFileSync(join(repo, '.git', 'hooks', 'pre-commit'), `#!/bin/sh\necho ran >> "${slash(marker)}"\nexit ${exitCode}\n`, { mode: 0o755 });
+  const commit = (ownerHooks: boolean): number | null => {
+    const run = prepareGitRun({ dataDir: join(root, 'data'), env: baseEnv, ownerHooks });
+    try { return git(['commit', '-q', '--allow-empty', '-m', 'x'], { ...baseEnv, ...run.env }).status; } finally { run.cleanup(); }
+  };
+  hook(0);
+  assert.equal(commit(false), 0);
+  assert.equal(existsSync(marker), false, '上書きがあるのに、フックが動いた');
+  assert.equal(commit(true), 0);
+  assert.equal(existsSync(marker), true, '持ち主が許した実行で、フックが動かない');
+  rmSync(marker);
+  hook(1);
+  assert.equal(commit(false), 0, '上書きがあるときは、フックが拒んでも関係ない');
+  assert.notEqual(commit(true), 0, 'フックが拒んだのに commit できた');
+  assert.equal(git(['rev-list', '--all', '--count'], baseEnv).stdout.trim(), '3', '最後の commit だけ、フックが止めた');
+});
+
 test('コマンドレベルの上書き: ホームの設定の安全な認証の補助は、空にしたあとに足し直す', t => {
   const root = tempDir(t);
   const home = join(root, 'home');
