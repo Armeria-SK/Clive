@@ -52,6 +52,7 @@ const ja = {
   'list.protected_write': '守る場所に、書き込み・削除・名前の変更をします（{path}）',
   'list.expand': '展開は、中の名前が守る場所になりえます（{cmd}）',
   'list.lan': 'LAN の宛先につなぎます（{host}）',
+  'list.tool_config': 'ツールの設定ファイルへの書き込み・消すこと・名前の変更です（{path}）。git・curl・wget・npm・シェルの起動ファイル・PowerShell のプロファイルの設定は、あとで動くコマンドにコードを読み込ませられます',
   'list.redirect': '転送（リダイレクト）を追うと、この PC の中の宛先（Clive 自身を含む）に飛ばされうるので、確かめます（{cmd}）',
   'list.header': '{cmd} の {header} ヘッダは、宛先を偽って Clive 自身の画面の API に届かせるのに使えるので、確かめます',
   'list.send': '外へ送る形です（{cmd}）',
@@ -157,6 +158,7 @@ const ja = {
   'file.persona': '人格・プロフィールのファイル（SOUL.md / USER.md）なので、書き換える前に確認します',
   'file.skill': 'スキルのフォルダなので、書き込む前に確認します。ここに置くと、画面で確かめていないスキルとして使われます（スキルは skill_draft で下書きとして出すと、画面で承認できます）',
   'file.git': 'git のフォルダ（.git）なので、書き込む前に確認します。git のフックや設定はコマンドを動かせます',
+  'file.tool_config': 'ツールの設定ファイル（git・curl・wget・npm・シェルの起動ファイル・PowerShell のプロファイルなど）なので、書き込む前に毎回確認します。設定は、あとで動くコマンドにコードを読み込ませられます',
 
   'shell.disabled': 'シェルの実行は設定で無効になっています',
   'shell.cwd_unresolved': 'cwd が判定できません: {detail}',
@@ -240,6 +242,7 @@ const en: Record<keyof typeof ja, string> = {
   'list.protected_write': 'It writes to, deletes or renames a protected place ({path})',
   'list.expand': 'Expanding the archive can put names into protected places ({cmd})',
   'list.lan': 'It connects to a LAN address ({host})',
+  'list.tool_config': 'This writes to, deletes or renames a tool configuration file ({path}). Settings of git, curl, wget, npm, shell startup files and PowerShell profiles can make a command that runs later load code',
   'list.redirect': 'Following a redirect can send the request to an address on this PC (including Clive itself), so it is checked ({cmd})',
   'list.header': 'The {header} header of {cmd} can pass off the destination and reach the API of Clive itself, so it is checked',
   'list.send': 'This form sends data out ({cmd})',
@@ -345,6 +348,7 @@ const en: Record<keyof typeof ja, string> = {
   'file.persona': 'This is a persona or profile file (SOUL.md / USER.md), so it is checked with you before it is rewritten',
   'file.skill': 'This is the skills folder, so it is checked with you before anything is written. A skill placed here is used as a skill that has not been checked on screen (offer a skill as a draft with skill_draft to have it approved on screen)',
   'file.git': 'This is a git folder (.git), so it is checked with you before anything is written. Git hooks and settings can run commands',
+  'file.tool_config': 'This is a tool configuration file (git, curl, wget, npm, shell startup files, PowerShell profiles and the like), so it is checked with you every time before anything is written. Settings can make a command that runs later load code',
 
   'shell.disabled': 'Running the shell is disabled in the settings',
   'shell.cwd_unresolved': 'The cwd cannot be determined: {detail}',

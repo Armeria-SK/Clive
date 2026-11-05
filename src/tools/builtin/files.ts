@@ -6,6 +6,7 @@ import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
+import { isToolConfigPath } from '../hooks/tool-config.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
 const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git' } as const;
@@ -31,6 +32,8 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   // .git への書き込みはフックや設定というコードを書くことになるので、会話の許可を越えて毎回確かめる。人格・スキルは、中身が引数にあるので今までどおり
   if (protectedKind === 'git') return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] } };
   if (protectedKind) return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])] } };
+  // git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンドにコードを読み込ませられるので、毎回確かめる
+  if (need === 'write' && isToolConfigPath(abs)) return { abs, check: { decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'] } };
   return { abs, check: { decision: 'allow', reasons: [] } };
 }
 

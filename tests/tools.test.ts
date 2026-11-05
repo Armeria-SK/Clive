@@ -526,3 +526,18 @@ test('11.7: 入れるもの・.git への書き込みは、事前判定が「今
   assert.match(request.reasons.join(), /見せたファイルのほかに/u, '限界の文が札に付く');
   await first;
 });
+
+test('ツールの設定ファイル（PowerShell のプロファイルなど）への file_write は、会話の許可を越えて毎回確かめる', async t => {
+  const s = setup(t);
+  const path = 'dot/Microsoft.PowerShell_profile.ps1';
+  const first = s.call('file_write', { path, content: 'Write-Host hi' });
+  const request = await decideNext(s, 'conversation');
+  assert.equal(request.onceOnly, true);
+  assert.match(request.reasons.join(), /ツールの設定ファイル/u);
+  assert.match((await first).output.content, /Write-Host hi|書き込みました|書きました|bytes|文字/u);
+  const second = s.call('file_write', { path, content: 'Write-Host again' });
+  const asked = await decideNext(s, 'deny');
+  assert.equal(asked.onceOnly, true, '会話の許可があっても、また確かめる');
+  assert.match((await second).output.content, /拒否しました/u);
+  assert.equal((await s.call('file_write', { path: 'dot/notes.md', content: 'x' })).decision, 'allow');
+});

@@ -8,6 +8,7 @@ import { codeFindings } from './code-guard.ts';
 import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsDotGit, exists, expandGlob, isDirectory, protectedInside } from './path-expand.ts';
+import { containsToolConfig, isToolConfigPath, type Env } from './tool-config.ts';
 import { expandPath, isInside, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
 
@@ -30,6 +31,8 @@ export interface ShellGuardOptions {
   // C2: 子プロセスの PATH で、名前から実際に起動されるファイル。許可フォルダ・データのフォルダの中なら、その名前の一覧はすべて今回だけ
   which?: (name: string) => string | undefined;
   dataDir?: string;
+  // 子プロセスの環境変数（ツールの設定ファイルの場所に使う。既定は動いているプロセスのもの）
+  env?: Env;
 }
 
 export interface CheckedPath { input: string; path?: string; placement: Placement | { kind: 'unresolved'; reason: string }; write: boolean }
@@ -135,6 +138,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const scripts: string[] = [];
   const askKinds: Array<'code'> = [];
   const selfHosts = opts.selfHosts ?? [];
+  const env: Env = opts.env ?? process.env;
   let limits = false;
   const add = (d: Decision, reason: string) => { decision = worst(decision, d); if (!reasons.includes(reason)) reasons.push(reason); };
   const addCode = (reason: string) => {
@@ -211,10 +215,11 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (!write) return;
     const kind = writeApprovalKind(abs, opts.policy);
     if (kind) addCode(text(WRITE_KEYS[kind], { path: abs }));
+    if (isToolConfigPath(abs, env)) addCode(text('list.tool_config', { path: abs }));
   };
   // フォルダごと書く・消すとき、その中に守る場所（人格・スキル・.git）まで届くなら今回だけ
   const rangeCheck = (dir: string): void => {
-    if (protectedInside(dir, opts.policy)) addCode(text('list.write_ancestor', { path: dir }));
+    if (protectedInside(dir, opts.policy) || containsToolConfig(dir, env)) addCode(text('list.write_ancestor', { path: dir }));
   };
   const dotfiles = isPowerShell(shell);
 
