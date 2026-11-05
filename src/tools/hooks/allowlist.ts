@@ -131,7 +131,4 @@ export function classifyStatements(command: string, ctx: MatchCtx): Classified {
 }
 
 export const noRepo = (): RepoInfo => ({ found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false });
-export function defaultCtx(shell: ShellKind, over: Partial<MatchCtx> = {}): MatchCtx {
-  return { shell, windows: process.platform === 'win32', repo: noRepo, selfHosts: [], ...over };
-}
 export type { Word };

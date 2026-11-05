@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Value } from '@sinclair/typebox/value';
+import { parseAllowEntry } from '../tools/hooks/allow-entry.ts';
 import { checkBaseUrl } from '../shared/url.ts';
 import { AppConfig, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
@@ -68,6 +69,9 @@ export function semanticProblems(config: AppConfig): string[] {
   for (const route of ['chat', 'background'] as const) {
     for (const id of config.routing[route]) if (!modelIds.has(id)) problems.push(`routing.${route}: モデル「${id}」がありません`);
   }
+  config.tools.shell.allow.forEach((entry, i) => {
+    if (!parseAllowEntry(entry)) problems.push(`tools.shell.allow: ${i + 1} 番目の「${entry}」は書けない形です。決まったコマンドだけ（引用符・変数・ワイルドカード・置換・リダイレクト・区切りを含まない、1 つの文）を書いてください`);
+  });
   for (const origin of config.server.origins) {
     try { if (new URL(origin).origin !== origin) problems.push(`server.origins: 「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
     catch { problems.push(`server.origins: 「${origin}」が URL として読めません`); }

@@ -1,3 +1,4 @@
+import { parseAllowEntry } from '../../../src/tools/hooks/allow-entry.ts';
 import { Icon } from '../icons.tsx';
 import { useT } from '../i18n/index.ts';
 import { foldersFromConfig } from '../skills-meta.ts';
@@ -22,6 +23,8 @@ export function ToolsSection({ draft, saved, update, problems }: SectionProps) {
     const path = `tools.hooks.${stage}.${i}.${key}`;
     return { path, error: errorFor(problems, path), changed: changed(c => c.tools?.hooks?.[stage]?.[i]?.[key]) };
   };
+  const badAllow = ((shell.allow ?? []) as string[]).find(entry => parseAllowEntry(entry) === null);
+  const allowError = errorFor(problems, 'tools.shell.allow') ?? (badAllow !== undefined ? t('settings.tools.allowInvalid', badAllow) : undefined);
   const setHooks = (stage: (typeof HOOK_STAGES)[number], hooks: Hook[]) => update(c => updateAt(c, 'tools', { hooks: { ...(c.tools as Config).hooks, [stage]: hooks } }));
 
   return (
@@ -50,7 +53,7 @@ export function ToolsSection({ draft, saved, update, problems }: SectionProps) {
         <FieldRow label={t('settings.tools.shellTimeout')} changed={changed(c => c.tools.shell.timeoutSec)} path="tools.shell.timeoutSec" error={errorFor(problems, 'tools.shell.timeoutSec')}>
           <NumberField value={shell.timeoutSec as number} label={t('settings.tools.shellTimeout')} unit={t('settings.unit.seconds')} min={1} max={3600} onChange={v => v !== undefined && setShell({ timeoutSec: v })} />
         </FieldRow>
-        <FieldRow label={t('settings.tools.allowCmds')} changed={changed(c => c.tools.shell.allow)} path="tools.shell.allow">
+        <FieldRow label={t('settings.tools.allowCmds')} changed={changed(c => c.tools.shell.allow)} path="tools.shell.allow" error={allowError}>
           <TagsField tags={shell.allow} label={t('settings.tools.allowCmds')} onChange={v => setShell({ allow: v })} />
         </FieldRow>
         <FieldRow label={t('settings.tools.askCmds')} changed={changed(c => c.tools.shell.ask)} path="tools.shell.ask">

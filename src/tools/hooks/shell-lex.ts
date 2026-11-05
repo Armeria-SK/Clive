@@ -418,7 +418,7 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
   const prevEndsValue = (): boolean => {
     const p = toks.at(-1);
     if (!p) return false;
-    return p.t === 'var' || p.t === 'str' || p.t === 'member' || (p.t === 'p' && (p.v === ')' || p.v === ']' || p.v === '}')) || p.t === 'type';
+    return p.t === 'var' || p.t === 'str' || p.t === 'member' || p.t === 'static' || (p.t === 'p' && (p.v === ')' || p.v === ']' || p.v === '}')) || p.t === 'type';
   };
   while (i < n) {
     const ch = src[i]!;
@@ -513,7 +513,9 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
     }
     // 裸の語
     let j = i;
-    while (j < n && !PS_WORD_STOPS.has(src[j]!)) j++;
+    // 添字の中（[ のすぐあと）の語は ] で終わる: $a[0] $a[1..2] $a[-1]
+    const inIndex = toks.at(-1)?.t === 'p' && toks.at(-1)?.v === '[';
+    while (j < n && !PS_WORD_STOPS.has(src[j]!) && !(inIndex && src[j] === ']')) j++;
     if (j === i) return fail('unexpected', ch);
     const text = src.slice(i, j);
     if (text.startsWith('--%')) return fail('parse_token', '--%');
@@ -622,14 +624,15 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
   // 式の 1 つの部品を読む（括弧・部分式・ハッシュ・ブロック・変数・文字・型）
   const operand = (depth: number, st: Statement): Word | LexFail | null => {
     const t = peek()!;
-    if (t.t === 'var') { k++; const r = chain(depth, st); return r ?? plain(`$${t.v}`, { dynamic: true }); }
-    if (t.t === 'str') { k++; const r = chain(depth, st); return r ?? plain(t.v, { quoted: true, dynamic: t.dyn === true }); }
+    // .メンバー・[添字] が続くと、値は計算されたもの（'a'.Replace(..) など）。元の文字ではないので、パスとして読めない印の $( … ) にする
+    if (t.t === 'var') { k++; const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(`$${t.v}`, { dynamic: true })); }
+    if (t.t === 'str') { k++; const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(t.v, { quoted: true, dynamic: t.dyn === true })); }
     if (t.t === 'p' && t.v === '(' || t.t === 'sub' || t.t === 'arr') {
       k++;
       const r = statements(')', depth + 1);
       if (r) return r;
       const c = chain(depth, st);
-      return c ?? plain('(…)', { kind: 'paren', dynamic: true });
+      return c ?? plain('$(…)', { kind: 'paren', dynamic: true });
     }
     if (t.t === 'hash') { k++; const h = hashtable(depth); if (isFail(h)) return h; const c = chain(depth, st); return c ?? h; }
     if (t.t === 'type') {
@@ -679,7 +682,10 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       else part = operand(depth, st);
       if (part === null) return fail('unexpected', t.v);
       if (isFail(part)) return part;
+      // 引用符・括弧・ハッシュ・ブロックで始まる引数は、閉じたところで終わる（'a'b は a と b の 2 つ。a'b' は 1 つ）。本物の Parser と同じ
+      const endsHere = word === null && (t.t === 'str' || t.t === 'sub' || t.t === 'arr' || t.t === 'hash' || isP(t, '(') || isP(t, '{'));
       word = word ? mergeWord(word, part) : part;
+      if (endsHere) break;
     }
     if (word) {
       // a,b,c の配列は 1 つの語

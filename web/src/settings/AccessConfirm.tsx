@@ -14,7 +14,7 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'root-added': return <>{t('folders.confirm.rootAdded', a.path, t(a.mode === 'write' ? 'folders.mode.write' : 'folders.mode.read'))}{broadNote(t, a.broad)}</>;
     case 'root-write': return <>{t('folders.confirm.rootWrite', a.path)}{broadNote(t, a.broad)}</>;
     case 'shell-enabled': return t('access.shellEnabled');
-    case 'shell-allow-added': return t('access.shellAllow', a.command);
+    case 'shell-allow-added': return <>{t('access.shellAllow', a.command)}{a.runsCode && <span className="sk-warn">{t('access.shellAllowCode')}</span>}</>;
     case 'shell-ask-removed': return t('access.shellAsk', a.command);
     case 'shell-deny-removed': return t('access.shellDeny', a.command);
     case 'shell-env-added': return t('access.shellEnv', a.name);

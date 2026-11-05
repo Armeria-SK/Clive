@@ -19,6 +19,7 @@ function cmd(names: string, params: string, pos: string, extra?: PsCmd['extra'])
   for (const n of list) CMDS.set(n, spec);
 }
 export const psCmdlet = (name: string): PsCmd | undefined => CMDS.get(name);
+export const psCmdletNames = (): string[] => [...CMDS.keys()];
 
 // プロバイダ付きのパス（env: function: HKLM: など。ドライブ文字 1 つの C: は除く）
 const PROVIDER = /^[A-Za-z][A-Za-z0-9_]+:(?![\\/]{2})/u;
@@ -141,10 +142,13 @@ cmd('set-location sl cd chdir push-location pushd', 'Path:path-r LiteralPath:pat
 cmd('pop-location popd', '', '', (_p, acc) => { acc.cwd = { word: null }; });
 
 // ── 書く（A1: 許可フォルダの中の簡単なファイルの操作）──
-cmd('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', (p, acc) => {
+const joinName: PsCmd['extra'] = (p, acc) => {
   const name = first(p, 'name')[0];
   if (name) acc.copies.push({ kind: 'join', sources: [], dest: first(p, 'path')[0] ?? null, name, recursive: false, dirFlag: false, noTargetDir: false });
-});
+};
+cmd('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force', 'path', joinName);
+// 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数。毎日使われるので、同じ決まりで許す
+cmd('mkdir md', 'Path:path-w Name:s Force', 'path', joinName);
 cmd('set-content add-content ac', `Path:path-w LiteralPath:path-w Value:s Encoding:${ENC} NoNewline Force`, 'path value…');
 cmd('clear-content clc', 'Path:path-w LiteralPath:path-w Force', 'path');
 cmd('out-file', `FilePath:path-w LiteralPath:path-w Encoding:${ENC} Append NoNewline Width:n InputObject:s`, 'filepath');

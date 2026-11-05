@@ -176,3 +176,39 @@ test('読み取り: PowerShell の語・パラメータ・パイプ・式・制�
   assert.deepEqual(read('Get-Process | Sort-Object CPU -Descending | Select-Object -First 5', 'powershell').map(s => s.words[0]!.text), ['Get-Process', 'Sort-Object', 'Select-Object']);
   assert.deepEqual(read('Select-Object -Property name,length', 'powershell')[0]!.words.map(w => w.text), ['Select-Object', '-Property', 'name,length']);
 });
+
+test('字句 PowerShell: 引用符・括弧で始まる引数は閉じたところで終わる。くっつけた flag は別の引数（本物の Parser と同じ）', () => {
+  const words = (command: string) => read(command, 'powershell').filter(s => s.kind === 'command').at(-1)!.words.map(w => w.text);
+  assert.deepEqual(words("Write-Output 'a'b"), ['Write-Output', 'a', 'b']);
+  assert.deepEqual(words('Write-Output "a"b'), ['Write-Output', 'a', 'b']);
+  assert.deepEqual(words('Write-Output "a"\'b\''), ['Write-Output', 'a', 'b']);
+  assert.deepEqual(words("Write-Output 'x'-y"), ['Write-Output', 'x', '-y']);
+  assert.deepEqual(words("rg 'x'--pre=./p.sh f"), ['rg', 'x', '--pre=./p.sh', 'f']);
+  assert.deepEqual(words('Write-Output (1)b'), ['Write-Output', '$(…)', 'b']);
+  assert.deepEqual(words("Write-Output a'b'c'd'"), ['Write-Output', 'abcd'], '語で始まる引数は、引用符をまたいで続く');
+  assert.deepEqual(words('Write-Output a"b"'), ['Write-Output', 'ab']);
+  assert.deepEqual(words('Write-Output $x"b"'), ['Write-Output', '$xb'], '変数で始まる引数も続く（1 つの語。変数を含むので値は分からない）');
+});
+
+test('字句 PowerShell: 値を計算する書き方（メンバー・添字・メソッドの呼び出し）は、元の文字ではなくパスとして読めない値にする', () => {
+  const last = (command: string) => read(command, 'powershell').filter(s => s.kind === 'command').at(-1)!.words.at(-1)!;
+  for (const command of ["Set-Content 'x'.Replace('x','SOUL.md')", 'Set-Content $HOME.x', 'Set-Content $a[0]', "Set-Content ('a'+'b')", 'Set-Content $(1)']) {
+    const w = last(command);
+    assert.equal(w.dynamic, true, command);
+    assert.equal(w.text.startsWith('$'), true, `${command}: ${w.text}`);
+  }
+  assert.equal(last("Set-Content 'x'").dynamic, false);
+  assert.equal(last('Set-Content $x').text, '$x');
+});
+
+test('字句 PowerShell: 添字 [0] [-1] [1..2] [$i] を読む（] は語の一部ではない）', () => {
+  for (const command of ['$x = $a[0]', 'Write-Output $a[0]', 'Write-Output (Get-ChildItem)[0]', '$a[0].Name', '$a[1..2]', '$a[-1]', '(1,2)[0]', 'Write-Output $a[$i]', 'Write-Output $a[0] x']) {
+    read(command, 'powershell');
+  }
+  assert.deepEqual(read('Get-ChildItem file[1].txt', 'powershell').map(line), ['Get-ChildItem file[1].txt'], '語の中の [1] はワイルドカード');
+  assert.equal(read('Get-ChildItem file[1].txt', 'powershell')[0]!.words[1]!.glob, true);
+  assert.equal(failure('Write-Output $a[0', 'powershell'), 'unclosed');
+  // 静的メンバーのあとのプロパティ・メソッド（[DateTime]::Now.Year）は、メンバーとして読む
+  assert.deepEqual(read('[DateTime]::Now.Year', 'powershell').map(s => s.shapes), [[]]);
+  assert.deepEqual(read('[DateTime]::Today.AddDays(1)', 'powershell').flatMap(s => s.shapes), ['method:AddDays']);
+});

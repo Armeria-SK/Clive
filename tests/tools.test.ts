@@ -511,3 +511,18 @@ test('PowerShell の制限モード（実機）: .NET の直接呼び出しは�
   assert.equal(normal.exitCode, 0);
   assert.deepEqual(normal.stdout.trim().split(/\r?\n/u), ['メモ.txt', 'ごんにちは', 'True', 'HELLO']);
 });
+
+test('11.7: 入れるもの・.git への書き込みは、事前判定が「今回だけ（コードの確かめ）」を返す。会話の許可では越えられない', async t => {
+  const s = setup(t);
+  for (const command of ['pip install requests', 'pip install -e .', 'npm install', 'npm install ./pkg', 'npm ci', 'pnpm add x', 'cargo install x', 'Set-Content .git/hooks/pre-commit x']) {
+    const pre = await shellRun.preCheck!({ command }, s.ctx);
+    assert.equal(pre.decision, 'ask', command);
+    assert.equal(pre.onceOnly, true, command);
+    assert.deepEqual(pre.askKinds, ['code'], command);
+  }
+  const first = s.call('shell_run', { command: 'npm install' });
+  const request = await decideNext(s, 'deny');
+  assert.equal(request.onceOnly, true);
+  assert.match(request.reasons.join(), /見せたファイルのほかに/u, '限界の文が札に付く');
+  await first;
+});

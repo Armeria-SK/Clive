@@ -48,7 +48,7 @@ test('Copy-Item・Move-Item・Rename-Item・New-Item: 同じ組み立て（Power
   const f = fixture(t);
   for (const command of [
     'Copy-Item tmp/SOUL.md -Destination .', 'Copy-Item tmp\\SOUL.md .\\', 'Copy-Item -Path tmp/SOUL.md -Destination .', 'Move-Item tmp/SOUL.md .', 'Copy-Item tmp/x.txt SOUL.md', 'Copy-Item tmp/x.txt skills',
-    'Rename-Item notes.md -NewName SOUL.md', 'Rename-Item -Path notes.md -NewName USER.md', 'New-Item -Path . -Name SOUL.md', 'New-Item -Path skills -Name new -ItemType Directory', 'New-Item -Path . -Name $n',
+    'Rename-Item notes.md -NewName SOUL.md', 'Rename-Item -Path notes.md -NewName USER.md', 'New-Item -Path . -Name SOUL.md', 'New-Item -Path skills -Name new -ItemType Directory', 'New-Item -Path . -Name $n', 'mkdir skills\\new','mkdir -Path . -Name SOUL.md',
     'Copy-Item tmp\\* .', 'Copy-Item tmp/* . -Recurse', 'Copy-Item -Recurse tmp/. .', 'Get-ChildItem tmp | Copy-Item -Destination .', 'Copy-Item $f .', 'Rename-Item notes.md -NewName $n', 'Set-Content -Path skills/a.md x', 'Remove-Item skills -Recurse',
   ]) {
     const v = f.ps(command);
@@ -57,6 +57,7 @@ test('Copy-Item・Move-Item・Rename-Item・New-Item: 同じ組み立て（Power
   for (const command of [
     'Copy-Item tmp/x.txt .', 'Copy-Item tmp/x.txt -Destination docs', 'Copy-Item -Recurse tmp/nested .', 'Move-Item tmp/x.txt notes2.md', 'Rename-Item notes.md -NewName notes2.md', 'New-Item -Path docs -Name b.md',
     'New-Item -ItemType Directory out', 'Copy-Item *.md docs', 'Copy-Item tmp/x.txt docs/y.txt',
+    'mkdir out', 'md out2', 'mkdir -Path docs -Name made',
   ]) {
     const v = f.ps(command);
     assert.equal(v.decision, 'allow', `${command}: ${v.reasons.join(' / ')}`);
@@ -137,3 +138,29 @@ test('path-expand: 列挙・.git の探索・守る場所の先祖', t => {
   assert.equal(protectedInside(join(f.ws, 'skills'), f.policy), 'skill');
   assert.equal(protectedInside(join(f.ws, 'docs'), f.policy), undefined);
 });
+
+test('PowerShell: 括弧・部分式・メンバーの呼び出しで組み立てたパスは、中身が見えないので書くなら今回だけ（読むならふつうの確かめ）', t => {
+  const f = fixture(t);
+  for (const command of [
+    "Set-Content ('SOUL'+'.md') hi", "Set-Content -Path ('SOUL'+'.md') hi", "Set-Content 'x'.Replace('x','SOUL.md') hi", 'Set-Content $HOME.x hi', "Copy-Item tmp/x.txt (Join-Path . SOUL.md)", "New-Item -Name ('SOUL'+'.md')",
+    "Rename-Item notes.md -NewName ('SOUL'+'.md')", "Remove-Item ('SOUL'+'.md')", "Out-File ('SO'+'UL.md')", 'Set-Content $(1) hi', "Add-Content (Get-ChildItem)[0] hi", "echo hi | Set-Content ('S'+'OUL.md')",
+  ]) {
+    const v = f.ps(command);
+    assert.equal(once(v), true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+  }
+  for (const command of ["Get-Content ('SOUL'+'.md')", "Get-Content 'x'.Replace('x','SOUL.md')", 'Get-ChildItem (Get-Location)']) {
+    const v = f.ps(command);
+    assert.equal(v.decision, 'ask', `${command}: ${v.reasons.join(' / ')}`);
+    assert.equal(v.onceOnly, false, command);
+  }
+});
+
+test('PowerShell: 引用符で始まる引数は閉じたところで終わる（本物の Parser と同じ）。くっつけて書いた flag も flag として調べる', t => {
+  const f = fixture(t);
+  assert.equal(f.ps("rg 'x'--pre=./p.sh f").decision, 'ask', "rg 'x'--pre=./p.sh は、x と --pre=./p.sh の 2 つの引数");
+  assert.equal(f.ps("rg 'x'--pre=./p.sh f").onceOnly, true);
+  assert.equal(f.ps('Get-ChildItem "x"-Recurse').decision, 'allow', '-Recurse は正式な名前の引数');
+  assert.equal(f.ps("Get-ChildItem 'x'-Bogus").onceOnly, true);
+  assert.equal(f.ps("Set-Content 'a'SOUL.md hi").decision, 'allow', "'a' と SOUL.md の 2 つ（パスは a、値は SOUL.md と hi）");
+}
+);

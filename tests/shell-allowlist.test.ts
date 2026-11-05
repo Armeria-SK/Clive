@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { classifyStatements, defaultCtx, noRepo, type Level, type MatchCtx, type RepoInfo } from '../src/tools/hooks/allowlist.ts';
+import { classifyStatements, noRepo, type Level, type MatchCtx, type RepoInfo } from '../src/tools/hooks/allowlist.ts';
 import { sedScriptOk } from '../src/tools/hooks/allowlist-tools.ts';
 import type { ShellKind } from '../src/tools/hooks/shell-lex.ts';
 
 const isPs = (shell: ShellKind): boolean => shell === 'powershell' || shell === 'pwsh';
-const ctxFor = (shell: ShellKind, over: Partial<MatchCtx> = {}): MatchCtx => defaultCtx(shell, { windows: isPs(shell), ...over });
+const ctxFor = (shell: ShellKind, over: Partial<MatchCtx> = {}): MatchCtx => ({ shell, windows: isPs(shell), repo: noRepo, selfHosts: [], ...over });
 const classify = (command: string, shell: ShellKind = 'bash', over: Partial<MatchCtx> = {}) => classifyStatements(command, ctxFor(shell, over));
 const levelOf = (command: string, shell: ShellKind = 'bash', over: Partial<MatchCtx> = {}): Level => classify(command, shell, over).level;
 const keysOf = (command: string, shell: ShellKind = 'bash', over: Partial<MatchCtx> = {}): string[] =>
