@@ -199,7 +199,8 @@ writer('remove-item rm del erase rd rmdir ri', 'Path:path-w LiteralPath:path-w R
   acc.deletes = true;
   if (p.all.has('recurse')) for (const ref of acc.paths) ref.recursive = true;
 });
-writer('compress-archive', 'Path:path-r LiteralPath:path-r DestinationPath:path-w CompressionLevel:Optimal|NoCompression|Fastest Force Update', 'path destinationpath');
+// 元のフォルダの下の秘密のパスは、アーカイブにそのまま入る（tar -c・zip と同じに、歩いて調べる）
+writer('compress-archive', 'Path:path-r LiteralPath:path-r DestinationPath:path-w CompressionLevel:Optimal|NoCompression|Fastest Force Update', 'path destinationpath', (p, acc) => { for (const w of pathWords(p)) acc.walk(w); });
 cmd('expand-archive', 'Path:s LiteralPath:s DestinationPath:s Force', 'path destinationpath', (_p, acc) => { acc.add('once', 'list.expand', { cmd: 'Expand-Archive' }, false); });
 
 // ── ネットワーク（11.3.4）──

@@ -297,6 +297,8 @@ function archiveFile(value: Word, acc: Acc, write: boolean, ctx: MatchCtx): void
   if (value.text.includes(':') && !(ctx.windows && /^[A-Za-z]:[\\/]/u.test(value.text))) { formOnce(acc, 'tar', `-f ${value.text}`); return; }
   checkValue(write ? 'path-w' : 'path-r', value, acc, 'tar', '-f', ctx);
 }
+const ABSOLUTE = /^(?:[A-Za-z]:)?[\\/]/u;
+const joinPath = (dir: string, name: string): string => `${dir.replace(/[\\/]+$/u, '')}/${name}`;
 register(['tar'], (words, acc, ctx) => {
   const args = words.slice(1);
   const modes = new Set<string>();
@@ -304,6 +306,9 @@ register(['tar'], (words, acc, ctx) => {
   let expand = false;
   const pos: Word[] = [];
   const dirs: Word[] = [];
+  // -C は、そのあとに書かれた元の名前の基準になる（順序に敏感。相対の -C を重ねると、重なっていく）
+  const baseOf = new Map<Word, Word | undefined>();
+  let cdir: Word | undefined;
   const want = (rest: Word[]): void => { for (const w of rest) if (w.dynamic || w.glob) acc.add('once', 'list.dynamic', { cmd: 'tar', detail: w.text }, true); };
   want(args);
   for (let i = 0; i < args.length; i++) {
@@ -311,7 +316,7 @@ register(['tar'], (words, acc, ctx) => {
     let text = w.text;
     const bundle = i === 0 && literal(w) && !text.startsWith('-') && /^[A-Za-z]+$/u.test(text);
     if (bundle) text = `-${text}`;
-    if (!bundle && (!literal(w) || !text.startsWith('-') || text === '-')) { pos.push(w); continue; }
+    if (!bundle && (!literal(w) || !text.startsWith('-') || text === '-')) { pos.push(w); baseOf.set(w, cdir); continue; }
     if (text.startsWith('--')) {
       if (/^--exclude=/u.test(text)) continue;
       acc.add('once', 'list.flag', { cmd: 'tar', flag: text.split('=')[0]! }, true);
@@ -325,7 +330,8 @@ register(['tar'], (words, acc, ctx) => {
         const rest = text.slice(j + 1);
         const v = rest !== '' ? { ...w, text: rest } : args[++i];
         if (!v) { formOnce(acc, 'tar', `-${ch} の値`); break; }
-        if (ch === 'f') file = v; else dirs.push(v);
+        if (ch === 'f') file = v;
+        else { dirs.push(v); cdir = cdir && !v.dynamic && !cdir.dynamic && !ABSOLUTE.test(v.text) ? { ...v, text: joinPath(cdir.text, v.text) } : v; }
         break;
       } else if (ch === 'x') { acc.add('once', 'list.expand', { cmd: 'tar' }, false); expand = true; break; } else { acc.add('once', 'list.flag', { cmd: 'tar', flag: `-${ch}` }, true); break; }
     }
@@ -335,7 +341,14 @@ register(['tar'], (words, acc, ctx) => {
   const create = modes.has('c');
   if (file) archiveFile(file, acc, create, ctx);
   for (const d of dirs) checkValue('path-r', d, acc, 'tar', '-C', ctx);
-  if (create) for (const w of pos) acc.read(w, true);
+  if (create) {
+    // 元のフォルダの下の秘密のパスは、アーカイブにそのまま入る（out.tar という名前は秘密のパスではない）ので、歩いて調べる。-C のあとの名前は、その -C のフォルダの下
+    for (const w of pos) {
+      acc.read(w, true);
+      const base = baseOf.get(w);
+      acc.walk(base && !base.dynamic && !w.dynamic && !ABSOLUTE.test(w.text) ? { ...w, text: joinPath(base.text, w.text) } : w);
+    }
+  }
 });
 register(['zip'], (words, acc, ctx) => {
   const args = words.slice(1);
@@ -352,7 +365,8 @@ register(['zip'], (words, acc, ctx) => {
   void ctx;
   if (pos.length < 1) { formOnce(acc, 'zip', ''); return; }
   acc.write(pos[0]!);
-  for (const w of pos.slice(1)) acc.read(w, true);
+  // 元のフォルダの下の秘密のパスは、zip にそのまま入る
+  for (const w of pos.slice(1)) { acc.read(w, true); acc.walk(w); }
 });
 gnu({ names: ['unzip'], flags: '-l -v -Z', pos: ['path-r', 's…'] }, false, (p, acc) => {
   if (!p.seen.has('-l') && !p.seen.has('-Z') && !p.seen.has('-v')) acc.add('once', 'list.expand', { cmd: 'unzip' }, false);

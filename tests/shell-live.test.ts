@@ -350,6 +350,36 @@ test('実機（Windows PowerShell 5.1・制限モード）: findstr /s・findstr
   assert.match(clean.output.content, /SECRET-word/u);
 });
 
+// 7 回目の審査（中）: アーカイブを作ってから読む。tar は中身をそのまま入れ、out2.tar という名前は秘密のパスではない
+test('実機（Windows PowerShell 5.1・制限モード）: アーカイブを作ってから読む形は、元のフォルダの下に秘密のパスがあれば、アーカイブを作る段で止まる', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  seedSecrets(s);
+  const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  assert.match(raw('tar.exe -cf out2.tar proj; Select-String -Path out2.tar -Pattern SECRET'), /SECRET=(?:proj|inner)/u, '前提: 素のシェルでは、作った tar から秘密が読める');
+  rmSync(s.files('out2.tar'));
+  for (const command of ['tar.exe -cf out2.tar proj', 'tar -czf out2.tgz proj', 'tar.exe -cf out2.tar .', 'Compress-Archive -Path proj -DestinationPath out2.zip']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+  }
+  for (const name of ['out2.tar', 'out2.tgz', 'out2.zip']) assert.equal(existsSync(s.files(name)), false, `${name} ができた`);
+  mkdirSync(s.files('clean'), { recursive: true });
+  writeFileSync(s.files('clean/c.txt'), 'plain\n');
+  const clean = await s.call('tar.exe -cf out3.tar clean');
+  assert.equal(clean.decision, 'allow', clean.output.content);
+  assert.equal(existsSync(s.files('out3.tar')), true);
+});
+
+test('実機（bash）: tar -c で作ってから読む形は、元のフォルダの下に秘密のパスがあれば止まる', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  seedSecrets(s);
+  const out = spawnSync(bashPath!, ['--noprofile', '--norc', '-c', 'tar -cf out.tar proj && grep -a SECRET out.tar'], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  assert.match(out, /SECRET=(?:proj|inner)/u, '前提: 素のシェルでは、作った tar から秘密が読める');
+  rmSync(s.files('out.tar'));
+  const outcome = await s.call('tar -cf out.tar proj');
+  assert.equal(outcome.decision, 'deny', outcome.output.content);
+  assert.equal(existsSync(s.files('out.tar')), false);
+});
+
 test('実機（bash）: grep -r・diff -r は、フォルダの下に秘密のパスがあれば止まり、秘密は出ない。秘密の無いフォルダは止めない', { skip: !bashAvailable && 'bash が無い' }, async t => {
   const s = setup(t, 'bash');
   seedSecrets(s);

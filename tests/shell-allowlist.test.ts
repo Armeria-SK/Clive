@@ -458,14 +458,15 @@ test('調べるパス: 読む・書く・組み立て・消す・cd', () => {
   assert.deepEqual(rm.paths.map(p => [p.word.text, p.mode, p.recursive]), [['build', 'write', true]]);
   assert.deepEqual(classify('echo x > a.txt 2>/dev/null').results[0]!.paths.map(p => [p.word.text, p.mode]), [['a.txt', 'write']]);
   assert.deepEqual(classify('wc -l < in.txt').results[0]!.paths.map(p => [p.word.text, p.mode]), [['in.txt', 'read']]);
-  assert.deepEqual(classify('tar -czf out.tgz src').results[0]!.paths.map(p => [p.word.text, p.mode]), [['out.tgz', 'write'], ['src', 'read']]);
+  assert.deepEqual(classify('tar -czf out.tgz src').results[0]!.paths.map(p => [p.word.text, p.mode]), [['out.tgz', 'write'], ['src', 'read'], ['src', 'read']], '元のフォルダは、読む 1 つと、下を歩く 1 つ');
+  assert.deepEqual(classify('tar -czf out.tgz src').results[0]!.paths.map(p => p.list !== undefined), [false, false, true]);
   assert.deepEqual(classify('tar -tf a.tar').results[0]!.paths.map(p => [p.word.text, p.mode]), [['a.tar', 'read']]);
   assert.equal(levelOf('tar -tf host:a.tar'), 'once');
   assert.deepEqual(classify('cd sub').results[0]!.cwd?.word?.text, 'sub');
   assert.equal(classify('cd').results[0]!.cwd?.word, null);
   assert.equal(classify('popd').results[0]!.cwd?.word, null);
   assert.equal(classify('Set-Location ..', 'powershell').results[0]!.cwd?.word?.text, '..');
-  assert.deepEqual(classify('zip -r out.zip src -x "*.git*"').results[0]!.paths.map(p => [p.word.text, p.mode]), [['out.zip', 'write'], ['src', 'read']]);
+  assert.deepEqual(classify('zip -r out.zip src -x "*.git*"').results[0]!.paths.map(p => [p.word.text, p.mode]), [['out.zip', 'write'], ['src', 'read'], ['src', 'read']]);
   assert.deepEqual(classify("sed -i 's/a/b/' f").results[0]!.paths.map(p => [p.word.text, p.mode]), [['f', 'write']]);
   assert.deepEqual(classify("sed -n '1p' f").results[0]!.paths.map(p => [p.word.text, p.mode]), [['f', 'read']]);
   assert.deepEqual(classify('Get-Content env:PATH', 'powershell').results[0]!.paths, []);
