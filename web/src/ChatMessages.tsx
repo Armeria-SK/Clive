@@ -2,7 +2,7 @@ import { memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'r
 import { openSetup } from './onboarding.ts';
 import type { Message, Profile } from './api.ts';
 import { Avatar } from './Avatar.tsx';
-import { chatTime, firstLine, liveRenderDelay, toolIcon, type ContextNumbers } from './chat-logic.ts';
+import { chatTime, firstLine, TextThrottle, toolIcon, type ContextNumbers } from './chat-logic.ts';
 import { useNow } from './hooks.ts';
 import { formatNumber, useT, type PlainKey } from './i18n/index.ts';
 import { Icon, type IconName } from './icons.tsx';
@@ -107,19 +107,15 @@ export const AssistantMessage = memo(function AssistantMessage({ profile, text, 
 });
 
 // 流れている文を、長さに応じた間隔でしか描き直さない。間隔が過ぎていれば、届いた分をすぐ描く。届かなくなったら、残りを間隔の終わりに描く
+const clock = (): number => (typeof performance === 'undefined' ? Date.now() : performance.now());
+
 function useThrottledText(text: string): string {
-  const shown = useRef(text);
-  const drawnAt = useRef(0);
+  const throttle = useRef<TextThrottle | null>(null);
+  throttle.current ??= new TextThrottle(text);
   const [, redraw] = useReducer((n: number) => n + 1, 0);
-  const delay = liveRenderDelay(text.length);
-  const now = typeof performance === 'undefined' ? Date.now() : performance.now();
-  if (delay === 0 || now - drawnAt.current >= delay || !text.startsWith(shown.current)) { shown.current = text; drawnAt.current = now; }
-  useEffect(() => {
-    if (shown.current === text) return;
-    const timer = setTimeout(redraw, Math.max(0, delay - (performance.now() - drawnAt.current)));
-    return () => clearTimeout(timer);
-  }, [text, delay]);
-  return shown.current;
+  const drawn = throttle.current.next(text, clock());
+  useEffect(() => throttle.current!.arm(text, { setTimer: (fn, ms) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); }, now: clock, redraw }), [text]);
+  return drawn;
 }
 
 export function LiveReply({ profile, text, time, head }: ReplyProps) {

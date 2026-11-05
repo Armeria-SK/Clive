@@ -4,7 +4,7 @@ import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
   advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
-  restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
+  restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -368,4 +368,65 @@ test('newConversationId / sendTarget: 最初の発言は画面が決めた id �
   assert.deepEqual(retry, { id: 'new-1', created: 'new-1' }, '断られたあとのやり直しは同じ id');
   assert.equal(generated, 1, 'やり直しでは作り直さない');
   assert.deepEqual(sendTarget('c2', 'new-1', generate), { id: 'c2', created: 'new-1' }, '会話に移ったあとは、その会話へ');
+});
+
+// 時計と待ちを差し替えて、画面の部品（useThrottledText）と同じ流れを動かす: 描く → 待ちを置く → 鳴ったら描き直す
+function drive(initial: string) {
+  const state = { clock: 0, redraws: 0, pending: undefined as { fn: () => void; at: number } | undefined, cancelled: 0 };
+  const throttle = new TextThrottle(initial);
+  const timers = {
+    now: () => state.clock,
+    redraw: () => { state.redraws++; },
+    setTimer: (fn: () => void, ms: number) => { state.pending = { fn, at: state.clock + ms }; const mine = state.pending; return () => { if (state.pending === mine) { state.pending = undefined; state.cancelled++; } }; },
+  };
+  let cancel: (() => void) | undefined;
+  let lastText: string | undefined;
+  // 描く（届いた文で描き直す）→ 前の待ちを止めて、必要なら新しい待ちを置く
+  const render = (text: string, at: number): string => {
+    state.clock = at;
+    const drawn = throttle.next(text, at);
+    // useEffect(…, [text]) と同じ: 文が変わったときだけ、前の待ちを止めて置き直す
+    if (text !== lastText) { cancel?.(); cancel = throttle.arm(text, timers); lastText = text; }
+    return drawn;
+  };
+  // 待ちが鳴る（鳴る時刻を ms 早める・遅らせるを指定できる）
+  const ring = (offset: number): void => {
+    const pending = state.pending;
+    assert.ok(pending, '待ちが置かれていない');
+    state.pending = undefined;
+    state.clock = pending.at + offset;
+    pending.fn();
+  };
+  return { state, throttle, render, ring };
+}
+
+test('流れている文の間引き: 時計が少し早く鳴っても、届いた残りは必ず描かれる（描き残さない）', () => {
+  const T1 = 'あ'.repeat(5000);
+  const T2 = `${T1}${'い'.repeat(300)}`;
+  for (const offset of [0, -0.4, -1, -30, 5]) {
+    const d = drive('');
+    assert.equal(d.render(T1, 1000), T1, '間隔が過ぎていれば、すぐ描く');
+    assert.equal(d.render(T2, 1010), T1, '間隔の内に届いた分は、まだ描かない');
+    assert.ok(d.state.pending, '残りを描く待ちが置かれている');
+    d.ring(offset);
+    assert.equal(d.state.redraws, 1, `鳴ったら描き直しを頼む（${offset} ms）`);
+    // 描き直しで描く文（時計が早かった場合も、残りは描いてある）
+    assert.equal(d.render(T2, d.state.clock), T2, `鳴る時刻が ${offset} ms ずれても、残りを描く`);
+    assert.equal(d.state.pending, undefined, '描き終えたら、もう待ちは要らない');
+  }
+});
+
+test('流れている文の間引き: 短い返事は届くたびに描き、続きが無いときは待ちを置かない。前の待ちは止める', () => {
+  const d = drive('');
+  assert.equal(d.render('こんにちは', 10), 'こんにちは');
+  assert.equal(d.render('こんにちは、世界', 11), 'こんにちは、世界');
+  assert.equal(d.state.pending, undefined);
+  const long = drive('');
+  const base = 'a'.repeat(4000);
+  long.render(base, 1000);
+  long.render(`${base}b`, 1001);
+  assert.ok(long.state.pending);
+  long.render(`${base}bc`, 1002);
+  assert.equal(long.state.cancelled, 1, '届くたびに前の待ちを止めて置き直す');
+  assert.notEqual(long.render('別の文'.repeat(2000), 1003), base, '文が前の続きでなければ、すぐ描き直す');
 });

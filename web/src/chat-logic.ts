@@ -128,6 +128,36 @@ export function liveRenderDelay(length: number): number {
   return length < 3000 ? 0 : Math.min(1000, Math.round(length / 100));
 }
 
+export interface ThrottleTimers {
+  // fn を ms 後に呼ぶ。止める関数を返す
+  setTimer: (fn: () => void, ms: number) => () => void;
+  now: () => number;
+  redraw: () => void;
+}
+
+// 流れている文を、長さに応じた間隔でしか描き直さない。間隔が過ぎていれば、届いた分をすぐ描く。届かなくなったら、残りを間隔の終わりに描く。
+// 画面の部品（useThrottledText）はこれを呼ぶだけにして、時計と待ちを差し替えて試せるようにしてある
+export class TextThrottle {
+  shown: string;
+  drawnAt = 0;
+  constructor(initial: string) { this.shown = initial; }
+
+  // 描くたびに呼ぶ。今描く文を返す
+  next(text: string, now: number): string {
+    const delay = liveRenderDelay(text.length);
+    if (delay === 0 || now - this.drawnAt >= delay || !text.startsWith(this.shown)) { this.shown = text; this.drawnAt = now; }
+    return this.shown;
+  }
+
+  // 描いていない残りがあるとき、間隔の終わりに描き直す待ちを置く。置いたものを止める関数を返す（残りが無ければ undefined）
+  arm(text: string, timers: ThrottleTimers): (() => void) | undefined {
+    if (this.shown === text) return undefined;
+    // 待ちが鳴った時点で残りを描いたことにする。時計が少し早く鳴ると、次の描き直しで「間隔がまだ過ぎていない」と見て、
+    // 残りが描かれないまま、文が変わるまで待ちも置き直されない（描き残し）ため
+    return timers.setTimer(() => { this.shown = text; this.drawnAt = timers.now(); timers.redraw(); }, Math.max(0, liveRenderDelay(text.length) - (timers.now() - this.drawnAt)));
+  }
+}
+
 export interface ReplyTurn {
   // この返事の文に、見出し（姿・名前・時刻）を付ける。1 回の返事（同じ runId）の最初の文だけ
   head: boolean;
