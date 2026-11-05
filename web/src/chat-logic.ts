@@ -122,6 +122,41 @@ export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'no
 
 const TOOL_KINDS: ReadonlySet<ChatItemKind> = new Set<ChatItemKind>(['tool', 'run']);
 
+export interface ReplyTurn {
+  // この返事の文に、見出し（姿・名前・時刻）を付ける。1 回の返事（同じ runId）の最初の文だけ
+  head: boolean;
+  // コピーのボタンを付ける。1 回の返事の最後の文だけ（まだ続いている最中は付けない）。押すと、その回の文を全部まとめてコピーする
+  copyText: string | null;
+}
+
+// 1 回の返事（同じ runId）の中で、道具を使うたびに文が分かれて保存される。画面では見出しを 1 つにして、
+// 中間の文と道具の行を、見出しの下に順に並べる。発言（user）が入ったら、そこで次の返事になる。runId の無い文は、それぞれが 1 回の返事
+export function replyTurns(
+  messages: ReadonlyArray<{ id: number; role: string; runId: string | null; text: string }>,
+  liveRunId: string | null = null,
+): Map<number, ReplyTurn> {
+  const out = new Map<number, ReplyTurn>();
+  let group: Array<{ id: number; text: string }> = [];
+  let groupRun: string | null = null;
+  const close = (): void => {
+    const last = group.at(-1);
+    if (!last) return;
+    const copyText = groupRun !== null && groupRun === liveRunId ? null : group.map(g => g.text).join('\n\n');
+    group.forEach((g, i) => out.set(g.id, { head: i === 0, copyText: g === last ? copyText : null }));
+    group = [];
+    groupRun = null;
+  };
+  for (const m of messages) {
+    if (m.role === 'user') { close(); continue; }
+    if (m.role !== 'assistant') continue;
+    if (m.runId === null || m.runId !== groupRun) close();
+    groupRun = m.runId;
+    group.push({ id: m.id, text: m.text });
+  }
+  close();
+  return out;
+}
+
 export function joinsToolRun(kinds: readonly ChatItemKind[]): boolean[] {
   return kinds.map((kind, i) => i > 0 && TOOL_KINDS.has(kind) && TOOL_KINDS.has(kinds[i - 1]!));
 }

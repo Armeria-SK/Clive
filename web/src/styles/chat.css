@@ -29,6 +29,7 @@
 .chat-chip { gap: 5px; max-width: 100%; overflow-wrap: anywhere; }
 
 .chat-reply { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; }
+.chat-reply.cont .chat-live-label { align-self: flex-start; }
 .chat-reply-avatar { display: inline-flex; flex: none; margin-top: 1px; }
 .chat-reply-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .chat-reply-head { display: flex; align-items: baseline; gap: 8px; min-height: 24px; }

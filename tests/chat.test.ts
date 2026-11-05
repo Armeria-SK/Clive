@@ -3,7 +3,7 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
   restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
@@ -191,6 +191,31 @@ test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引
   assert.match(ja['notice.compacted'](4), /^古い発言 4 件を要約しました（原文は残っていて、.*探せます）$/u);
   assert.equal(en['chat.pdfPages'](1), 'PDF, 1 page');
   assert.equal(en['approval.position'](1, 2), '1 / 2');
+});
+
+test('replyTurns: 1 回の返事（同じ runId）は見出し 1 つ。中間の文は見出しなしで続き、コピーは最後の文に 1 つ（その回の文を全部まとめる）', () => {
+  const m = (id: number, role: string, runId: string | null, text = '') => ({ id, role, runId, text });
+  const one = [
+    m(1, 'user', null, '調べて'), m(2, 'assistant', 'r1', '調べます。'), m(3, 'tool', 'r1'), m(4, 'assistant', 'r1', '原因がほぼ確定しました。'), m(5, 'tool', 'r1'), m(6, 'assistant', 'r1', '以上です。'),
+  ];
+  const turns = replyTurns(one);
+  assert.deepEqual([2, 4, 6].map(id => turns.get(id)?.head), [true, false, false], '見出しは最初の文だけ');
+  assert.deepEqual([2, 4, 6].map(id => turns.get(id)?.copyText), [null, null, '調べます。\n\n原因がほぼ確定しました。\n\n以上です。'], 'コピーは最後に 1 つ');
+  assert.equal(turns.has(1) || turns.has(3), false, '発言と道具の行は対象外');
+
+  const live = replyTurns(one, 'r1');
+  assert.deepEqual([2, 4, 6].map(id => live.get(id)?.head), [true, false, false]);
+  assert.equal(live.get(6)?.copyText, null, 'まだ続いている最中の返事には、コピーを付けない');
+  assert.equal(replyTurns(one, 'other').get(6)?.copyText !== null, true, '別の実行が動いていても関係ない');
+
+  const two = replyTurns([...one, m(7, 'user', null, 'ありがとう'), m(8, 'assistant', 'r2', 'どういたしまして')]);
+  assert.equal(two.get(8)?.head, true, '次の発言のあとは、新しい返事');
+  assert.equal(two.get(8)?.copyText, 'どういたしまして');
+  assert.equal(two.get(2)?.head, true);
+
+  const mixed = replyTurns([m(1, 'assistant', 'r1', 'a'), m(2, 'assistant', 'r2', 'b'), m(3, 'assistant', null, 'c'), m(4, 'assistant', null, 'd')]);
+  assert.deepEqual([1, 2, 3, 4].map(id => mixed.get(id)?.head), [true, true, true, true], '別の runId・runId の無い文は、それぞれが 1 回の返事');
+  assert.deepEqual([1, 2, 3, 4].map(id => mixed.get(id)?.copyText), ['a', 'b', 'c', 'd']);
 });
 
 test('enterApprovalId: Enter で許可できるのは先頭の札だけ。コードを動かす確かめ（onceOnly）は、ボタンを押すまで許可しない', () => {

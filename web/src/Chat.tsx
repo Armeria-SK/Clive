@@ -3,7 +3,7 @@ import { api, ApiError, type Approval, type Message, type ModelView, type Profil
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, sendTarget, toolInputSummary,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, sendTarget, toolInputSummary,
   type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
@@ -258,15 +258,18 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const items: Array<{ key: string; kind: ChatItemKind; node: ReactNode }> = [];
   const push = (key: string, kind: ChatItemKind, node: ReactNode): void => { keys.push(key); items.push({ key, kind, node }); };
 
+  const turns = replyTurns(visible, draft?.runId ?? null);
   for (const m of visible) {
+    const turn = turns.get(m.id);
     if (m.role === 'tool') push(`m-${m.id}`, 'tool', <ToolMessage message={m} />);
     else if (m.role === 'user') push(`m-${m.id}`, 'user', <UserMessage message={m} />);
     else push(`m-${m.id}`, 'assistant', (
-      <AssistantMessage profile={profile} text={m.text} time={m.createdAt} />
+      <AssistantMessage profile={profile} text={m.text} time={m.createdAt} head={turn?.head ?? true} copyText={turn ? turn.copyText : m.text} />
     ));
   }
   if (draft) {
-    if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} />);
+    const liveHead = !visible.some(m => m.role === 'assistant' && m.runId === draft.runId);
+    if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} head={liveHead} />);
     else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} />);
     else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} startedAt={startedAt} />);
   }

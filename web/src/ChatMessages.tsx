@@ -81,29 +81,38 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-interface ReplyProps { profile: Profile | null; text: string; time: number }
+interface ReplyProps {
+  profile: Profile | null;
+  text: string;
+  time: number;
+  // 1 回の返事の最初の文だけ見出し（姿・名前・時刻）を付ける。続きの文は、見出しなしで同じ列に並べる
+  head: boolean;
+}
 
-export const AssistantMessage = memo(function AssistantMessage({ profile, text, time }: ReplyProps) {
+export const AssistantMessage = memo(function AssistantMessage({ profile, text, time, head, copyText }: ReplyProps & { copyText: string | null }) {
   return (
-    <div className="chat-reply">
-      <ReplyAvatar profile={profile} live={false} />
+    <div className={`chat-reply${head ? '' : ' cont'}`}>
+      {head ? <ReplyAvatar profile={profile} live={false} /> : <span aria-hidden />}
       <div className="chat-reply-main">
-        <ReplyHead profile={profile} time={time} live={false} />
+        {head && <ReplyHead profile={profile} time={time} live={false} />}
         <div className="chat-reply-body"><Markdown text={text} /></div>
-        <div className="chat-reply-foot">
-          <CopyButton text={text} />
-        </div>
+        {copyText !== null && (
+          <div className="chat-reply-foot">
+            <CopyButton text={copyText} />
+          </div>
+        )}
       </div>
     </div>
   );
 });
 
-export function LiveReply({ profile, text, time }: ReplyProps) {
+export function LiveReply({ profile, text, time, head }: ReplyProps) {
+  const t = useT();
   return (
-    <div className="chat-reply chat-live">
-      <ReplyAvatar profile={profile} live />
+    <div className={`chat-reply chat-live${head ? '' : ' cont'}`}>
+      {head ? <ReplyAvatar profile={profile} live /> : <span aria-hidden />}
       <div className="chat-reply-main">
-        <ReplyHead profile={profile} time={time} live />
+        {head ? <ReplyHead profile={profile} time={time} live /> : <span className="chat-live-label">{t('chat.writing')}</span>}
         <div className="chat-reply-body"><Markdown text={text} /></div>
       </div>
     </div>
