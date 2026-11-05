@@ -549,7 +549,7 @@ export const ja = {
   'settings.tools.shellKind': 'シェルの種類',
   'settings.tools.auto': '自動',
   'settings.tools.maxSteps': '道具を使う回数の上限',
-  'settings.tools.maxStepsDesc': '1 回の返事（実行）で道具を呼べる回数です。0 は制限なし（止めるのは「止める」ボタン・取り消し・承認の拒否や時間切れ・コンテキストの量だけ）',
+  'settings.tools.maxStepsDesc': '1 回の返事（実行）で道具を呼べる回数です。0 は会話だけ制限なしになります（止めるのは「止める」ボタン・取り消し・コンテキストの量などで、回数では止まりません）。人が見ていないタスクと振り返りの実行は、0 のときも 100 回で止まります',
   'settings.tools.shellTimeout': 'コマンドの上限時間',
   'settings.tools.allowCmds': '承認なしで実行してよいコマンド',
   'settings.tools.allowInvalid': (entry: string) => `「${entry}」は書けない形です。決まったコマンドだけ（引用符・変数・ワイルドカード・置換・リダイレクト・区切りを含まない、1 つの文）を書いてください`,

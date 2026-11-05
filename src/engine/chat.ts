@@ -39,6 +39,12 @@ const TRUNCATION_STRIKES = 2;
 const CALIBRATION_ALPHA = 0.3;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
+const UNATTENDED_ITERATION_CEILING = 100;
+
+export function iterationLimit(configured: number, kind: RunKind): number {
+  if (configured > 0) return configured;
+  return kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
+}
 const COMPACT_MIN_MESSAGES = 4;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
 
@@ -351,9 +357,9 @@ export class ChatEngine {
       return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
     };
 
-    const maxIterations = config.tools.maxIterations;
+    const maxIterations = iterationLimit(config.tools.maxIterations, kind);
     const compaction = { done: false };
-    for (counters.iterations = 1; maxIterations === 0 || counters.iterations <= maxIterations; counters.iterations++) {
+    for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);

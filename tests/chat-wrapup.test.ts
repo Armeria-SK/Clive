@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
+import { iterationLimit } from '../src/engine/chat.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import type { PageNetwork } from '../src/tools/web/public-page.ts';
@@ -117,6 +118,31 @@ test('上限でない普通の終わりでは、まとめの呼び出しをし�
   await s.app.worker.tick();
   assert.equal(s.adapter().calls.length - before, 2, 'タスクは上限で、まとめの呼び出しを足さない');
   assert.ok(s.app.tasks.get(task.id));
+});
+
+// ── 6d: 回数の上限 0（制限なし）は会話だけ。人が見ていないタスクの実行は 100 回の天井で止める ──
+
+test('iterationLimit: 0 は会話だけ制限なし。タスク・振り返りは 100。1 以上はどの種類でもその値', () => {
+  assert.equal(iterationLimit(0, 'chat'), Infinity);
+  assert.equal(iterationLimit(0, 'task'), 100);
+  assert.equal(iterationLimit(0, 'review'), 100);
+  for (const kind of ['chat', 'task', 'review'] as const) for (const n of [1, 16, 100]) assert.equal(iterationLimit(n, kind), n, `${kind} ${n}`);
+});
+
+test('上限 0 は会話だけの「制限なし」: タスクの実行は 100 回で止まり、1〜100 の設定はその値のまま。タスクは上限でもまとめの呼び出しをしない', async t => {
+  for (const [configured, expected] of [[0, 100], [3, 3]] as const) {
+    const s = await setup(t, { maxIterations: configured });
+    s.app.tasks.create({ title: '延々と調べるタスク', origin: 'user', actor: 'user' });
+    s.adapter().scripts.push(...Array.from({ length: 140 }, () => toolCall('task_list', {})), reply('終わり'));
+    await s.app.worker.tick();
+    const calls = s.adapter().calls;
+    assert.equal(calls.length, expected, `設定 ${configured}: タスクの実行は ${expected} 回の呼び出しで止まる`);
+    assert.ok(calls.every(c => c.tools.length > 0), 'タスクの上限では、道具なしのまとめの呼び出しをしない');
+    const warning = s.events.find(e => e.type === 'warning' && e.code === 'max_iterations');
+    assert.deepEqual(warning && 'params' in warning ? warning.params : undefined, { max: expected }, '上限のお知らせの数は、実際に止めた数');
+    const runId = (s.events.find(e => e.type === 'run.start') as { runId: string }).runId;
+    assert.deepEqual(JSON.parse(s.app.runs.get(runId)!.flags), ['max_iterations']);
+  }
 });
 
 // ── 6b: 会話で進んだ分を、タスクへ引き継ぐ ──
