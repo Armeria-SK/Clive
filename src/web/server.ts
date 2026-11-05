@@ -4,6 +4,7 @@ import type { App } from '../app.ts';
 import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
 import { defaultTexts } from '../engine/workspace.ts';
+import { languageOf } from '../shared/language.ts';
 import type { ApprovalView } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
 import { MemoryError } from '../memory/store.ts';
@@ -269,7 +270,7 @@ export function createWebServer(app: App): WebServer {
     if (match === 'method_not_allowed') { sendJson(res, 405, { error: 'method_not_allowed' }); return; }
     try { await match.handler({ req, res, params: match.params, url }); }
     catch (error) {
-      if (error instanceof HttpProblem) { sendJson(res, error.status, error.body); return; }
+      if (error instanceof HttpProblem) { sendJson(res, error.status, error.render(languageOf(app.config()))); return; }
       app.log(`[ERROR] ${req.method} ${url.pathname}: ${(error as Error).stack ?? error}`);
       sendJson(res, 500, { error: 'internal', message: '内部エラーが発生しました（ログを確認してください）' });
     }

@@ -16,6 +16,7 @@ import { estimateTextTokens, estimateToolTokens } from './engine/tokens.ts';
 import { buildDynamic, buildSnapshot, ensureWorkspace } from './engine/workspace.ts';
 import type { AppPaths } from './paths.ts';
 import { languageOf } from './shared/language.ts';
+import { taskText } from './shared/messages/tasks.ts';
 import { EndpointLimiter } from './providers/limiter.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import type { Env, FetchLike, ProviderAdapter } from './providers/types.ts';
@@ -123,7 +124,7 @@ export class App {
         // タスクの実行中は画面を見ていないことが多いので、通知でも知らせる
         const task = this.tasks.byConversation(v.conversationId);
         if (task) {
-          this.notifications.notify({ kind: 'approval_needed', title: `承認が必要です: ${task.title}`, body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}` });
+          this.notifications.notify({ kind: 'approval_needed', title: taskText(languageOf(this.config()), 'notify.approval_needed', { title: task.title }), body: `${v.title}\n${v.body}`, link: `#/tasks/${task.id}`, dedupKey: `approval:${v.id}` });
         }
       } else {
         this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: v.conversationId, approvalId: v.id, outcome: event.outcome });
@@ -133,7 +134,7 @@ export class App {
       const m = this.config().memory;
       return { user: m.userMaxChars, notes: m.notesMaxChars };
     });
-    this.tasks = new TaskStore(this.db, now);
+    this.tasks = new TaskStore(this.db, now, () => languageOf(this.config()));
     this.notifications = new Notifications(this.db, now);
     this.reviews = new ReviewJobs(this.db, now);
     this.curiosity = new CuriosityStore(this.db, now);
@@ -154,7 +155,7 @@ export class App {
       reviews: this.reviews, memory: this.memory, curiosity: this.curiosity,
     });
     this.tasks.onChange = task => {
-      this.bus.publish({ type: 'task.changed', task: taskView(task) });
+      this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });
       if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
         this.curiosity.onTaskFinished(task);
         // 実行したタスクが終わったら振り返る（実行の記録があるものだけ）
@@ -165,10 +166,10 @@ export class App {
       this.worker.poke();
     };
     this.notifications.onNotify = notification => this.bus.publish({ type: 'notification', notification });
-    this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log });
+    this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));
     this.skills.onDraft = draft => {
-      this.notifications.notify({ kind: 'info', title: `スキルの下書きを確かめてください: ${draft.name}`, body: draft.reason ?? undefined, link: '#/review', dedupKey: `skill-draft:${draft.id}` });
+      this.notifications.notify({ kind: 'info', title: taskText(languageOf(this.config()), 'notify.skill_draft', { name: draft.name }), body: draft.reason ?? undefined, link: '#/review', dedupKey: `skill-draft:${draft.id}` });
     };
     this.engine.onRunEnd = run => {
       // 道具を多く使った重い会話の後に振り返る

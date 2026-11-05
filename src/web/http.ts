@@ -1,13 +1,25 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Language } from '../config/schema.ts';
+import type { LocalizedError } from '../shared/messages/define.ts';
 
 export class HttpProblem extends Error {
   readonly status: number;
   readonly body: Record<string, unknown>;
-  constructor(status: number, body: Record<string, unknown>) {
+  readonly localize: ((language: Language) => string) | undefined;
+  constructor(status: number, body: Record<string, unknown>, localize?: (language: Language) => string) {
     super(String(body.error ?? status));
     this.status = status;
     this.body = body;
+    this.localize = localize;
   }
+
+  render(language: Language): Record<string, unknown> {
+    return this.localize ? { ...this.body, message: this.localize(language) } : this.body;
+  }
+}
+
+export function domainProblem<K extends string>(status: number, kind: string, error: LocalizedError<K>): HttpProblem {
+  return new HttpProblem(status, { error: kind, message: error.message, code: error.fullCode, ...(Object.keys(error.params).length ? { params: error.params } : {}) }, language => error.text(language));
 }
 
 const API_HEADERS = {

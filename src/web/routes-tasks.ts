@@ -3,12 +3,14 @@ import { AVATAR_SHAPES } from '../config/schema.ts';
 import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
 import { TaskError, taskView, type Task } from '../tasks/store.ts';
-import { HttpProblem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
+import { languageOf } from '../shared/language.ts';
+import { taskText } from '../shared/messages/tasks.ts';
+import { domainProblem, HttpProblem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
 const MOTIONS = ['auto', 'none', 'float', 'sway', 'pulse'] as const;
 
 function taskProblem(error: unknown): never {
-  if (error instanceof TaskError) throw new HttpProblem(409, { error: 'task', message: error.message });
+  if (error instanceof TaskError) throw domainProblem(409, 'task', error);
   throw error;
 }
 
@@ -39,6 +41,7 @@ function cronOf(body: Record<string, unknown>): string | undefined {
 }
 
 export function registerTaskRoutes(router: Router, app: App): void {
+  const view = (task: Task) => taskView(task, languageOf(app.config()));
   const getTask = (id: string): Task => {
     const task = app.tasks.get(id);
     if (!task) throw new HttpProblem(404, { error: 'not_found', message: 'タスクがありません' });
@@ -46,8 +49,8 @@ export function registerTaskRoutes(router: Router, app: App): void {
   };
 
   router.add('GET', '/api/tasks', ({ res }) => sendJson(res, 200, {
-    active: app.tasks.list().map(taskView),
-    finished: app.tasks.recentlyFinished().map(taskView),
+    active: app.tasks.list().map(view),
+    finished: app.tasks.recentlyFinished().map(view),
   }));
 
   router.add('POST', '/api/tasks', async ({ req, res }) => {
@@ -64,7 +67,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
       });
       // 「今すぐ」頼まれたものは、すぐに実行する（1時間の上限より先に）
       if (!when && !cron) app.worker.requestRun(task.id);
-      sendJson(res, 201, { task: taskView(task) });
+      sendJson(res, 201, { task: view(task) });
     } catch (error) { taskProblem(error); }
   });
 
@@ -76,7 +79,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const children = task.status === 'scheduled'
       ? app.db.prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at DESC LIMIT 20').all(task.id) as unknown as Task[]
       : [];
-    sendJson(res, 200, { task: taskView(task), events: app.tasks.events(task.id), approvals, runs: children.map(taskView) });
+    sendJson(res, 200, { task: view(task), events: app.tasks.events(task.id), approvals, runs: children.map(view) });
   });
 
   router.add('PATCH', '/api/tasks/:id', async ({ req, res, params }) => {
@@ -94,7 +97,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
         ...(when !== undefined ? { runAt: when } : {}),
       }, 'user');
       app.tasks.event(task.id, 'edited', 'user');
-      sendJson(res, 200, { task: taskView(updated) });
+      sendJson(res, 200, { task: view(updated) });
     } catch (error) { taskProblem(error); }
   });
 
@@ -102,35 +105,35 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const task = getTask(params[0]!);
     const text = requireString(requireObject(await readJson(req)), 'text', { max: 20_000 })!;
     if (task.status !== 'waiting') throw new HttpProblem(409, { error: 'task', message: '返事を待っているタスクではありません' });
-    app.tasks.event(task.id, 'answer', 'user', `質問「${task.waiting_text ?? ''}」への返事: ${text}`);
+    app.tasks.event(task.id, 'answer', 'user', taskText(languageOf(app.config()), 'event.answer', { question: task.waiting_text ?? '', text }));
     const updated = app.tasks.setReady(task.id, { actor: 'user' });
     app.worker.requestRun(task.id);
-    sendJson(res, 200, { task: taskView(updated) });
+    sendJson(res, 200, { task: view(updated) });
   });
 
   router.add('POST', '/api/tasks/:id/run-now', ({ res, params }) => {
     let task = getTask(params[0]!);
     try {
-      if (task.status === 'running') throw new TaskError('実行中です');
-      if (task.status === 'waiting') throw new TaskError('返事を待っています。先に答えてください');
+      if (task.status === 'running') throw new TaskError('error.running');
+      if (task.status === 'waiting') throw new TaskError('error.waiting_answer');
       if (task.status === 'scheduled') {
         const child = app.tasks.spawnNow(task.id);
-        if (!child) throw new TaskError('前回の実行がまだ終わっていません');
+        if (!child) throw new TaskError('error.previous_unfinished');
         task = child;
       } else if (task.status === 'inbox') {
         task = app.tasks.approve(task.id);
       } else if (task.status !== 'ready' || task.attempts >= task.max_attempts) {
-        task = app.tasks.reopen(task.id, 'user', '今すぐ実行');
+        task = app.tasks.reopen(task.id, 'user', taskText(languageOf(app.config()), 'event.run_now'));
       } else {
         task = app.tasks.update(task.id, { runAt: null }, 'user');
       }
       app.worker.requestRun(task.id);
-      sendJson(res, 202, { task: taskView(task) });
+      sendJson(res, 202, { task: view(task) });
     } catch (error) { taskProblem(error); }
   });
 
   router.add('POST', '/api/tasks/:id/approve', ({ res, params }) => {
-    try { sendJson(res, 200, { task: taskView(app.tasks.approve(getTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
+    try { sendJson(res, 200, { task: view(app.tasks.approve(getTask(params[0]!).id)) }); } catch (error) { taskProblem(error); }
   });
 
   const close = (status: 'cancelled' | 'done') => ({ res, params }: { res: Parameters<typeof sendJson>[0]; params: string[] }) => {
@@ -138,9 +141,9 @@ export function registerTaskRoutes(router: Router, app: App): void {
     if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
       throw new HttpProblem(409, { error: 'task', message: 'このタスクは既に終わっています' });
     }
-    const updated = app.tasks.finish(task.id, status, status === 'done' ? '画面から完了にしました' : '画面から取り消しました', 'user');
+    const updated = app.tasks.finish(task.id, status, taskText(languageOf(app.config()), status === 'done' ? 'summary.done_from_ui' : 'summary.cancelled_from_ui'), 'user');
     app.worker.stopTask(task.id);
-    sendJson(res, 200, { task: taskView(updated) });
+    sendJson(res, 200, { task: view(updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));
   router.add('POST', '/api/tasks/:id/done', close('done'));

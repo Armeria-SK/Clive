@@ -5,7 +5,7 @@ import type { ToolContext, ToolDef, ToolOutput } from '../types.ts';
 
 function store(ctx: ToolContext): TaskStore {
   const tasks = ctx.services?.tasks;
-  if (!tasks) throw new TaskError('タスクの仕組みが使えません');
+  if (!tasks) throw new TaskError('error.unavailable');
   return tasks;
 }
 const fail = (error: unknown): ToolOutput => ({ content: error instanceof TaskError ? error.message : `失敗しました: ${(error as Error).message}`, isError: true });
@@ -20,7 +20,7 @@ function line(task: Task, timezone: string): string {
 function parseWhen(when: string | undefined): number | undefined {
   if (!when) return undefined;
   const ms = Date.parse(when);
-  if (!Number.isFinite(ms)) throw new TaskError(`when が日時として読めません（例: 2026-11-06T09:00:00+09:00）: ${when}`);
+  if (!Number.isFinite(ms)) throw new TaskError('error.bad_when', { when });
   return ms;
 }
 
@@ -45,7 +45,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
   allowedIn: ['chat', 'task'],
   async execute(input, ctx) {
     try {
-      if (input.repeat && !validateCron(input.repeat)) throw new TaskError(`repeat の cron が正しくありません: ${input.repeat}`);
+      if (input.repeat && !validateCron(input.repeat)) throw new TaskError('error.bad_repeat', { repeat: input.repeat });
       const self = !input.requested_by_user;
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
@@ -94,7 +94,7 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
     try {
       const s = store(ctx);
       const task = s.find(input.id);
-      if (!task) throw new TaskError(`タスク ${input.id} が見つかりません（task_list で確かめてください）`);
+      if (!task) throw new TaskError('error.tool_not_found', { id: input.id });
       let updated = s.update(task.id, {
         ...(input.note ? { appendNote: input.note } : {}), ...(input.next_action ? { nextAction: input.next_action } : {}),
         ...(input.priority ? { priority: input.priority } : {}), ...(input.when ? { runAt: parseWhen(input.when) ?? null } : {}),

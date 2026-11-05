@@ -49,7 +49,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
     });
     sendJson(res, 200, {
       skillDrafts: drafts,
-      taskProposals: app.tasks.list({ statuses: ['inbox'] }).map(taskView),
+      taskProposals: app.tasks.list({ statuses: ['inbox'] }).map(t => taskView(t, languageOf(app.config()))),
     });
   });
   router.add('POST', '/api/skill-drafts/:id/approve', ({ res, params }) => {
@@ -95,7 +95,7 @@ export function registerReviewRoutes(router: Router, app: App): void {
     });
     app.curiosity.update(item.id, { status: 'researching', taskId: task.id });
     app.worker.requestRun(task.id);
-    sendJson(res, 201, { task: taskView(task) });
+    sendJson(res, 201, { task: taskView(task, languageOf(app.config())) });
   });
 
   // ── 振り返りの記録 ──

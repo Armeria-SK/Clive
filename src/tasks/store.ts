@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../db/database.ts';
+import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
+import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
+import { taskText, type TaskErrorCode } from '../shared/messages/tasks.ts';
 import { describeCron, nextRunAt } from './schedule.ts';
 
 export type TaskStatus = 'inbox' | 'ready' | 'running' | 'waiting' | 'scheduled' | 'done' | 'failed' | 'cancelled';
@@ -33,7 +36,7 @@ export interface Task {
 }
 
 export type TaskView = Task & { cron_text: string | null };
-export function taskView(task: Task): TaskView { return { ...task, cron_text: task.cron ? describeCron(task.cron) : null }; }
+export function taskView(task: Task, language: Language = DEFAULT_LANGUAGE): TaskView { return { ...task, cron_text: task.cron ? describeCron(task.cron, language) : null }; }
 
 export interface TaskEvent { id: number; task_id: string; kind: string; actor: string; content: string | null; run_id: string | null; created_at: number }
 
@@ -52,7 +55,9 @@ export interface CreateTask {
   actor: string;
 }
 
-export class TaskError extends Error {}
+export class TaskError extends LocalizedError<TaskErrorCode> {
+  constructor(code: TaskErrorCode, params?: MessageParams) { super(taskText, code, params); }
+}
 
 const ORIGIN_ORDER = "CASE origin WHEN 'user' THEN 0 WHEN 'schedule' THEN 1 WHEN 'self' THEN 2 ELSE 3 END";
 const ACTIVE: TaskStatus[] = ['inbox', 'ready', 'running', 'waiting', 'scheduled'];
@@ -62,7 +67,9 @@ export class TaskStore {
   readonly #now: () => number;
   onChange: ((task: Task) => void) | undefined;
 
-  constructor(db: DatabaseSync, now: () => number = Date.now) { this.#db = db; this.#now = now; }
+  readonly #language: () => Language;
+
+  constructor(db: DatabaseSync, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE) { this.#db = db; this.#now = now; this.#language = language; }
 
   get(id: string): Task | undefined {
     return this.#db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task | undefined;
@@ -108,7 +115,7 @@ export class TaskStore {
 
   create(input: CreateTask): Task {
     const title = input.title.trim();
-    if (!title) throw new TaskError('タイトルが空です');
+    if (!title) throw new TaskError('error.empty_title');
     const now = this.#now();
     const id = randomUUID();
     let status: TaskStatus = input.propose ? 'inbox' : 'ready';
@@ -116,7 +123,7 @@ export class TaskStore {
     if (input.cron) {
       const tz = input.timezone ?? 'UTC';
       runAt = nextRunAt(input.cron, tz, now);
-      if (runAt === null) throw new TaskError(`繰り返しの指定（cron）が正しくありません: ${input.cron}`);
+      if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
       status = 'scheduled';
     }
     this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_at, updated_at)
@@ -124,14 +131,14 @@ export class TaskStore {
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
       Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, now, now,
     );
-    this.event(id, 'created', input.actor, status === 'inbox' ? '提案として作成' : status === 'scheduled' ? `繰り返し: ${input.cron}` : null);
+    this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);
   }
 
   update(id: string, patch: { title?: string; body?: string; appendNote?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; runAt?: number | null }, actor: string, runId?: string): Task {
     return transaction(this.#db, () => {
       const task = this.get(id);
-      if (!task) throw new TaskError(`タスク ${id} がありません`);
+      if (!task) throw new TaskError('error.not_found', { id });
       const body = patch.appendNote ? `${task.body}${task.body ? '\n' : ''}- ${patch.appendNote}` : patch.body ?? task.body;
       this.#db.prepare(`UPDATE tasks SET title = ?, body = ?, next_action = ?, done_criteria = ?, priority = ?, run_at = ?, updated_at = ? WHERE id = ?`).run(
         patch.title?.trim() || task.title, body.slice(-20_000),
@@ -178,7 +185,7 @@ export class TaskStore {
 
   approve(id: string): Task {
     const task = this.get(id);
-    if (!task || task.status !== 'inbox') throw new TaskError('承認待ちの提案ではありません');
+    if (!task || task.status !== 'inbox') throw new TaskError('error.not_proposal');
     this.event(id, 'approved', 'user');
     return this.setReady(id);
   }
@@ -188,7 +195,7 @@ export class TaskStore {
     const rows = (options.all
       ? this.#db.prepare("SELECT id FROM tasks WHERE status = 'running'").all()
       : this.#db.prepare("SELECT id FROM tasks WHERE status = 'running' AND (lease_until IS NULL OR lease_until < ?)").all(now)) as Array<{ id: string }>;
-    for (const { id } of rows) this.setReady(id, { reason: '前回の実行が途中で止まったため、もう一度実行します' });
+    for (const { id } of rows) this.setReady(id, { reason: taskText(this.#language(), 'event.recovered') });
     return rows.length;
   }
 
@@ -209,7 +216,7 @@ export class TaskStore {
 
   spawnNow(templateId: string): Task | undefined {
     const template = this.get(templateId);
-    if (!template || template.status !== 'scheduled') throw new TaskError('予定ではありません');
+    if (!template || template.status !== 'scheduled') throw new TaskError('error.not_schedule');
     return transaction(this.#db, () => this.#spawnChild(template, 'user'));
   }
 
@@ -217,19 +224,19 @@ export class TaskStore {
     const now = this.#now();
     // 前回分がまだ終わっていなければ、重ねて作らない
     const open = this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(template.id);
-    if (open) { this.event(template.id, 'skipped', 'system', '前回の実行がまだ終わっていないため、今回は作りませんでした'); return undefined; }
+    if (open) { this.event(template.id, 'skipped', 'system', taskText(this.#language(), 'event.skipped')); return undefined; }
     const id = randomUUID();
     this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, parent_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, 'ready', 'schedule', ?, ?, ?, ?)`).run(id, template.title, template.body, template.next_action, template.done_criteria, template.priority, template.id, now, now);
-    this.event(id, 'created', actor, `予定「${template.title}」から作成`);
+    this.event(id, 'created', actor, taskText(this.#language(), 'event.created_from', { title: template.title }));
     return this.#changed(id);
   }
 
   reopen(id: string, actor: string, reason?: string): Task {
     const task = this.get(id);
-    if (!task) throw new TaskError(`タスク ${id} がありません`);
-    if (task.status === 'running') throw new TaskError('実行中です');
-    if (task.status === 'scheduled') throw new TaskError('予定はそのままでは実行できません（今すぐ実行を使ってください）');
+    if (!task) throw new TaskError('error.not_found', { id });
+    if (task.status === 'running') throw new TaskError('error.running');
+    if (task.status === 'scheduled') throw new TaskError('error.schedule_cannot_run');
     this.#db.prepare(`UPDATE tasks SET status = 'ready', attempts = 0, run_at = NULL, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`)
       .run(this.#now(), id);
     this.event(id, 'reopened', actor, reason ?? null);
