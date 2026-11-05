@@ -107,7 +107,7 @@
 ### Web サーバー — `src/web`
 - `createWebServer(app)` が `node:http` のサーバーを作る。認証（`auth.ts`、Host・Origin・`Sec-Fetch-Site`・Tailscale のログイン名）、経路の表（`http.ts`）、SSE（`sse.ts`）、静的配信と CSP（`static.ts`。外部のスクリプトと外部のフォントは許さない）。
 - API の置き場所:
-  - `server.ts`: 会話・メッセージ・添付・実行の記録・承認・道具の記録・記憶・履歴・設定・モデルの確認・言語ごとの初期値（`GET /api/templates/:language`。ルールと SOUL / USER / CURIOSITY を返すだけで、作業フォルダには写さない）。
+  - `server.ts`: 会話・メッセージ（まだ無い会話の id に最初の発言を送ると、受け付けたときにだけ会話ができる。断ったときは空の会話を残さない）・添付・実行の記録・承認・道具の記録・記憶・履歴・設定・モデルの確認・言語ごとの初期値（`GET /api/templates/:language`。ルールと SOUL / USER / CURIOSITY を返すだけで、作業フォルダには写さない）。
   - `routes-tasks.ts`: タスク・ワーカー・通知・プロフィール（名前・形・色・動き）。
   - `routes-review.ts`: スキルとその下書き・好奇心・振り返りの記録。
 - 入口: `src/web/server.ts`

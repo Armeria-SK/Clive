@@ -120,3 +120,17 @@ test('記憶の古い上限の項目（userMaxChars / notesMaxChars）は、書�
   assert.equal(fresh.memory.userMaxChars, undefined, '書かなければ補わない');
   assert.equal(fresh.memory.reviewIdleMinutes, 30);
 });
+
+test('doctor: モデルがあっても使えないときは、モデルが 0 個のときとは別の案内で、終了コード 1', t => {
+  const dir = tempDir(t);
+  mkdirSync(dir, { recursive: true });
+  const config = testConfig();
+  config.providers = [{ id: 'dead', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 5000 }];
+  config.models = [{ id: 'm', provider: 'dead', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(config));
+  const run = spawnSync(process.execPath, ['src/main.ts', 'doctor', '--data-dir', dir], { cwd: new URL('..', import.meta.url), encoding: 'utf8' });
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stdout, /NG {2}チャットで使えるモデルがありません/u);
+  assert.doesNotMatch(run.stdout, /まだ設定されていません/u, 'モデルは設定されているので、「まだ無い」とは案内しない');
+});

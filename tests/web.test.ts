@@ -110,6 +110,10 @@ test('API: 使えるモデルが無ければ 409 で理由と直し方を返し�
   const models = await (await s.api('/api/models')).json() as any;
   assert.equal(models.models[0].probe.status, 'too_small');
   assert.equal(s.app.conversations.messages('c1').length, 0);
+  assert.equal(s.app.conversations.get('c1'), undefined, '断った送信は、空の会話を残さない');
+  const created = await s.api('/api/conversations/c9/messages', { method: 'POST', body: JSON.stringify({ text: 'もう一度' }) });
+  assert.equal(created.status, 409);
+  assert.deepEqual(s.app.conversations.list(), []);
 });
 
 test('API: 設定の検証エラーは 400 で場所を返し、API キーの値は返さない', async t => {
@@ -160,4 +164,19 @@ test('API: ほかのサイトからの書き込みは 403', async t => {
   const s = await startApp(t);
   const res = await fetch(`${s.origin}/api/conversations`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: '{}' });
   assert.equal(res.status, 403);
+});
+
+test('API: 作っていない会話の id に最初の発言を送ると、受け付けたときだけ会話ができる（断られたときは残らない）', async t => {
+  const s = await startApp(t);
+  s.adapter().scripts.push(reply('はじめまして'));
+  const sent = await s.api('/api/conversations/fresh1/messages', { method: 'POST', body: JSON.stringify({ text: 'はじめまして' }) });
+  assert.equal(sent.status, 202);
+  await s.app.engine.wait(((await sent.json()) as any).runId);
+  const row = s.app.conversations.get('fresh1')!;
+  assert.deepEqual([row.kind, row.title], ['chat', 'はじめまして']);
+  assert.deepEqual(s.app.conversations.list().map(c => c.id), ['fresh1']);
+  assert.deepEqual(s.app.conversations.messages('fresh1').map(m => m.role), ['user', 'assistant']);
+  const refused = await s.api('/api/conversations/fresh2/messages', { method: 'POST', body: JSON.stringify({ text: 'x'.repeat(100_001) }) });
+  assert.equal(refused.status, 400);
+  assert.equal(s.app.conversations.get('fresh2'), undefined, '入力の誤りで断った送信も、会話を作らない');
 });

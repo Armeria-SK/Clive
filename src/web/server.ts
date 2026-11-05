@@ -142,7 +142,6 @@ export function createWebServer(app: App): WebServer {
     }
     const attachments: AttachmentMeta[] = uploads.map(u => ({ id: u.id, name: u.name, kind: u.kind }));
     const content = [text || engineText(languageOf(app.config()), images.length ? 'attachment.image' : 'attachment.file'), ...blocks].join('\n\n');
-    if (!app.conversations.get(id)) app.conversations.create({ id });
     const outcome = app.engine.send(id, content, images, attachments);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     sendJson(res, 202, { runId: outcome.runId, messageId: outcome.messageId });

@@ -158,4 +158,7 @@ test('API: モデルが 0 個のとき、画像つきの送信は no_vision で�
   const plain = await s.post('/api/conversations/c2/messages', { text: 'やあ' });
   assert.equal(plain.status, 409);
   assert.equal(plain.body.errorCode, 'engine.no_usable');
+  assert.equal(s.app.conversations.get('c1'), undefined, '断った送信は、空の会話を残さない');
+  assert.equal(s.app.conversations.get('c2'), undefined);
+  assert.deepEqual(s.app.conversations.list(), []);
 });
