@@ -460,6 +460,16 @@ test('remote の名前: remote.<名前>.url がある名前だけ（名前にド
   assert.equal(inspectRepo(repoWith(t, cfg('[branch "b"]\n\tremote = fetchonly\n'))).configOk, false, 'url の無い名前は宛先として使えない');
 });
 
+test('コードを動かさない表示・動作の項目は、リポジトリの設定でもふつう（core.quotepath・excludesFile など）', () => {
+  for (const config of ['[core]\n\tquotepath = false\n', '[core]\n\texcludesFile = ~/.gitignore_global\n', '[core]\n\tattributesFile = ~/.ga\n', '[core]\n\twhitespace = trailing-space\n', '[diff]\n\talgorithm = histogram\n\trenames = copies\n', '[merge]\n\tconflictStyle = zdiff3\n',
+    '[rerere]\n\tenabled = true\n', '[branch]\n\tsort = -committerdate\n', '[push]\n\tfollowTags = true\n', '[commit]\n\tverbose = true\n']) {
+    assert.equal(unusualKey(parseGitConfig(config)!), null, config);
+  }
+  for (const [config, key] of [['[core]\n\teditor = vim\n', 'core.editor'], ['[core]\n\taskPass = x\n', 'core.askpass'], ['[diff]\n\texternal = x\n', 'diff.external'], ['[diff]\n\ttool = x\n', 'diff.tool'], ['[merge]\n\ttool = x\n', 'merge.tool'],
+    ['[commit]\n\tgpgsign = true\n', 'commit.gpgsign'], ['[core]\n\tgitProxy = x\n', 'core.gitproxy'],
+    ['[help]\n\tautocorrect = 1\n', 'help.autocorrect'], ['[push]\n\trecurseSubmodules = on-demand\n', 'push.recursesubmodules'], ['[core]\n\tprotectNTFS = false\n', 'core.protectntfs']] as const) assert.equal(unusualKey(parseGitConfig(config)!), key, config);
+});
+
 // 審査の指摘（深い審査）: [gc] の項目をすべてふつうとしていたが、gc.recentObjectsHook は gc のときにコマンドを動かす（本物の git 2.54 の `git gc --prune=now` で動くことを確かめた）
 test('gc の項目: 名前を決めたものだけふつう。gc.recentObjectsHook などコマンドを動かすものと、知らない項目はふつうでない', () => {
   const plain = ['auto', 'autoDetach', 'autoPackLimit', 'bigPackThreshold', 'aggressiveDepth', 'aggressiveWindow', 'pruneExpire', 'reflogExpire', 'reflogExpireUnreachable', 'worktreePruneExpire', 'logExpiry', 'packRefs',

@@ -85,7 +85,9 @@ export function parseGitConfig(source: string): ConfigEntry[] | null {
 }
 
 // ── ふつうの設定の一覧 ──
-const PLAIN_CORE = new Set(['repositoryformatversion', 'filemode', 'bare', 'logallrefupdates', 'symlinks', 'ignorecase', 'precomposeunicode', 'autocrlf', 'eol', 'safecrlf', 'longpaths', 'hookspath']);
+const PLAIN_CORE = new Set(['repositoryformatversion', 'filemode', 'bare', 'logallrefupdates', 'symlinks', 'ignorecase', 'precomposeunicode', 'autocrlf', 'eol', 'safecrlf', 'longpaths', 'hookspath',
+  // ファイル名の表示・読む場所・空白の扱いなど、読むだけの項目（コードは動かさない。ファイルの中身は属性・無視の指定だけ）
+  'quotepath', 'excludesfile', 'attributesfile', 'whitespace', 'abbrev', 'commentchar']);
 const PLAIN_BY_SUB: Record<string, ReadonlySet<string>> = {
   remote: new Set(['url', 'fetch', 'pushurl', 'tagopt', 'prune']),
   branch: new Set(['remote', 'merge', 'rebase', 'pushremote']),
@@ -100,8 +102,20 @@ const PLAIN_PLAIN: Record<string, ReadonlySet<string>> = {
     'writecommitgraph', 'cruftpacks', 'maxcruftsize', 'rerereresolved', 'rerereunresolved']),
   init: new Set(['defaultbranch']),
   pull: new Set(['rebase', 'ff']),
-  push: new Set(['default', 'autosetupremote']),
-  fetch: new Set(['prune']),
+  push: new Set(['default', 'autosetupremote', 'followtags']),
+  fetch: new Set(['prune', 'prunetags', 'writecommitgraph', 'fsckobjects']),
+  diff: new Set(['renames', 'algorithm', 'colormoved', 'colormovedws', 'context', 'mnemonicprefix', 'noprefix', 'wserrorhighlight', 'indentheuristic', 'interhunkcontext', 'renamelimit', 'statgraphwidth', 'submodule', 'orderfile']),
+  merge: new Set(['conflictstyle', 'renames', 'stat', 'verbosity', 'log']),
+  rerere: new Set(['enabled', 'autoupdate']),
+  column: new Set(['ui']),
+  branch: new Set(['sort', 'autosetupmerge', 'autosetuprebase']),
+  tag: new Set(['sort']),
+  format: new Set(['signoff', 'numbered', 'pretty']),
+  commit: new Set(['verbose', 'cleanup', 'status']),
+  apply: new Set(['whitespace']),
+  grep: new Set(['linenumber', 'extendedregexp', 'patterntype']),
+  blame: new Set(['coloring', 'date']),
+  transfer: new Set(['fsckobjects']),
   lfs: new Set(['repositoryformatversion']),
 };
 // remote.<名前>.url が transport helper（ext::sh -c … など）のとき、押す・取るでコードが動く

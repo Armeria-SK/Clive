@@ -71,6 +71,26 @@ test('git の設定の洗い出し: コードを動かせる項目を落とし�
   for (const helper of ['!evil', '/path/to/evil', 'evil', '"manager; evil"', 'cache --evil=x', 'store --file=/etc/passwd; x']) assert.equal(sanitizeGitConfig([`[credential]\n\thelper = ${helper}\n`]).includes('helper'), false, helper);
 });
 
+// 審査の指摘（深い審査）: 洗い出した設定から、コードを動かさない表示・動作の項目（core.quotepath・core.excludesFile など）まで落ちて、日本語のファイル名が八進数で出る・全体の無視の一覧が効かない、が起きた
+test('git の設定の洗い出し: コードを動かさない表示・動作の項目（core.quotepath・core.excludesFile など）は残す。コードを動かす近い名前は落とす', () => {
+  const keep = [
+    'core.quotepath = false', 'core.excludesFile = ~/.gitignore_global', 'core.attributesFile = ~/.gitattributes_global', 'core.whitespace = trailing-space', 'core.abbrev = 12', 'core.commentChar = ;',
+    'diff.algorithm = histogram', 'diff.renames = copies', 'diff.colorMoved = default', 'diff.context = 5', 'diff.mnemonicPrefix = true', 'merge.conflictStyle = zdiff3', 'rerere.enabled = true', 'column.ui = auto',
+    'branch.sort = -committerdate', 'tag.sort = version:refname', 'fetch.prune = true', 'fetch.pruneTags = true', 'push.followTags = true', 'pull.rebase = true', 'commit.verbose = true', 'format.signOff = true', 'apply.whitespace = fix', 'grep.lineNumber = true',
+    'color.ui = auto', 'init.defaultBranch = main', 'user.name = Taro', 'status.showUntrackedFiles = all', 'gc.auto = 0',
+  ];
+  const drop = [
+    'core.editor = vim', 'core.pager = less', 'core.fsmonitor = ./x', 'core.sshCommand = ssh -i k', 'core.hooksPath = ~/hooks', 'core.askPass = ./a', 'core.gitProxy = ./p', 'sequence.editor = ./e', 'diff.external = ./d', 'diff.tool = x', 'diff.guitool = x',
+    'merge.tool = x', 'alias.st = !sh', 'commit.gpgsign = true', 'gpg.program = ./g', 'http.proxy = http://p', 'credential.helper = !x', 'gc.recentObjectsHook = ./h', 'log.showSignature = true', 'safe.bareRepository = all', 'user.signingkey = K',
+    'filter.lfs.clean = git-lfs clean', 'filter.lfs.smudge = git-lfs smudge', 'filter.lfs.process = git-lfs filter-process', 'diff.x.textconv = ./t',
+    'help.autocorrect = 1', 'push.recurseSubmodules = on-demand', 'core.protectNTFS = false', 'tag.gpgSign = true', 'gpg.format = ssh', 'credential.https://github.com.helper = !gh auth git-credential',
+  ];
+  const text = (list: string[]): string => list.map(l => { const [key, ...value] = l.split(' = '); const dot = key!.lastIndexOf('.'); const section = key!.slice(0, dot); const sub = section.includes('.') ? ` "${section.slice(section.indexOf('.') + 1)}"` : ''; return `[${section.split('.')[0]}${sub}]\n\t${key!.slice(dot + 1)} = ${value.join(' = ')}\n`; }).join('');
+  const kept = parseGitConfig(sanitizeGitConfig([text([...keep, ...drop])]))!.map(e => e.key);
+  assert.deepEqual(keep.map(l => l.split(' = ')[0]!.toLowerCase()).filter(k => !kept.includes(k)), [], '残るはずの項目が落ちた');
+  assert.deepEqual(drop.map(l => l.split(' = ')[0]!.toLowerCase()).filter(k => kept.includes(k)), [], '落とすはずの項目が残った');
+});
+
 test('git の設定の洗い出し: gc.recentObjectsHook（gc がコマンドを動かす）は落とす。名前の決まった gc の項目は残す', () => {
   const kept = parseGitConfig(sanitizeGitConfig(['[gc]\n\trecentObjectsHook = ./x.sh\n\tauto = 0\n\tpruneExpire = 2.weeks.ago\n']))!.map(e => e.key);
   assert.deepEqual(kept, ['gc.auto', 'gc.pruneexpire']);
@@ -120,6 +140,34 @@ test('本物の git: ホームの ~/.gitconfig に仕込んだ core.fsmonitor �
   run.cleanup();
 });
 
+// 審査の指摘（深い審査）: 洗い出しで core.quotepath と core.excludesFile まで落ち、日本語のファイル名が八進数で出る・全体の無視の一覧が効かない、が起きた
+test('本物の git: ホームの core.quotepath=false と core.excludesFile は、洗い出した設定でも効く（日本語のファイル名がそのまま出て、全体の無視の一覧が効く）', { skip: !gitAvailable && 'git が無い' }, t => {
+  const root = tempDir(t);
+  const home = join(root, 'home');
+  const repo = join(root, 'repo');
+  mkdirSync(home);
+  mkdirSync(repo);
+  const ignore = join(home, 'ignore-global');
+  writeFileSync(ignore, '*.secret-log\n');
+  writeFileSync(join(home, '.gitconfig'), `[user]\n\tname = Taro Yamada\n\temail = taro@example.com\n[core]\n\tquotepath = false\n\texcludesFile = ${slash(ignore)}\n`);
+  writeFileSync(join(root, 'empty-global'), '');
+  const baseEnv: Record<string, string> = { ...(process.env as Record<string, string>), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), GIT_TERMINAL_PROMPT: '0' };
+  for (const key of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete baseEnv[key];
+  const git = (args: string[], env: Record<string, string>) => spawnSync('git', args, { cwd: repo, encoding: 'utf8', env });
+  assert.equal(git(['init', '-q'], baseEnv).status, 0);
+  writeFileSync(join(repo, 'ひらがな.txt'), 'x');
+  writeFileSync(join(repo, 'build.secret-log'), 'x');
+  const status = (env: Record<string, string>): string => git(['status', '--short'], env).stdout.trim();
+  // 前提: ホームの設定そのままなら、名前はそのまま出て、無視の一覧が効く
+  assert.equal(status(baseEnv), '?? ひらがな.txt');
+  // 比べる相手: ホームの設定が何も読まれなければ、名前は八進数で出て、無視の一覧は効かない（この確かめに、見分ける力がある）
+  const bare = status({ ...baseEnv, GIT_CONFIG_GLOBAL: join(root, 'empty-global'), GIT_CONFIG_NOSYSTEM: '1' });
+  assert.match(bare, /\\343\\201\\262/u);
+  assert.match(bare, /build\.secret-log/u);
+  const run = prepareGitRun({ dataDir: join(root, 'data'), env: baseEnv });
+  assert.equal(status({ ...baseEnv, ...run.env }), '?? ひらがな.txt', '洗い出した設定でも、名前はそのままで、無視の一覧が効く');
+  run.cleanup();
+});
 
 // 審査の指摘: 決まった場所に置くと、確かめを許したあとの同じコマンドの中でそこへ書き込み、続けて動かす git status に読ませられた。毎回新しい置き場所に作り、終わったら消す
 test('洗い出した設定は、実行のたびに新しい置き場所に作られ、終わると消える。ホームの設定が変われば、次の実行の写しが変わる', t => {
