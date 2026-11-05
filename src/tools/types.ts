@@ -45,6 +45,8 @@ export interface ToolContext {
     web?: { network?: PageNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
+  // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）
+  forbiddenTools?: ReadonlySet<string> | undefined;
 }
 
 export type TaskControl =

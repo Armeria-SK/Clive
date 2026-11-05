@@ -6,7 +6,7 @@ import type { ChatEngine } from '../engine/chat.ts';
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
-import { bookPressureText, reviewPrompt, transcriptOf, TRIGGER_TEXT, type ReviewJob, type ReviewJobs } from '../memory/review.ts';
+import { bookPressureText, isNoProposal, reviewPrompt, TIDY_FORBIDDEN_TOOLS, transcriptOf, TRIGGER_TEXT, type ReviewJob, type ReviewJobs } from '../memory/review.ts';
 import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
 import { languageOf } from '../shared/language.ts';
@@ -317,7 +317,7 @@ export class Worker {
     if (!prompt) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
     const lastMessageId = job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
     const conversation = conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }) });
-    const started = engine.runReview(conversation.id, prompt);
+    const started = engine.runReview(conversation.id, prompt, job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {});
     if (!started.ok) {
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.review_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-review' });
       return 'no_model';
@@ -329,6 +329,7 @@ export class Worker {
       if (engine.wasPreempted(started.runId)) { reviews.requeue(job.id); return 'ran'; }
       if (result.ok) {
         reviews.finish(job.id, 'done', result.text.trim().slice(0, 1000) || taskText(language, 'review.no_reply'));
+        if (job.trigger === 'book_full') this.#proposeTidy(job, result.text, language);
         if (job.conversation_id && lastMessageId) kv.set(`review:upto:${job.conversation_id}`, String(lastMessageId));
       } else {
         // 振り返りは再試行しない（失敗が続いて費用が膨らむのを防ぐ）。次のきっかけでまた積まれる
@@ -336,6 +337,13 @@ export class Worker {
       }
     } finally { this.#running = undefined; }
     return 'ran';
+  }
+
+  // 整理の振り返りは記憶を消さない。返事に書かれた「消す・まとめる案」を、記憶のページへのリンクつきで知らせる
+  #proposeTidy(job: ReviewJob, reply: string, language: Language): void {
+    const text = reply.trim();
+    if (!text || isNoProposal(text)) return;
+    this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.memory_tidy'), body: text.slice(0, 1000), link: '#/memory', dedupKey: `memory-tidy:${job.dedup_key}` });
   }
 
   #spawnCuriosity(c: AppConfig, now: number): Task | undefined {

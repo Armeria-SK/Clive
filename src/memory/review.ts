@@ -28,6 +28,12 @@ export const TRIGGER_TEXT: Record<Language, Record<ReviewTrigger, string>> = {
 
 export const TRIGGER_LABEL = TRIGGER_TEXT.ja;
 
+// 整理の振り返り（book_full）では、記憶を消さず・新しく覚えず、案を知らせる。この実行には渡さず、呼ばれても拒否する道具
+export const TIDY_FORBIDDEN_TOOLS: readonly string[] = ['memory_forget', 'memory_save'];
+
+// 整理の案の返事が「案なし」のとき（通知しない）
+export const isNoProposal = (reply: string): boolean => /^(?:変更なし|No changes?)[。.!！]?$/iu.test(reply.trim());
+
 export class ReviewJobs {
   readonly #db: DatabaseSync;
   readonly #now: () => number;
@@ -88,6 +94,7 @@ interface ReviewText {
   intro: (trigger: string) => string;
   policyHeading: string;
   policy: readonly string[];
+  tidyPolicy: readonly string[];
   forgottenHeading: string;
   pressureHeading: string;
   pressureSummary: (tokens: number, budget: number, count: number) => string;
@@ -120,9 +127,16 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
       '- することがなければ、道具を使わずに「変更なし」とだけ返す',
       '- 最後に、何をしたかを1〜2文で返す',
     ],
+    tidyPolicy: [
+      '- 今回の目的は、記憶を整理する案を出すこと。新しく覚えることはしない（memory_save は使えない）',
+      '- 下に挙げた「会話に入りきらない記憶」のうち、重なりがはっきりしているものだけ、memory_update で 1 つにまとめてよい。memory_forget は使えない（消すかどうかはユーザーが決める）',
+      '- 消したほうがよい・まとめたほうがよいと思う記憶は、最後の返事に 1 件 1 行で書く。書き方は「[n3] 消す: 理由（短く）」「[u1] [u4] まとめる: 理由（短く）」。多くても 10 行',
+      '- 古くなったもの・ほかの記憶と重なるもの・一時的な出来事のものを優先して挙げる。ユーザーの大事な事実は挙げない',
+      '- 提案が無ければ、道具を使わずに「変更なし」とだけ返す',
+    ],
     forgottenHeading: '# ユーザーが消した記憶（同じ内容を覚え直さない）',
     pressureHeading: '# 記憶の量',
-    pressureSummary: (tokens, budget, count) => `記憶の合計は約 ${tokens} トークンで、会話に入れる量の目安（約 ${budget} トークン）を超えています。会話に入りきらない記憶が ${count} 件あります。重なりをまとめ、古いものを減らすことを優先する`,
+    pressureSummary: (tokens, budget, count) => `記憶の合計は約 ${tokens} トークンで、会話に入れる量の目安（約 ${budget} トークン）を超えています。会話に入りきらない記憶が ${count} 件あります。重なりをまとめる・古いものを減らす案を出す`,
     pressureListHeading: '会話に入りきらない記憶（古い順）:',
     pressureMore: count => `…（ほか ${count} 件）`,
     taskHeading: '# 終わったタスク',
@@ -150,9 +164,16 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
       '- If there is nothing to do, use no tools and reply only "No changes"',
       '- At the end, report what you did in one or two sentences',
     ],
+    tidyPolicy: [
+      '- The purpose this time is to propose how to tidy up memory. Do not learn anything new (memory_save is not available)',
+      '- Of the memories listed below that do not fit in a conversation, you may merge only the clearly overlapping ones into one with memory_update. memory_forget is not available (the user decides what to delete)',
+      '- Write the memories you think should be deleted or merged in your final reply, one per line, like "[n3] Delete: reason (short)" or "[u1] [u4] Merge: reason (short)". At most 10 lines',
+      '- Prefer outdated memories, ones that overlap with others, and ones about temporary events. Do not list important facts about the user',
+      '- If there is nothing to propose, use no tools and reply only "No changes"',
+    ],
     forgottenHeading: '# Memories the user deleted (do not learn the same thing again)',
     pressureHeading: '# Memory usage',
-    pressureSummary: (tokens, budget, count) => `Memory totals about ${tokens} tokens, over the guideline for what goes into a conversation (about ${budget} tokens). ${count} ${count === 1 ? 'memory does' : 'memories do'} not fit in a conversation. Prioritize merging overlapping memories and trimming old ones`,
+    pressureSummary: (tokens, budget, count) => `Memory totals about ${tokens} tokens, over the guideline for what goes into a conversation (about ${budget} tokens). ${count} ${count === 1 ? 'memory does' : 'memories do'} not fit in a conversation. Propose merging overlapping memories and trimming old ones`,
     pressureListHeading: 'Memories that do not fit (oldest first):',
     pressureMore: count => `… (${count} more)`,
     taskHeading: '# Finished task',
@@ -225,7 +246,7 @@ export function reviewPrompt(input: {
     text.intro(TRIGGER_TEXT[language][input.trigger]),
     '',
     text.policyHeading,
-    ...text.policy,
+    ...(input.trigger === 'book_full' ? text.tidyPolicy : text.policy),
   ];
   if (input.forgotten.length) {
     parts.push('', text.forgottenHeading, ...input.forgotten.map(f => `- ${clip(f, 200, language)}`));

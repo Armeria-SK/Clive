@@ -9,11 +9,12 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable } from '../src/engine/chat.ts';
 import { requiredContext } from '../src/engine/status.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
-import { bookPressureText } from '../src/memory/review.ts';
+import type { StopReason, ToolCall } from '../src/engine/types.ts';
+import { bookPressureText, reviewPrompt } from '../src/memory/review.ts';
 import { MemoryError, MemoryStore, planBooks, renderBooks, type Memory } from '../src/memory/store.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { storeText } from '../src/shared/messages/stores.ts';
-import { FakeAdapter, reply, tempDir, testConfig } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, testConfig, type Script } from './helpers.ts';
 
 const DAY = 86_400_000;
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
@@ -353,7 +354,7 @@ test('bookPressureText: 会話に入りきらない記憶を古い順に挙げ�
   const outside = Array.from({ length: 50 }, (_, i) => ({ id: i + 1, book: (i % 2 ? 'notes' : 'user') as 'user' | 'notes', content: `${String(i + 1).padStart(2, '0')}${'あ'.repeat(98)}` }));
   const ja = bookPressureText({ tokens: 9000, budget: 500, outside }, 'ja');
   const lines = ja.split('\n');
-  assert.equal(lines[0], '記憶の合計は約 9000 トークンで、会話に入れる量の目安（約 500 トークン）を超えています。会話に入りきらない記憶が 50 件あります。重なりをまとめ、古いものを減らすことを優先する');
+  assert.equal(lines[0], '記憶の合計は約 9000 トークンで、会話に入れる量の目安（約 500 トークン）を超えています。会話に入りきらない記憶が 50 件あります。重なりをまとめる・古いものを減らす案を出す');
   assert.equal(lines[1], '会話に入りきらない記憶（古い順）:');
   const items = lines.filter(l => l.startsWith('- ['));
   assert.ok(items.length >= 3 && items.length <= 5, `予算 500 トークンで 100 字ずつ: ${items.length} 件`);
@@ -366,4 +367,108 @@ test('bookPressureText: 会話に入りきらない記憶を古い順に挙げ�
   assert.doesNotMatch(en, CJK);
   assert.match(en, /^Memory totals about 9000 tokens, over the guideline for what goes into a conversation \(about 500 tokens\)\. 2 memories do not fit in a conversation\./u);
   assert.ok(!en.includes('more)'), '全部挙げられたときは「ほか」を付けない');
+});
+
+// ── 整理の振り返りは、記憶を自分で消さず、案を知らせる ──
+
+function toolCall(name: string, args: unknown): Script {
+  return async function* () {
+    const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
+    yield { type: 'tool_call', call };
+    yield { type: 'done', stop: 'tool_use' as StopReason };
+  };
+}
+
+test('整理の振り返り（book_full）: memory_forget と memory_save を渡さず、呼ばれても拒否する。重なりを memory_update でまとめるのは今までどおり', async t => {
+  const s = await setup(t, c => { c.models = [model('big', 'fa', 20_000)]; });
+  await s.app.worker.tick();
+  s.fill(6);
+  s.adapter().scripts.push(
+    toolCall('memory_update', { id: 'u1', content: '事実1（まとめた）' }),
+    toolCall('memory_forget', { id: 'u3', reason: '古い' }),
+    toolCall('memory_save', { book: 'user', content: '新しく覚えること' }),
+    reply('[u3] 消す: 古い'),
+  );
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(bookFullJobs(s).length, 1);
+  const first = s.adapter().calls[0]!;
+  const names = first.tools.map(x => x.name);
+  assert.ok(names.includes('memory_update') && names.includes('memory_search'), 'まとめる・探す道具は渡す');
+  assert.ok(!names.includes('memory_forget') && !names.includes('memory_save'), `消す・新しく覚える道具は渡さない: ${names.join(',')}`);
+  assert.equal(s.app.memory.get(1)!.content, '事実1（まとめた）', 'memory_update は使える');
+  assert.equal(s.app.memory.get(3)!.status, 'active', 'memory_forget が呼ばれても、記憶は消えない');
+  assert.equal(s.app.memory.list().length, 6, 'memory_save も拒否される');
+  assert.deepEqual(s.app.memory.events().filter(e => e.action === 'forget'), []);
+  const rows = s.app.db.prepare("SELECT tool, decision, decided_by, ok FROM tool_calls ORDER BY rowid").all() as Array<{ tool: string; decision: string; decided_by: string; ok: number }>;
+  assert.deepEqual(rows.map(r => [r.tool, r.decision, r.ok]), [['memory_update', 'allow', 1], ['memory_forget', 'deny', 0], ['memory_save', 'deny', 0]]);
+});
+
+test('整理の振り返り以外の振り返りは、今までどおり memory_forget と memory_save を使える', async t => {
+  const s = await setup(t);
+  const conversation = s.app.conversations.create({ kind: 'task' });
+  const plain = s.app.engine.runReview(conversation.id, '[振り返り] テスト');
+  assert.ok(plain.ok);
+  await plain.done;
+  const names = s.adapter().calls[0]!.tools.map(x => x.name);
+  assert.ok(names.includes('memory_forget') && names.includes('memory_save'));
+  const tidy = s.app.engine.runReview(s.app.conversations.create({ kind: 'task' }).id, '[振り返り] 整理', { forbidTools: ['memory_forget'] });
+  assert.ok(tidy.ok);
+  await tidy.done;
+  assert.ok(!s.adapter().calls[1]!.tools.some(x => x.name === 'memory_forget'));
+  assert.ok(s.adapter().calls[1]!.tools.some(x => x.name === 'memory_save'), '指定した道具だけ外す');
+});
+
+test('整理の振り返り: 返事（消す・まとめる案）を、#/memory へのリンクつきの通知で知らせる。変更なしなら知らせない', async t => {
+  const s = await setup(t, c => { c.models = [model('big', 'fa', 20_000)]; });
+  await s.app.worker.tick();
+  s.fill(6);
+  const proposal = '[u1] 消す: 古い設定の話\n[n2] [n4] まとめる: 同じ内容';
+  s.adapter().scripts.push(reply(proposal));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  const tidy = s.app.notifications.list().filter(n => n.link === '#/memory');
+  assert.equal(tidy.length, 1);
+  assert.equal(tidy[0]!.kind, 'info');
+  assert.equal(tidy[0]!.title, '記憶の整理の案があります');
+  assert.equal(tidy[0]!.body, proposal);
+  assert.equal(s.app.reviews.list()[0]!.note, proposal, '振り返りの記録にも残る');
+
+  s.clock.now += DAY;
+  s.adapter().scripts.push(reply('変更なし'));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.notifications.list().filter(n => n.link === '#/memory').length, 1, '「変更なし」は知らせない');
+  s.clock.now += DAY;
+  s.adapter().scripts.push(reply('   '));
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.app.notifications.list().filter(n => n.link === '#/memory').length, 1, '空の返事も知らせない');
+
+  const en = await setup(t, c => { c.language = 'en'; c.models = [model('big', 'fa', 20_000)]; });
+  await en.app.worker.tick();
+  en.fill(6);
+  en.adapter().scripts.push(reply('[u1] Delete: outdated'));
+  assert.equal(await en.app.worker.tick(), 'ran');
+  const enTidy = en.app.notifications.list().find(n => n.link === '#/memory')!;
+  assert.equal(enTidy.title, 'Suggestions for tidying up memory');
+  assert.doesNotMatch(enTidy.title, CJK);
+
+  const manual = await setup(t, c => { c.models = [model('big', 'fa', 20_000)]; });
+  await manual.app.worker.tick();
+  manual.adapter().scripts.push(reply('[u1] 消す: ほかのきっかけの返事'));
+  const c1 = manual.app.conversations.create({ kind: 'chat' });
+  manual.app.conversations.append(c1.id, { role: 'user', content: 'こんにちは' });
+  manual.app.reviews.enqueue('manual', 'manual:1', { conversationId: c1.id });
+  assert.equal(await manual.app.worker.tick(), 'ran');
+  assert.equal(manual.app.notifications.list().filter(n => n.link === '#/memory').length, 0, '整理の振り返り以外では、この通知を出さない');
+});
+
+test('整理の振り返りの依頼文: 消さずに案を書く方針になる（ほかの振り返りの方針は今までどおり）', () => {
+  const tidy = reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x' });
+  assert.match(tidy, /memory_forget は使えない/u);
+  assert.match(tidy, /最後の返事に 1 件 1 行で書く/u);
+  assert.doesNotMatch(tidy, /要らなくなった方は memory_forget/u, '消す指示は残さない');
+  assert.doesNotMatch(tidy, /memory_save（book=user）/u, '新しく覚える指示も残さない');
+  const other = reviewPrompt({ trigger: 'idle', forgotten: [] });
+  assert.match(other, /要らなくなった方は memory_forget/u);
+  const en = reviewPrompt({ trigger: 'book_full', forgotten: [], bookPressure: 'x', language: 'en' });
+  assert.match(en, /memory_forget is not available/u);
+  assert.doesNotMatch(en, CJK);
 });

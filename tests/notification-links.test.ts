@@ -104,10 +104,10 @@ for (const language of ['ja', 'en'] as const) {
 
     const links = [...all(), ...limited.app.notifications.list().map(n => n.link), ...noModel.app.notifications.list().map(n => n.link)];
 
-    // 最終的に出てくるリンクは、今ある画面だけ（#/review・#/today・#/curiosity・#/notifications・#/memory は使わない）
+    // 最終的に出てくるリンクは、今ある画面だけ（#/review・#/today・#/curiosity・#/notifications は使わない。#/memory は整理の案の通知だけで、tests/memory-budget.test.ts で見る）
     const allowed = /^#\/(tasks(\/[0-9a-f-]{36})?|settings|skills\/draft\/[^/]+)$/u;
     for (const link of links) assert.match(link ?? '', allowed);
-    assert.ok(!links.some(link => /#\/(review|today|curiosity|notifications|memory)/u.test(link ?? '')));
+    assert.ok(!links.some(link => /#\/(review|today|curiosity|notifications)/u.test(link ?? '')));
     assert.deepEqual([...new Set(links.map(link => link!.replace(/[0-9a-f-]{36}/u, '<id>').replace(/skills\/draft\/.*/u, 'skills/draft/<name>')))].sort(), ['#/settings', '#/skills/draft/<name>', '#/tasks', '#/tasks/<id>']);
   });
 }

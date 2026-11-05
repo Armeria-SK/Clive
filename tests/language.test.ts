@@ -349,7 +349,7 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
   }
   assert.match(texts.task!, /^\[Task run\]/u);
   assert.match(texts.task!, /Where it came from: From your curiosity/u);
-  assert.match(texts['review:book_full']!, /Memory usage\nMemory totals about 900 tokens, over the guideline for what goes into a conversation \(about 500 tokens\)\. 2 memories do not fit in a conversation\. Prioritize merging overlapping memories and trimming old ones\nMemories that do not fit \(oldest first\):\n- \[u1\] Old fact\n- \[n2\] Old lesson/u);
+  assert.match(texts['review:book_full']!, /Memory usage\nMemory totals about 900 tokens, over the guideline for what goes into a conversation \(about 500 tokens\)\. 2 memories do not fit in a conversation\. Propose merging overlapping memories and trimming old ones\nMemories that do not fit \(oldest first\):\n- \[u1\] Old fact\n- \[n2\] Old lesson/u);
   assert.match(texts.fallbackHistory!, /\[Result of tool \\"file_list\\" \(error\)\]/u);
 });
 
@@ -389,6 +389,15 @@ const JA_REVIEW_POLICY = [
   '- することがなければ、道具を使わずに「変更なし」とだけ返す',
   '- 最後に、何をしたかを1〜2文で返す',
 ];
+const JA_TIDY_POLICY = [
+  '',
+  '# 方針',
+  '- 今回の目的は、記憶を整理する案を出すこと。新しく覚えることはしない（memory_save は使えない）',
+  '- 下に挙げた「会話に入りきらない記憶」のうち、重なりがはっきりしているものだけ、memory_update で 1 つにまとめてよい。memory_forget は使えない（消すかどうかはユーザーが決める）',
+  '- 消したほうがよい・まとめたほうがよいと思う記憶は、最後の返事に 1 件 1 行で書く。書き方は「[n3] 消す: 理由（短く）」「[u1] [u4] まとめる: 理由（短く）」。多くても 10 行',
+  '- 古くなったもの・ほかの記憶と重なるもの・一時的な出来事のものを優先して挙げる。ユーザーの大事な事実は挙げない',
+  '- 提案が無ければ、道具を使わずに「変更なし」とだけ返す',
+];
 const jaReviewIntro = (trigger: string) => `[振り返り] きっかけ: ${trigger}。下の記録を読んで、記憶を整える（ユーザーとの会話ではありません。返事は記録に残るだけです）。`;
 
 test('日本語の固定文: タスクの実行の指示は 0250344 の出力と一字も違わない', () => {
@@ -425,7 +434,7 @@ test('日本語の固定文: タスクの実行の指示は 0250344 の出力と
 test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字も違わない', () => {
   assert.equal(reviewPrompt({ trigger: 'book_full', forgotten: ['忘れた記憶'], bookPressure: 'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字' }), [
     jaReviewIntro('記憶が大きくなった'),
-    ...JA_REVIEW_POLICY,
+    ...JA_TIDY_POLICY,
     '',
     '# ユーザーが消した記憶（同じ内容を覚え直さない）',
     '- 忘れた記憶',
@@ -475,7 +484,7 @@ test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字
   ] as any;
   assert.equal(transcriptOf(long), `【ユーザー】${'あ'.repeat(3000)}…（略）\n【道具 file_list】${'い'.repeat(300)}…（略）`);
   assert.equal(bookPressureText({ tokens: 900, budget: 500, outside: [{ id: 1, book: 'user', content: '古い事実' }, { id: 2, book: 'notes', content: '古い教訓' }] }), [
-    '記憶の合計は約 900 トークンで、会話に入れる量の目安（約 500 トークン）を超えています。会話に入りきらない記憶が 2 件あります。重なりをまとめ、古いものを減らすことを優先する',
+    '記憶の合計は約 900 トークンで、会話に入れる量の目安（約 500 トークン）を超えています。会話に入りきらない記憶が 2 件あります。重なりをまとめる・古いものを減らす案を出す',
     '会話に入りきらない記憶（古い順）:',
     '- [u1] 古い事実',
     '- [n2] 古い教訓',
