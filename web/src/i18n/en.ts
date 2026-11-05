@@ -33,7 +33,6 @@ export const en: Dict = {
   'conversation.needsApprovalTip': 'Approval needed',
   'conversation.generating': 'Writing a reply',
 
-  'connection.on': 'Connected',
   'connection.off': 'Disconnected (reconnecting automatically)',
 
   'status.connected': 'Connected',
@@ -97,7 +96,6 @@ export const en: Dict = {
   'chat.send': 'Send',
   'chat.stop': 'Stop',
   'chat.attach': 'Attach a file (text, PDF or image, up to 10 MB)',
-  'chat.attaching': 'Attaching…',
   'chat.detach': name => `Remove ${name}`,
   'chat.kind.image': 'Image',
   'chat.kind.pdf': 'PDF',
@@ -592,7 +590,6 @@ export const en: Dict = {
   'memory.role.assistant': 'Clive',
   'memory.role.tool': 'Tool',
 
-  'settings.appearance': 'Appearance',
   'settings.theme': 'Theme',
   'settings.theme.auto': 'Match the OS',
   'settings.theme.light': 'Light',

@@ -30,7 +30,6 @@ export const ja = {
   'conversation.needsApprovalTip': '承認が必要です',
   'conversation.generating': '返事を作っています',
 
-  'connection.on': '接続中',
   'connection.off': '切断中（自動で繋ぎ直します）',
 
   'status.connected': '接続中',
@@ -94,7 +93,6 @@ export const ja = {
   'chat.send': '送る',
   'chat.stop': '止める',
   'chat.attach': 'ファイルを添付（テキスト・PDF・画像、10MB まで）',
-  'chat.attaching': '添付中…',
   'chat.detach': (name: string) => `${name} を外す`,
   'chat.kind.image': '画像',
   'chat.kind.pdf': 'PDF',
@@ -589,7 +587,6 @@ export const ja = {
   'memory.role.assistant': 'Clive',
   'memory.role.tool': 'ツール',
 
-  'settings.appearance': '見た目',
   'settings.theme': 'テーマ',
   'settings.theme.auto': 'OS に合わせる',
   'settings.theme.light': 'ライト',

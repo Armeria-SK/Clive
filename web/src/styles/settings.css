@@ -88,7 +88,6 @@
 .set-card { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border-radius: var(--radius-md); background: var(--color-surface); }
 .set-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
 .set-card-name { font-family: var(--font-mono); font-size: 13.5px; font-weight: 600; }
-.set-card-title { font-size: 14px; font-weight: 600; }
 .set-card-message { font-size: 13.5px; text-wrap: pretty; }
 .set-card-hint { font-size: 13px; }
 .set-nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 12px; }
