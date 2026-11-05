@@ -1,4 +1,4 @@
-import { parseRoute, routeHash, type Page } from './routes.ts';
+import { parseRoute, routeHash } from './routes.ts';
 
 export interface Tab { key: string; hash: string }
 
@@ -6,16 +6,14 @@ export const MAX_TABS = 10;
 const STORAGE_KEY = 'clive.tabs';
 export const NEW_CHAT_TAB: Tab = { key: 'chat:new', hash: '#/' };
 
+// タブになるのは会話だけ。タスク・スキル・実行ログ・記憶・通知・設定などのページは、開いてもタブを作らない。
 export function toTab(hash: string): Tab | null {
   const route = parseRoute(hash);
-  if (route.page === 'today' || route.page === 'review') return null;
-  const key = route.page === 'chat' ? `chat:${route.conversationId ?? 'new'}` : route.page;
-  return { key, hash: routeHash(route) };
+  if (route.page !== 'chat') return null;
+  return { key: `chat:${route.conversationId ?? 'new'}`, hash: routeHash(route) };
 }
 
-export const isChatTab = (tab: Tab): boolean => tab.key.startsWith('chat:');
-export const chatIdOf = (tab: Tab): string | null => (isChatTab(tab) && tab.key !== 'chat:new' ? tab.key.slice(5) : null);
-export const pageOfTab = (tab: Tab): Page => (isChatTab(tab) ? 'chat' : tab.key as Page);
+export const chatIdOf = (tab: Tab): string | null => (tab.key !== 'chat:new' ? tab.key.slice(5) : null);
 
 function limit(tabs: Tab[], keepKey: string): Tab[] {
   const out = [...tabs];
@@ -27,14 +25,14 @@ function limit(tabs: Tab[], keepKey: string): Tab[] {
   return out;
 }
 
-// 経路を開いたときのタブの更新。すでにあるタブは行き先（#/tasks/<id> など）だけ更新する。
-// 会話から会話へ移るときは、今の会話のタブを置き換える（append のときだけ並べて足す）。
+// 経路を開いたときのタブの更新。会話以外のページは何もしない。
+// 会話を開くときは、activeKey（直前に選ばれていた会話のタブ。会話以外のページを見ているあいだも覚えている）を置き換える（append のときだけ並べて足す）。
 export function openTab(tabs: Tab[], hash: string, options: { activeKey: string | null; append?: boolean }): Tab[] {
   const target = toTab(hash);
   if (!target) return tabs;
   const at = tabs.findIndex(t => t.key === target.key);
   if (at >= 0) return tabs[at]!.hash === target.hash ? tabs : tabs.map((t, i) => (i === at ? target : t));
-  const current = options.append || !isChatTab(target) ? -1 : tabs.findIndex(t => t.key === options.activeKey && isChatTab(t));
+  const current = options.append ? -1 : tabs.findIndex(t => t.key === options.activeKey);
   const next = current >= 0 ? tabs.map((t, i) => (i === current ? target : t)) : [...tabs, target];
   return limit(next, target.key);
 }
@@ -43,7 +41,7 @@ export function closeTab(tabs: Tab[], key: string, activeKey: string | null): { 
   const at = tabs.findIndex(t => t.key === key);
   if (at < 0) return { tabs, go: null };
   const rest = tabs.filter(t => t.key !== key);
-  if (!rest.length) return { tabs: [NEW_CHAT_TAB], go: '#/' };
+  if (!rest.length) return { tabs: [NEW_CHAT_TAB], go: key === activeKey ? '#/' : null };
   if (key !== activeKey) return { tabs: rest, go: null };
   return { tabs: rest, go: rest[Math.min(at, rest.length - 1)]!.hash };
 }

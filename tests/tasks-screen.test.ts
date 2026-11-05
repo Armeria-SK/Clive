@@ -193,10 +193,10 @@ test('draftSummary: 「〜に実行します」の要約の元になる値（入
   assert.equal(draftSummary({ ...base, when: 'at', at: '' }), null);
 });
 
-test('#/curiosity は、タスクの「気になること」の節を開く経路（タブはタスクの 1 つ）', () => {
+test('#/curiosity は、タスクの「気になること」の節を開く経路（タブにはならない）', () => {
   assert.deepEqual(parseRoute('#/curiosity'), { page: 'tasks', taskId: null, section: 'curiosity' });
   assert.deepEqual(parseRoute('#/tasks'), { page: 'tasks', taskId: null }, '普通のタスクの経路には節の指定が付かない');
-  assert.deepEqual(toTab('#/curiosity'), { key: 'tasks', hash: '#/tasks' });
+  assert.equal(toTab('#/curiosity'), null, 'タスクのページはタブにしない（タブは会話だけ）');
 });
 
 test('辞書: 状態・出どころ・優先度・経過の種類・気になることの状態は、ja にも en にもある', () => {

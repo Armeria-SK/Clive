@@ -28,7 +28,7 @@ test('経路: スキルの深いリンク（#/skills/<名前>、#/skills/draft/<
   assert.deepEqual(parseRoute('#/skills/%E0%A4%A'), { page: 'skills', target: { kind: 'skill', name: '%E0%A4%A' } }, '壊れたエンコードでも落ちない');
   for (const hash of ['#/skills', '#/skills/x', '#/skills/draft/x', '#/skills/draft']) assert.equal(routeHash(parseRoute(hash)), hash);
   assert.deepEqual(parseRoute('#/review'), { page: 'review' }, '古い経路は変えない');
-  assert.deepEqual(toTab('#/skills/draft/x'), { key: 'skills', hash: '#/skills/draft/x' }, 'スキルのタブは 1 つ。開いている窓の行き先を覚える');
+  assert.equal(toTab('#/skills/draft/x'), null, 'スキルのページはタブにしない（タブは会話だけ）');
 });
 
 test('スキルの一覧: レビュー待ちの下書きを先頭に（新しい順）、そのあとにスキルを名前順で並べる', () => {

@@ -5,8 +5,7 @@ import type { Draft } from './events.ts';
 import { Icon } from './icons.tsx';
 import { useT } from './i18n/index.ts';
 import { modLabel } from './keys.ts';
-import { PAGE_META } from './pages.ts';
-import { chatIdOf, isChatTab, pageOfTab, type Tab } from './tabs.ts';
+import { chatIdOf, type Tab } from './tabs.ts';
 
 interface Props {
   tabs: Tab[];
@@ -41,7 +40,6 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chat
   }, []);
 
   const labelOf = (tab: Tab): string => {
-    if (!isChatTab(tab)) return t(PAGE_META[pageOfTab(tab)].label);
     const id = chatIdOf(tab);
     if (!id) return t('tab.newChat');
     return conversations.find(c => c.id === id)?.title ?? chatTitles[id] ?? t('conversation.untitled');
@@ -61,7 +59,7 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chat
           return (
             <div key={tab.key} role="tab" aria-selected={active} className={`tab${active ? ' active' : ''}`} onAuxClick={e => { if (e.button === 1) close(e); }}>
               <a href={tab.hash} className="tab-link" title={label}>
-                <span className="tab-icon"><Icon name={isChatTab(tab) ? 'msg' : PAGE_META[pageOfTab(tab)].icon} size={14} /></span>
+                <span className="tab-icon"><Icon name="msg" size={14} /></span>
                 <span className="tab-label">{label}</span>
                 {mark === 'generating' && <span className="spin tab-state"><Icon name="loader" size={11} /><span className="sr-only">{t('conversation.generating')}</span></span>}
                 {mark === 'approval' && <span className="tab-dot"><span className="sr-only">{t('conversation.needsApproval')}</span></span>}
