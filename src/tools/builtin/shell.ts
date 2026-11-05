@@ -107,6 +107,7 @@ export const shellRun: ToolDef<ShellInput> = {
     'Windows の PowerShell は制限モードで動くので、.NET の型の書き方（[Math]::・[IO.File]::・[pscustomobject]）や New-Object・Add-Type は使わず、コマンドレットと文字列のメソッドで書く。',
     'PowerShell のコマンドレットは、引用符で囲んだパスの * ? [ ] もワイルドカードとして解決する。[ ] を含む名前のファイルを指すときは -LiteralPath を使う。',
     'Windows の PowerShell では、ファイルを書く・作る・コピー・移動・名前の変更・削除するコマンドレット（Set-Content・Out-File・Copy-Item・Move-Item・New-Item・Remove-Item など）とリダイレクト（>）は、パスが決まっていても毎回ユーザーの確認が要る。ファイルを書くときはシェルでなく file_write / file_edit の道具を使うこと。Get-ChildItem -Filter の結果を Select-String・Get-Content にパイプで流すのも毎回確認が要る（-Include か Select-String -Path を使う）。',
+    'curl・wget でファイルに保存する形（curl の -o -O、wget の -O - 以外）は、保存先が決まっていても毎回ユーザーの確認が要る。curl の URL に { } [ ] が入るときは -g を付ける（付けないと curl が展開するので確認が要る）。',
   ].join(''),
   input: Type.Object({
     command: Type.String({ minLength: 1, maxLength: 8000 }),

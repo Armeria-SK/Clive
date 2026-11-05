@@ -26,7 +26,7 @@ const BASH_ALLOW = [
   'sort data.txt | uniq -c', "jq '.items[]' a.json", 'for f in *.md; do wc -l "$f"; done', 'git status', 'git log --oneline -20', 'git diff', 'git show HEAD~1 --stat', 'git branch -a',
   'mkdir -p out', 'touch a.txt', 'cp a.txt b.txt', 'mv a b', 'rm old.txt', 'rm -rf build', 'echo "x" > notes.txt', "sed -n '1,20p' f", "sed -i 's/a/b/g' f", 'tar -czf out.tgz dir', 'unzip -l a.zip',
   'node --version', 'node -v', 'python -V', 'python3 --version', 'npm ls', 'npm --version', 'npm view left-pad version --json', 'pip list', 'pip freeze', 'curl -sS https://example.com',
-  'curl -o page.html https://example.com/x', 'cd sub && ls', 'LC_ALL=C sort f', 'x=1', 'export LANG=C', 'echo $HOME', 'git log --since="2 weeks ago" --author=me', 'tsc --noEmit -p .', 'date +%Y-%m-%d',
+  'curl -o - https://example.com/x', 'cd sub && ls', 'LC_ALL=C sort f', 'x=1', 'export LANG=C', 'echo $HOME', 'git log --since="2 weeks ago" --author=me', 'tsc --noEmit -p .', 'date +%Y-%m-%d',
   'ls "$dir"', 'cat -- "$f"', 'diff a b', 'stat -c %s f', 'du -sh .', 'which node', 'basename "$f"', 'md5sum f', 'test -f x && echo yes', '[ -d src ]', 'seq 1 5', 'sleep 2', 'true', 'printenv HOME',
 ] as const;
 const PS_ALLOW = [
@@ -108,7 +108,7 @@ test('書き方を判定できないものは止める（deny）', () => {
 test('ふつうの確かめ（会話の許可で越えられる）になるもの', () => {
   const rows: Array<[string, ShellKind, string]> = [
     ['git add .', 'bash', 'ask:list.git_write'], ['git commit -m "x"', 'bash', 'ask:list.git_write'], ['git push', 'bash', 'ask:list.git_push'], ['git push origin main', 'bash', 'ask:list.git_push'],
-    ['curl -X POST https://api.example.com -d @a.json', 'bash', 'ask:ask.curl'], ['curl --json "{}" https://e', 'bash', 'ask:ask.curl'], ['wget --max-redirect=0 --post-data=x https://e', 'bash', 'ask:ask.wget'],
+    ['curl -X POST https://api.example.com -d @a.json', 'bash', 'ask:ask.curl'], ['curl --json "{}" https://e', 'bash', 'ask:ask.curl'], ['wget --max-redirect=0 -O - --post-data=x https://e', 'bash', 'ask:ask.wget'],
     ['curl http://192.168.1.5/x', 'bash', 'ask:list.lan'], ['curl http://printer.local/x', 'bash', 'ask:list.lan'], ['Invoke-WebRequest -Uri https://e -Method Post -Body x -MaximumRedirection 0', 'powershell', 'ask:ask.powershell'],
     ['Invoke-RestMethod https://e -Method Put -MaximumRedirection 0', 'powershell', 'ask:ask.powershell'], ['git commit -m x', 'powershell', 'ask:list.git_write'],
   ];
@@ -206,7 +206,7 @@ test('curl・wget: 設定ファイルがあれば今回だけ（最初の -q・-
   const rows: Array<[string, ShellKind, Level]> = [
     ['curl https://example.com/', 'bash', 'once'], ['curl -sS https://example.com/', 'bash', 'once'], ['curl -q https://example.com/', 'bash', 'allow'], ['curl -q -sS https://example.com/', 'bash', 'allow'],
     ['curl -sS -q https://example.com/', 'bash', 'once'], ['curl -qs https://example.com/', 'bash', 'once'], ['curl -L -q https://example.com/', 'bash', 'once'],
-    ['wget --max-redirect=0 https://example.com/', 'bash', 'once'], ['wget --no-config --max-redirect=0 https://example.com/', 'bash', 'allow'], ['wget --max-redirect=0 --no-config https://example.com/', 'bash', 'once'],
+    ['wget --max-redirect=0 -O - https://example.com/', 'bash', 'once'], ['wget --no-config --max-redirect=0 -O - https://example.com/', 'bash', 'allow'], ['wget --max-redirect=0 --no-config -O - https://example.com/', 'bash', 'once'],
     ['curl.exe -sS https://example.com/', 'powershell', 'once'], ['curl.exe -q -sS https://example.com/', 'powershell', 'allow'],
   ];
   assert.deepEqual(rows.flatMap(([c, shell, want]) => (levelOf(c, shell, has) === want ? [] : [`${c} (${shell}) → ${levelOf(c, shell, has)} (want ${want})`])), []);
@@ -215,15 +215,15 @@ test('curl・wget: 設定ファイルがあれば今回だけ（最初の -q・-
   // cd の先が分からず調べられないときは、別の理由で今回だけ（-q・--no-config が最初にあれば許す）
   const unknown = { toolConfig: () => ({ unknownCwd: true as const }) };
   assert.deepEqual(classify('curl https://example.com/', 'bash', unknown).results.flatMap(r => r.reasons.map(x => [x.key, x.level, x.exempt])), [['list.tool_rc_cwd', 'once', false]]);
-  assert.equal(levelOf('wget --max-redirect=0 https://example.com/', 'bash', unknown), 'once');
+  assert.equal(levelOf('wget --max-redirect=0 -O - https://example.com/', 'bash', unknown), 'once');
   assert.equal(levelOf('curl -q https://example.com/', 'bash', unknown), 'allow');
-  assert.equal(levelOf('wget --no-config --max-redirect=0 https://example.com/', 'bash', unknown), 'allow');
+  assert.equal(levelOf('wget --no-config --max-redirect=0 -O - https://example.com/', 'bash', unknown), 'allow');
   // 判定が終わるたびに afterStatement が、文の順に呼ばれる
   const seen: Array<string | undefined> = [];
   classify('cd sub && ls; cd - ; ls', 'bash', { afterStatement: r => { seen.push(r.cwd ? (r.cwd.word?.text ?? null) as string : undefined); } });
   assert.deepEqual(seen, ['sub', undefined, null, undefined]);
   // 設定ファイルが無ければ、これまでどおり（-q・--no-config は付けても付けなくてもよい）
-  for (const [c, shell] of [['curl https://example.com/', 'bash'], ['curl -q https://example.com/', 'bash'], ['wget --max-redirect=0 https://example.com/', 'bash'], ['wget --no-config --max-redirect=0 https://example.com/', 'bash'], ['curl.exe -sS https://example.com/', 'powershell']] as const) {
+  for (const [c, shell] of [['curl https://example.com/', 'bash'], ['curl -q https://example.com/', 'bash'], ['wget --max-redirect=0 -O - https://example.com/', 'bash'], ['wget --no-config --max-redirect=0 -O - https://example.com/', 'bash'], ['curl.exe -sS https://example.com/', 'powershell']] as const) {
     assert.equal(levelOf(c, shell), 'allow', c);
     assert.equal(levelOf(c, shell, { toolConfig: () => undefined }), 'allow', c);
   }
@@ -377,19 +377,20 @@ test('代入（C8）', () => {
 
 test('ネットワーク: 宛先の決まり（C9）と、書き込み先（-o・-O・wget の名前）', () => {
   assert.equal(levelOf('curl https://example.com'), 'allow');
-  assert.equal(levelOf('curl https://example.com/a.tgz -o a.tgz'), 'allow');
+  assert.equal(levelOf('curl https://example.com/a.tgz -o a.tgz'), 'once', '保存する形は、保存先が決まっていても常に今回だけ');
+  assert.equal(levelOf('curl https://example.com/a.tgz -o -'), 'allow');
   assert.equal(levelOf('curl -sS ftp://example.com/x'), 'once');
   assert.equal(levelOf('curl example.com'), 'once');
   assert.equal(levelOf('curl $url'), 'once');
-  assert.equal(levelOf('curl https://x --output-dir out -O'), 'allow');
+  assert.equal(levelOf('curl https://x --output-dir out -O'), 'once');
   assert.equal(levelOf('curl http://[::1]:3000/'), 'once');
   assert.equal(levelOf('curl http://0x7f.1/'), 'once');
   assert.equal(levelOf('curl http://2130706433/'), 'once');
   assert.equal(levelOf('curl http://app.localhost/'), 'once');
   assert.equal(levelOf('curl http://tailnet.example.ts.net/', 'bash', { selfHosts: ['tailnet.example.ts.net'] }), 'once');
-  assert.equal(levelOf('wget -q --max-redirect=0 https://e/x.zip'), 'allow');
+  assert.equal(levelOf('wget -q --max-redirect=0 https://e/x.zip'), 'once');
   assert.equal(levelOf('wget -qO- --max-redirect=0 https://e/x'), 'allow');
-  assert.equal(levelOf('wget -O out.txt --max-redirect=0 https://e/x'), 'allow');
+  assert.equal(levelOf('wget -O out.txt --max-redirect=0 https://e/x'), 'once');
   const c = classify('curl -O https://e/a/b.txt --output-dir out').results[0]!;
   assert.deepEqual(c.remoteNames.map(r => [r.url.text, r.dir?.text]), [['https://e/a/b.txt', 'out']]);
   assert.equal(c.fetch, true);
@@ -519,7 +520,7 @@ test('Clive 自身の API に名前では届かせない: Host・Origin など�
   assert.deepEqual(wrong, []);
   const allow = [
     'curl https://e.example/', 'curl -sS https://e.example/x', 'curl -H "Accept: application/json" https://e.example/', "curl -H 'User-Agent: clive' https://e.example/", 'curl -H "X-Api-Version: 2" https://e.example/',
-    'wget --max-redirect=0 https://e.example/x', 'wget -q --max-redirect 0 https://e.example/x',
+    'wget --max-redirect=0 -O - https://e.example/x', 'wget -q --max-redirect 0 -O- https://e.example/x',
   ];
   assert.deepEqual(allow.filter(c => levelOf(c, 'bash') !== 'allow'), []);
   for (const c of ['curl -H "Host: x" https://e.example/']) assert.equal(classify(c).results[0]!.reasons.every(r => !r.exempt), true, 'ヘッダの偽装は tools.shell.allow でも外せない');

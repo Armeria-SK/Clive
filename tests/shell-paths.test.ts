@@ -21,7 +21,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
   };
   const run = (command: string, shell: 'bash' | 'powershell', extra: Partial<ShellGuardOptions> = {}) =>
     checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', ...extra });
-  return { base, ws, policy, bash: (c: string, e: Partial<ShellGuardOptions> = {}) => run(c, 'bash', e), ps: (c: string, e: Partial<ShellGuardOptions> = {}) => run(c, 'powershell', { allow: PS_WRITER_ALLOW, ...e }) };
+  return { base, ws, policy, bash: (c: string, e: Partial<ShellGuardOptions> = {}) => run(c, 'bash', { allow: ['curl', 'wget'], ...e }), ps: (c: string, e: Partial<ShellGuardOptions> = {}) => run(c, 'powershell', { allow: PS_WRITER_ALLOW, ...e }) };
 }
 
 const once = (v: { decision: string; onceOnly: boolean }): boolean => v.decision === 'ask' && v.onceOnly;

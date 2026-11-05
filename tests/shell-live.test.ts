@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
@@ -318,6 +320,76 @@ test('実機（bash）: 一覧に当たるコマンドは承認なしで動き�
 });
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
+
+// 8 回目の審査（致命）: curl は URL の { } [ ] を展開し、-o の #1 に差し込み、-O は展開した名前で保存する。
+// 本物の curl と、この PC の小さなサーバーで、素のシェルでは本当に書かれる・届くこと（前提）と、-g があれば文字どおりになることを確かめ、Clive のシェルでは止まって何も起きないことを確かめる
+const curlExe = which('curl');
+async function startEcho(): Promise<{ port: number; seen: string[]; close: () => void }> {
+  const seen: string[] = [];
+  const server = createServer((req, res) => { seen.push(req.url ?? ''); res.end('body-from-server\n'); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { port: (server.address() as AddressInfo).port, seen, close: () => server.close() };
+}
+const curlRaw = (args: string[], cwd: string): Promise<{ code: number; stderr: string }> =>
+  new Promise(resolve => { execFile(curlExe!, args, { cwd, timeout: 15_000 }, (error, _out, stderr) => resolve({ code: error ? Number((error as { code?: number }).code ?? 1) : 0, stderr })); });
+
+test('実機（curl 8.19）: { } [ ] は展開されて #1 に差し込まれ、-g なら文字どおり。展開で別のホスト名・保存先になる', { skip: !curlExe && 'curl が無い' }, async t => {
+  const echo = await startEcho();
+  t.after(() => echo.close());
+  const base = tempDir(t);
+  const raw = join(base, 'raw');
+  mkdirSync(join(raw, '.git', 'hooks'), { recursive: true });
+  mkdirSync(join(raw, 'sub'), { recursive: true });
+  const url = (path: string): string => `http://127.0.0.1:${echo.port}/${path}`;
+  await curlRaw(['-sS', '-o', '#1.md', url('{SOUL}')], raw);
+  assert.equal(existsSync(join(raw, 'SOUL.md')), true, '-o の #1 に { } の中が差し込まれる');
+  await curlRaw(['-sS', '-O', url('{USER.md,zz}')], raw);
+  assert.equal(existsSync(join(raw, 'USER.md')) && existsSync(join(raw, 'zz')), true, '-O は展開した名前で保存する');
+  await curlRaw(['-sS', '-o', '#1', url('{.git/hooks/post-index-change}')], raw);
+  assert.equal(existsSync(join(raw, '.git', 'hooks', 'post-index-change')), true, 'フォルダの区切りも通る');
+  await curlRaw(['-sS', '-o', '#1', url('{../config.json}')], join(raw, 'sub'));
+  assert.equal(existsSync(join(raw, 'config.json')), true, '親のフォルダにも書ける');
+  echo.seen.length = 0;
+  await curlRaw(['-sS', `http://{127.0.0.1}:${echo.port}/api/health`], raw);
+  await curlRaw(['-sS', `http://loc{alhost}:${echo.port}/api/health`], raw);
+  assert.deepEqual(echo.seen, ['/api/health', '/api/health'], 'ホスト名の一部の { } も展開されて、この PC のサーバーに届く');
+  const bracket = await curlRaw(['-sS', `http://[::1]:${echo.port}/`], raw);
+  assert.notEqual(bracket.code, 0, '[ ] は、-g が無いと IPv6 の書き方でもグロブとして読まれてエラーになる');
+  // -g があれば、URL も -o も文字どおり
+  const lit = join(base, 'lit');
+  mkdirSync(lit);
+  echo.seen.length = 0;
+  await curlRaw(['-g', '-sS', '-o', '#1.md', url('{SOUL}')], lit);
+  assert.equal(existsSync(join(lit, '#1.md')), true, '-g では -o の #1 は文字どおりの名前');
+  assert.equal(existsSync(join(lit, 'SOUL.md')), false, '-g では展開されない');
+  assert.equal(echo.seen.length, 1);
+  assert.match(decodeURIComponent(echo.seen[0]!), /\{SOUL\}/u, '-g では { } がパスにそのまま入る');
+  echo.seen.length = 0;
+  const host = await curlRaw(['-g', '-sS', `http://{127.0.0.1}:${echo.port}/api/health`], lit);
+  assert.notEqual(host.code, 0, '-g では、ホスト名の { } は文字どおりで、解決できない');
+  assert.deepEqual(echo.seen, [], '-g では、この PC のサーバーに届かない');
+});
+
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: curl の { } [ ] で保存先・宛先を変える形は、確かめになるか止まり、拒否すれば何も起きない。保存する形は、決まっていても毎回確かめる`, { skip: (!available || !curlExe) && 'シェルか curl が無い' }, async t => {
+    const echo = await startEcho();
+    t.after(() => echo.close());
+    const s = setup(t, shell);
+    mkdirSync(s.files('.git/hooks'), { recursive: true });
+    const curl = shell === 'powershell' ? 'curl.exe' : 'curl';
+    const configJson = join(s.paths.workspace, '..', 'config.json');
+    for (const command of [
+      `${curl} -sS -o '#1.md' 'https://example.com/{SOUL}'`, `${curl} -sS -O 'https://example.com/{USER.md,zz}'`, `${curl} -sS -o '#1' 'https://example.com/{.git/hooks/post-index-change}'`,
+      `${curl} -sS -o '#1' 'https://example.com/{../config.json}'`, `${curl} -sS 'http://{127.0.0.1}:${echo.port}/api/health'`, `${curl} -sS 'http://loc{alhost}:${echo.port}/api/health'`,
+      `${curl} -sS -o page.html https://example.com/x`, `${curl} -sS -O https://example.com/x.zip`, `${curl} -sS -o '#1.md' 'https://example.com/a'`,
+    ]) await expectBlocked(s, command);
+    assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '人格が書き換わった');
+    for (const name of ['USER.md', 'zz', '.git/hooks/post-index-change', 'page.html', 'x.zip']) assert.equal(existsSync(s.files(name)), false, `${name} ができた`);
+    assert.equal(existsSync(configJson), false, 'config.json ができた');
+    assert.deepEqual(echo.seen, [], 'この PC のサーバーに届いた');
+  });
+}
 
 // 7 回目の審査（高）: フォルダを再帰して中身を読むコマンドは、下の秘密のパスを調べていなかった。素のシェルで本当に表示されること（前提）と、Clive のシェルでは止まり、秘密が出ないことを確かめる
 function seedSecrets(s: ReturnType<typeof setup>): void {

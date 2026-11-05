@@ -98,7 +98,7 @@ test('cd のあとの git: -C の先も、動いた先から数える。フッ�
 test('cd のあとの curl・wget: 動いた先の設定ファイルを数える。先が分からなければ今回だけ。-q・--no-config は付ければ許す', t => {
   const f = fixture(t);
   const curl = 'curl -sS https://example.com/';
-  const wget = 'wget --max-redirect=0 https://example.com/';
+  const wget = 'wget --max-redirect=0 -O - https://example.com/';
   assert.equal(f.run(curl).decision, 'allow');
   for (const c of [`cd rc && ${curl}`, `cd rc; ${curl}`, `pushd rc && ${curl}`, `(cd rc && ${curl})`, `cd $d && ${curl}`, `cd - && ${curl}`, `cd $d && ${wget}`, `popd && ${wget}`]) assert.equal(once(f.run(c)), true, c);
   assert.equal(once(f.run('cd rc; curl.exe -sS https://example.com/', 'powershell')), true, 'PowerShell の curl.exe');
@@ -107,7 +107,7 @@ test('cd のあとの curl・wget: 動いた先の設定ファイルを数える
     assert.equal(f.run(c).decision, 'allow', c);
   }
   // cd $d 自体は、読むパスが値の分からないふつうの確かめ。-q・--no-config があれば、curl・wget のための今回だけは付かない
-  for (const c of ['cd $d && curl -q -sS https://example.com/', 'cd $d && wget --no-config --max-redirect=0 https://example.com/']) assert.equal(f.run(c).onceOnly, false, c);
+  for (const c of ['cd $d && curl -q -sS https://example.com/', 'cd $d && wget --no-config --max-redirect=0 -O - https://example.com/']) assert.equal(f.run(c).onceOnly, false, c);
   assert.match(f.run(`cd rc && ${curl}`).reasons.join(), /curl の設定ファイル/u);
   assert.match(f.run(`cd $d && ${curl}`).reasons.join(), /cd の先/u);
 });

@@ -169,6 +169,7 @@ test('Invoke-WebRequest・Invoke-RestMethod: パイプで流れてくる値が -
 test('シェルの道具の説明が、PowerShell の書き込みは毎回確認が要ることと、書くなら file_write を使うことを、モデルに伝える。既存の制限モードの注意も残る', () => {
   assert.match(shellRun.description, /PowerShell では[^。]*ファイルを書く[^。]*毎回ユーザーの確認が要る。ファイルを書くときは[^。]*file_write/u);
   assert.match(shellRun.description, /Get-ChildItem -Filter の結果[^。]*確認が要る/u);
+  assert.match(shellRun.description, /curl・wget でファイルに保存する形[^。]*毎回ユーザーの確認が要る。curl の URL に[^。]*-g/u);
   assert.match(shellRun.description, /制限モード[^。]*\[pscustomobject\]/u);
 });
 

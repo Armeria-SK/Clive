@@ -140,7 +140,7 @@ test('wget の設定ファイルが見つかる場所のどれかにあれば、
   const f = curlFixture(t);
   const wgetrc = join(f.base, 'my-wgetrc');
   const places: Array<[string, Record<string, string>]> = [[join(f.home, '.wgetrc'), {}], [wgetrc, { WGETRC: wgetrc }]];
-  const wget = 'wget --max-redirect=0 https://example.com/';
+  const wget = 'wget --max-redirect=0 -O - https://example.com/';
   for (const [place, extra] of places) {
     const run = (command: string) => checkShellCommand(command, f.ws, { policy: { roots: [{ path: f.home, mode: 'write' }], deny: [] }, outsideRoots: 'ask', shell: 'bash', windows: false, env: { ...f.env, ...extra } });
     assert.equal(run(wget).decision, 'allow', `${place} 設定ファイルが無ければ許す`);
@@ -148,7 +148,7 @@ test('wget の設定ファイルが見つかる場所のどれかにあれば、
     const v = run(wget);
     assert.equal(v.onceOnly, true, `${place}: ${v.decision} ${v.reasons.join(' / ')}`);
     assert.match(v.reasons.join(), /wget の設定ファイル/u, place);
-    assert.equal(run('wget --no-config --max-redirect=0 https://example.com/').decision, 'allow', `${place} --no-config`);
+    assert.equal(run('wget --no-config --max-redirect=0 -O - https://example.com/').decision, 'allow', `${place} --no-config`);
     rmSync(place);
   }
 });

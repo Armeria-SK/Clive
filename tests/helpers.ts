@@ -98,4 +98,6 @@ export function fail(error: Error, partial = ''): Script {
 export const PS_WRITER_ALLOW: readonly string[] = [
   'New-Item', 'ni', 'mkdir', 'md', 'Set-Content', 'Add-Content', 'ac', 'Clear-Content', 'clc', 'Out-File', 'Tee-Object', 'tee', 'Copy-Item', 'copy', 'cp', 'cpi',
   'Move-Item', 'move', 'mv', 'mi', 'Rename-Item', 'ren', 'rni', 'Remove-Item', 'rm', 'del', 'erase', 'rd', 'rmdir', 'ri', 'Compress-Archive',
+  // ファイルに保存するダウンロードも、保存先の調べだけを確かめるテストでは、持ち主が書いたものとして渡す
+  'Invoke-WebRequest', 'iwr', 'Invoke-RestMethod', 'irm', 'curl.exe',
 ];

@@ -390,7 +390,9 @@ gnu({ names: ['zcat'], flags: '', pos: ['path-r…'] });
 const SEND_METHODS = /^(?:post|put|patch|delete)$/iu;
 // 宛先を偽るのに使える（サーバーは Host・Origin・Sec-Fetch-*・Tailscale のヘッダで自分宛てか見分ける）ヘッダ。@ファイルは中身が分からない
 const SPOOF_HEADERS = /^(?:host|origin|sec-fetch-[a-z-]+|x-forwarded-[a-z-]+|forwarded|tailscale-[a-z-]+|x-real-ip|x-original-url|x-rewrite-url)$/iu;
-const CURL_FLAGS = flagMap('-q -s -S -L -I -i -f --fail -v -m:n --max-time:n --connect-timeout:n --retry:n -A:s --user-agent:s -H:s --header:s --compressed --http1.1 --http2 -X:s --request:s -o:path-w --output:path-w -O --remote-name --output-dir:path-w --create-dirs -d:s --data:s --data-raw:s --data-binary:s --data-urlencode:s -F:s --form:s --form-string:s -T:path-r --upload-file:path-r --json:s');
+const CURL_FLAGS = flagMap('-q -s -S -L -I -i -f --fail -v -m:n --max-time:n --connect-timeout:n --retry:n -A:s --user-agent:s -H:s --header:s --compressed --http1.1 --http2 -X:s --request:s -o:path-w --output:path-w -O --remote-name --output-dir:path-w --create-dirs -g --globoff -d:s --data:s --data-raw:s --data-binary:s --data-urlencode:s -F:s --form:s --form-string:s -T:path-r --upload-file:path-r --json:s');
+// 標準出力・捨て場に書く -o は、ファイルに保存しない
+const SINK = /^(?:-|\/dev\/null|nul)$/iu;
 const CURL_SEND = new Set(['-d', '--data', '--data-raw', '--data-binary', '--data-urlencode', '-F', '--form', '--form-string', '-T', '--upload-file', '--json']);
 register(['curl'], (words, acc, ctx) => {
   const args = words.slice(1);
@@ -401,6 +403,9 @@ register(['curl'], (words, acc, ctx) => {
   let dir: Word | null = null;
   let remoteName = false;
   let sends = false;
+  let saves = false;
+  let globoff = false;
+  const uploads: Word[] = [];
   acc.fetch = true;
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
@@ -412,7 +417,9 @@ register(['curl'], (words, acc, ctx) => {
     for (const [k, name] of names.entries()) {
       const def = CURL_FLAGS.get(name);
       if (!def) { acc.add('once', 'list.flag', { cmd: 'curl', flag: name }, true); break; }
-      if (name === '-O' || name === '--remote-name') remoteName = true;
+      if (name === '-O' || name === '--remote-name') { remoteName = true; saves = true; }
+      if (name === '--create-dirs') saves = true;
+      if (name === '-g' || name === '--globoff') globoff = true;
       if (name === '-L') acc.add('once', 'list.redirect', { cmd: 'curl' }, true);
       if (def.type === 'bool') { if (eq > 0) acc.add('once', 'list.flag', { cmd: 'curl', flag: text }, true); continue; }
       const attached = text.startsWith('--') ? (eq > 0 ? text.slice(eq + 1) : '') : text.slice(k + 2);
@@ -431,12 +438,13 @@ register(['curl'], (words, acc, ctx) => {
       }
       if (CURL_SEND.has(name)) {
         sends = true;
-        if (name === '-T' || name === '--upload-file') acc.read(value);
+        if (name === '-T' || name === '--upload-file') { acc.read(value); uploads.push(value); }
         else if (value.text.startsWith('@')) acc.read({ ...value, text: value.text.slice(1) });
         else if (/^(?:-F|--form)$/u.test(name) && /=[@<]/u.test(value.text)) acc.read({ ...value, text: value.text.replace(/^[^=]*=[@<]/u, '').replace(/[;].*$/u, '') });
         break;
       }
-      if (name === '--output-dir') dir = value;
+      if (name === '--output-dir') { dir = value; saves = true; }
+      if ((name === '-o' || name === '--output') && !SINK.test(value.text)) saves = true;
       checkValue(def.type, value, acc, 'curl', name, ctx);
       break;
     }
@@ -446,6 +454,10 @@ register(['curl'], (words, acc, ctx) => {
     checkUrl(u, acc, ctx, 'curl');
     if (remoteName) acc.remoteNames.push({ url: u, dir });
   }
+  // ファイルに保存する形は、保存先が決まっていても常に今回だけ（URL の { } [ ] と -o の #1 で、書き込み先が変わる）。持ち主が書いた項目では外せる
+  if (saves) acc.add('once', 'list.download', { cmd: 'curl' }, true);
+  // curl は URL（と -T の元）の { } [ ] を展開する。-g が無ければ宛先も書き込み先も読めないので、持ち主の許可でも外せない今回だけ。-g があれば文字どおり（URL は書かれたとおりに調べる）
+  if (!globoff) for (const u of [...urls, ...uploads]) if (!u.dynamic && /[{}[\]]/u.test(u.text)) { acc.add('once', 'list.url_glob', { detail: u.text }, false); break; }
   if (sends) acc.add('ask', 'ask.curl');
 });
 const WGET_FLAGS = flagMap('-q -S --no-config --spider --max-redirect:n -T:n --timeout:n -t:n --tries:n -U:s -O:path-w --output-document:path-w -P:path-w --directory-prefix:path-w --post-data:s --post-file:path-r --method:s --body-data:s --body-file:path-r');
@@ -456,6 +468,8 @@ register(['wget'], (words, acc, ctx) => {
   if (config && !(args[0] && literal(args[0]) && args[0].text === '--no-config')) acc.add('once', 'file' in config ? 'list.tool_rc' : 'list.tool_rc_cwd', { cmd: 'wget', path: 'file' in config ? config.file : '', flag: '--no-config' }, false);
   let dir: Word | null = null;
   let output = false;
+  let toStdout = false;
+  let spider = false;
   let sends = false;
   let redirects: string | undefined;
   acc.fetch = true;
@@ -469,13 +483,14 @@ register(['wget'], (words, acc, ctx) => {
     for (const [k, name] of names.entries()) {
       const def = WGET_FLAGS.get(name);
       if (!def) { acc.add('once', 'list.flag', { cmd: 'wget', flag: name }, true); break; }
+      if (name === '--spider') spider = true;
       if (def.type === 'bool') { if (eq > 0) acc.add('once', 'list.flag', { cmd: 'wget', flag: text }, true); continue; }
       const attached = text.startsWith('--') ? (eq > 0 ? text.slice(eq + 1) : '') : text.slice(k + 2);
       const value = attached !== '' ? { ...w, text: attached, dynamic: false, glob: false } : args[++i];
       if (!value) { formOnce(acc, 'wget', `${name} の値`); break; }
       if (value.dynamic || value.glob) acc.add('once', 'list.dynamic', { cmd: 'wget', detail: value.text }, true);
       if (name === '--max-redirect') redirects = value.text;
-      if (name === '-O' || name === '--output-document') output = true;
+      if (name === '-O' || name === '--output-document') { output = true; toStdout = value.text === '-'; }
       if (name === '-P' || name === '--directory-prefix') dir = value;
       if (/^--(?:post-data|post-file|method|body-data|body-file)$/u.test(name)) {
         sends = true;
@@ -493,6 +508,8 @@ register(['wget'], (words, acc, ctx) => {
     checkUrl(u, acc, ctx, 'wget');
     if (!output) acc.remoteNames.push({ url: u, dir });
   }
+  // -O - （標準出力）と --spider（保存しない）のほかは、ファイルに保存するので、保存先が決まっていても常に今回だけ。持ち主が書いた項目では外せる
+  if ((output && !toStdout) || (!output && !spider)) acc.add('once', 'list.download', { cmd: 'wget' }, true);
   if (sends) acc.add('ask', 'ask.wget');
 });
 

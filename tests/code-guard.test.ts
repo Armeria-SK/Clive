@@ -154,8 +154,11 @@ test('L2・R1.8: 守るファイル・スキルのフォルダ・.git への書�
   for (const command of ['Get-Content skills/a/SKILL.md', 'Get-ChildItem -Force .git', 'cat SOUL.md', 'Select-String foo SOUL.md']) {
     assert.equal(f.ps(command).decision, 'allow', command);
   }
-  for (const command of ['curl -o notes.txt https://example.com/x', 'curl -O https://example.com/notes.txt', 'wget --max-redirect=0 -P sub https://example.com/a.txt', 'curl -o - https://example.com/x', 'wget --max-redirect=0 -O - https://example.com/x']) {
+  for (const command of ['curl -o - https://example.com/x', 'wget --max-redirect=0 -O - https://example.com/x']) {
     assert.equal(f.bash(command).decision, 'allow', command);
+  }
+  for (const command of ['curl -o notes.txt https://example.com/x', 'curl -O https://example.com/notes.txt', 'wget --max-redirect=0 -P sub https://example.com/a.txt']) {
+    assert.equal(f.bash(command).onceOnly, true, `${command}: ファイルに保存する形は常に今回だけ`);
   }
   assert.equal(f.ps('iwr https://example.com/x -MaximumRedirection 0').decision, 'allow');
   assert.equal(f.ps('iwr https://example.com/x -OutFile sub/a.html -MaximumRedirection 0').onceOnly, true, 'PowerShell でファイルに書くものは、書き込み先が決まっていても毎回確かめる');
@@ -165,7 +168,7 @@ test('L2・R1.8: 守るファイル・スキルのフォルダ・.git への書�
 const PLAIN_ASKS_BASH = [
   'curl -X PUT https://example.com/x', 'curl -XPUT https://example.com/x', 'curl -XDELETE https://example.com/x', 'curl -sXPOST https://example.com/x',
   'curl -d@body.json https://example.com/', 'curl --data-binary=@body.json https://example.com/', 'curl --upload-file=x.txt https://example.com/', 'curl --request=DELETE https://example.com/x',
-  'curl -F file=@x.txt https://example.com/', 'curl -sT x.txt https://example.com/', 'wget --max-redirect=0 --post-data=x https://example.com/', 'git push origin main',
+  'curl -F file=@x.txt https://example.com/', 'curl -sT x.txt https://example.com/', 'wget --max-redirect=0 -O - --post-data=x https://example.com/', 'git push origin main',
 ];
 const PLAIN_ASKS_PS = ['Invoke-WebRequest -Method Put https://example.com/x -MaximumRedirection 0', 'iwr https://example.com -Method:Post -MaximumRedirection 0', 'iwr https://example.com -Body x -MaximumRedirection 0', 'Invoke-RestMethod https://example.com -Method Delete -MaximumRedirection 0'];
 
@@ -286,7 +289,7 @@ const LEGIT_BASH = [
   'ls', 'ls -la sub', 'cat put.js', 'grep -rn foo .', 'rg fetch put.js', 'git status', 'git log --oneline -5', 'git diff', 'git diff put.js', 'git show HEAD', 'git branch', 'git stash list',
   'git config --get user.name', 'node --version', 'node -v', 'python -V', 'python --version', 'npm ls', 'npm --version', 'npm -v', 'npm view left-pad version', 'pnpm -v', 'go version', 'cargo --version',
   'echo "see put.js"', 'find . -name "*.md"', 'find . -name "*.js"', 'ls *.ts', 'wc -l put.js', 'diff put.js b.js', 'cp put.js b.js', 'mv put.js c.js', 'rm sub/old.js', 'mkdir sub2', 'touch new.js',
-  'curl https://example.com', 'curl -sS https://example.com/x -o out.txt', 'curl -O https://example.com/notes.txt', 'wget --max-redirect=0 https://example.com/notes.txt', 'wget --max-redirect=0 -O out.txt https://example.com',
+  'curl https://example.com', 'curl -sS https://example.com/x -o -', 'wget --max-redirect=0 -O - https://example.com/notes.txt', 'wget --max-redirect=0 -qO- https://example.com',
   'for f in a b; do echo hi; done', 'if [ -f put.js ]; then echo yes; fi', 'echo hi > out.txt', 'echo hi >> out.txt', 'ls 2>&1 | head', 'cat put.js | grep fetch', 'cat put.js | wc -l', 'git diff SOUL.md', 'cat SOUL.md',
   'grep foo SOUL.md', 'LC_ALL=C sort a.txt', 'tar tf a.tgz', 'tar czf a.tgz sub', 'tsc --noEmit', 'sort a.txt | uniq', 'unzip -l a.zip', 'jq .name package.json', 'sed -n 1p put.js', 'head -n 5 put.js',
   'x=5', 'x="a$y"', 'echo $x', 'cd sub && ls',
@@ -310,6 +313,8 @@ const ASKS_BASH = ['git add put.js', 'git commit -m "fix put.js"', 'git commit -
 const ONCE_BASH = [
   'git config user.name "Taro"', 'git config user.email a@example.com', 'dotnet --info', 'xargs grep foo', 'bash -c "ls"', 'sh -c "echo hi"', 'pwsh --version', 'NODE_ENV=production npm --version',
   'GIT_AUTHOR_NAME=x git status', 'FOO=bar echo hi', 'export FOO=bar', 'unzip a.zip', 'awk "{print 1}" a.txt', 'curl -D h.txt https://example.com',
+  // ファイルに保存する curl・wget は、保存先が決まっていても常に今回だけ（URL の { } [ ] と #1 で保存先が変わるため）
+  'curl -sS https://example.com/x -o out.txt', 'curl -O https://example.com/notes.txt', 'wget --max-redirect=0 https://example.com/notes.txt', 'wget --max-redirect=0 -O out.txt https://example.com',
 ];
 
 test('V2: 毎日使うコマンドは、誤って確かめにしない（シェルごとの一覧）', t => {
