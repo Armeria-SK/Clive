@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { ModelConfig, ProviderConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { ChatMessage, StopReason, ToolCall } from '../engine/types.ts';
-import { CONTEXT_HINTS, evaluateContext } from './context.ts';
+import { contextHint, errorProbeText, evaluateContext, probeText } from './context.ts';
+import { providerText } from '../shared/messages/providers.ts';
 import {
   checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, readSnippet, readSseData, requireApiKey, withTimeout,
 } from './http.ts';
@@ -142,14 +143,14 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     yield { type: 'done', stop: calls.length && stop !== 'max_tokens' ? 'tool_use' : stop };
   }
 
-  async probe(model: ModelConfig, required: number): Promise<ProbeResult> {
+  async probe(model: ModelConfig, required: number, language: Language = DEFAULT_LANGUAGE): Promise<ProbeResult> {
     const server = this.provider.server ?? 'generic';
-    const facts = { modelId: model.id, server, required, declared: model.contextLength };
+    const facts = { modelId: model.id, server, required, declared: model.contextLength, language };
     let base: string; let headers: Record<string, string>;
     try { base = this.#base(); headers = this.#headers(); }
     catch (error) {
       const e = error as ProviderError;
-      return { ...facts, status: e.kind === 'auth' ? 'no_api_key' : 'error', message: e.message, checkedAt: Date.now() };
+      return { ...facts, status: e.kind === 'auth' ? 'no_api_key' : 'error', ...errorProbeText(e, language), checkedAt: Date.now() };
     }
     delete headers['Accept'];
     const getJson = async (url: URL): Promise<any> => {
@@ -165,49 +166,49 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
         const loaded = info?.state === 'loaded' && typeof info.loaded_context_length === 'number' ? info.loaded_context_length : undefined;
         return evaluateContext({
           ...facts, measured: loaded, modelMax: typeof info?.max_context_length === 'number' ? info.max_context_length : undefined,
-          hint: CONTEXT_HINTS.lmstudio(required),
-          unmeasuredNote: 'モデルが未読み込みのため、読み込み時の長さは確認できていません。既定の 4096 で読み込まれると足りません',
+          hint: contextHint(language, 'lmstudio', required),
+          unmeasuredNote: 'probe.note.not_loaded',
         });
       }
       if (server === 'llamacpp') {
         const props = await getJson(new URL('/props', origin));
         const nCtx = props?.default_generation_settings?.n_ctx;
-        return evaluateContext({ ...facts, measured: typeof nCtx === 'number' ? nCtx : undefined, hint: CONTEXT_HINTS.llamacpp(required) });
+        return evaluateContext({ ...facts, measured: typeof nCtx === 'number' ? nCtx : undefined, hint: contextHint(language, 'llamacpp', required) });
       }
       if (server === 'tabbyapi') {
         // TabbyAPI（ExLlamaV2/V3）: /v1/model が今読み込んでいるモデルと max_seq_len を返す
         const current = await getJson(joinUrl(base, 'model'));
         const maxSeq = current?.parameters?.max_seq_len;
         if (current?.id && current.id !== model.model) {
-          return { ...facts, status: 'not_found', message: `TabbyAPI が読み込んでいるのは「${current.id}」で、「${model.model}」ではありません`, hint: 'TabbyAPI で目的のモデルを読み込むか、models[].model を合わせてください', checkedAt: Date.now() };
+          return { ...facts, status: 'not_found', ...probeText(language, 'probe.tabby_other', { current: current.id, model: model.model }), hint: providerText(language, 'hint.tabby_other'), checkedAt: Date.now() };
         }
-        return evaluateContext({ ...facts, measured: typeof maxSeq === 'number' ? maxSeq : undefined, hint: CONTEXT_HINTS.tabbyapi(required) });
+        return evaluateContext({ ...facts, measured: typeof maxSeq === 'number' ? maxSeq : undefined, hint: contextHint(language, 'tabbyapi', required) });
       }
       const list = await getJson(joinUrl(base, 'models'));
       const entry = Array.isArray(list?.data) ? list.data.find((m: any) => m?.id === model.model) : undefined;
       if (server === 'vllm') {
-        if (!entry) return { ...facts, status: 'not_found', message: `vLLM にモデル「${model.model}」がありません`, checkedAt: Date.now() };
-        return evaluateContext({ ...facts, measured: typeof entry.max_model_len === 'number' ? entry.max_model_len : undefined, hint: CONTEXT_HINTS.vllm(required) });
+        if (!entry) return { ...facts, status: 'not_found', ...probeText(language, 'probe.vllm_missing', { model: model.model }), checkedAt: Date.now() };
+        return evaluateContext({ ...facts, measured: typeof entry.max_model_len === 'number' ? entry.max_model_len : undefined, hint: contextHint(language, 'vllm', required) });
       }
       if (server === 'openrouter') {
-        if (!entry) return { ...facts, status: 'not_found', message: `OpenRouter にモデル「${model.model}」がありません`, checkedAt: Date.now() };
+        if (!entry) return { ...facts, status: 'not_found', ...probeText(language, 'probe.openrouter_missing', { model: model.model }), checkedAt: Date.now() };
         const max = entry.top_provider?.context_length ?? entry.context_length;
-        return evaluateContext({ ...facts, modelMax: typeof max === 'number' ? max : undefined, hint: CONTEXT_HINTS.hosted(required) });
+        return evaluateContext({ ...facts, modelMax: typeof max === 'number' ? max : undefined, hint: contextHint(language, 'hosted', required) });
       }
       if (server === 'openai') {
-        return evaluateContext({ ...facts, hint: CONTEXT_HINTS.hosted(required), unmeasuredNote: 'サーバーから長さを取得できないため、設定値を使っています' });
+        return evaluateContext({ ...facts, hint: contextHint(language, 'hosted', required), unmeasuredNote: 'probe.note.use_config' });
       }
       // generic: サーバーの種類が分からなくても、/v1/models によく載る欄（vLLM・TabbyAPI・llama.cpp など）があれば使う
       const measured = [entry?.max_model_len, entry?.context_length, entry?.parameters?.max_seq_len, entry?.max_seq_len].find((v): v is number => typeof v === 'number' && v > 0);
       const trained = typeof entry?.meta?.n_ctx_train === 'number' ? entry.meta.n_ctx_train : undefined;
       return evaluateContext({
-        ...facts, measured, ...(trained ? { modelMax: trained } : {}), hint: CONTEXT_HINTS.generic(required),
-        unmeasuredNote: 'サーバーから長さを取得できないため、設定値を使っています',
+        ...facts, measured, ...(trained ? { modelMax: trained } : {}), hint: contextHint(language, 'generic', required),
+        unmeasuredNote: 'probe.note.use_config',
       });
     } catch (error) {
       const e = error instanceof ProviderError ? error : classifyFetchError(error, new AbortController().signal);
       const status = e.kind === 'auth' ? 'no_api_key' : e.status === 404 ? 'not_found' : e.status === undefined ? 'unreachable' : 'error';
-      return { ...facts, status, message: e.message, checkedAt: Date.now() };
+      return { ...facts, status, ...errorProbeText(e, language), checkedAt: Date.now() };
     }
   }
 }

@@ -6,7 +6,7 @@ import type { Runs } from '../db/runs.ts';
 import type { AppPaths } from '../paths.ts';
 import type { EndpointLimiter } from '../providers/limiter.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
-import { ProviderError, type ProviderAdapter } from '../providers/types.ts';
+import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { REVIEW_FORBIDDEN, runToolCall } from '../tools/pipeline.ts';
@@ -23,6 +23,9 @@ import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJs
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
 import { estimateTextTokens } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
+import { providerText } from '../shared/messages/providers.ts';
+import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
+import type { MessageParams } from '../shared/messages/define.ts';
 import { compactPrompt, compactSpeaker, compactSystem, snapshotLanguageKey, summarySection, withReplyReminder } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
@@ -59,15 +62,18 @@ export interface ChatEngineDeps {
   retriesPerModel?: number;
 }
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+const ATTACHMENT_PLACEHOLDER = new RegExp(`^(?:${(['ja', 'en'] as const).flatMap(l => [engineText(l, 'attachment.image'), engineText(l, 'attachment.file')]).map(escapeRegExp).join('|')})$`, 'u');
+
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined }
 
 export type SendOutcome =
   | { ok: true; runId: string; messageId?: number }
-  | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; detail?: ContextDetail; problems?: ModelProblem[] };
+  | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; detail?: ContextDetail; problems?: ModelProblem[] };
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
 
-type Failure = { kind: EngineErrorKind; message: string; retryable: boolean; detail?: ContextDetail; route?: Route };
+type Failure = { kind: EngineErrorKind; message: string; code?: string; params?: MessageParams; retryable: boolean; detail?: ContextDetail; route?: Route };
 
 type CallResult =
   | { ok: true; index: number; text: string; toolCalls: ToolCall[]; usage: Usage; stop: StopReason; estimate: number }
@@ -95,31 +101,31 @@ export class ChatEngine {
 
   constructor(deps: ChatEngineDeps) { this.#d = deps; }
 
+  #busy(key: EngineMessageKey): SendOutcome {
+    return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), key), errorCode: `engine.${key}` };
+  }
+
   send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = []): SendOutcome {
-    if (this.#byConversation.has(conversationId)) {
-      return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: 'この会話はまだ返事を作っています。止めるか、終わるまで待ってください' };
-    }
+    if (this.#byConversation.has(conversationId)) return this.#busy('send.busy_chat');
     const chain = this.#chain('chat');
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
     this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: text, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
     // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
-    this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(text).replace(/^（(?:画像|ファイル)を添付しました）$/u, '') || attachments[0]!.name : text);
+    this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(text).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : text);
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     // 添付の中身は外部のデータなので、この実行ではシェルと書き込みを承認制にする（taint）
-    if (attachments.length) this.#initialTaint.set(runId, attachments.map(a => `添付「${a.name}」`));
+    if (attachments.length) this.#initialTaint.set(runId, attachments.map(a => engineText(languageOf(this.#d.config()), 'attachment.taint', { name: a.name })));
     this.#start(runId, conversationId, chain.usable, 'chat');
     return { ok: true, runId, messageId: saved.id };
   }
 
   retry(conversationId: string): SendOutcome {
-    if (this.#byConversation.has(conversationId)) {
-      return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: 'この会話はまだ返事を作っています' };
-    }
+    if (this.#byConversation.has(conversationId)) return this.#busy('send.busy');
     const last = this.#d.conversations.messages(conversationId, 1).at(-1);
-    if (!last || last.role === 'assistant') return { ok: false, httpStatus: 409, errorKind: 'not_found', errorMessage: 'やり直す発言がありません' };
+    if (!last || last.role === 'assistant') return { ok: false, httpStatus: 409, errorKind: 'not_found', errorMessage: engineText(languageOf(this.#d.config()), 'send.nothing_to_retry'), errorCode: 'engine.send.nothing_to_retry' };
     const chain = this.#chain('chat');
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
     this.#preemptFor(chain.usable);
@@ -130,7 +136,7 @@ export class ChatEngine {
   }
 
   runTask(task: Task, conversationId: string, prompt: string): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
-    if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: 'このタスクの会話は実行中です' };
+    if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.task_running') };
     const chain = this.#chain('background');
     if (!chain.usable.length) {
       const outcome = this.#noUsableModel(chain.problems);
@@ -145,7 +151,7 @@ export class ChatEngine {
   }
 
   runReview(conversationId: string, prompt: string): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
-    if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: 'この振り返りは実行中です' };
+    if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.review_running') };
     const chain = this.#chain('background');
     if (!chain.usable.length) {
       const outcome = this.#noUsableModel(chain.problems);
@@ -165,14 +171,14 @@ export class ChatEngine {
     for (const active of this.#active.values()) {
       if (active.kind === 'chat' || ![...active.providers].some(p => providers.has(p))) continue;
       this.#preempted.add(active.runId);
-      active.controller.abort(new ProviderError('cancelled', 'ユーザーとの会話を優先するため中断しました', { retryable: false }));
+      active.controller.abort(new ProviderError('cancelled', engineText('ja', 'run.preempted'), { retryable: false }));
     }
   }
 
   stop(runId: string): boolean {
     const active = this.#active.get(runId);
     if (!active) return false;
-    active.controller.abort(new ProviderError('cancelled', '中止しました', { retryable: false }));
+    active.controller.abort(providerError('cancelled', 'cancelled', {}, { retryable: false }));
     return true;
   }
 
@@ -186,6 +192,7 @@ export class ChatEngine {
 
   #chain(route: 'chat' | 'background'): { usable: Route[]; problems: ModelProblem[] } {
     const config = this.#d.config();
+    const language = languageOf(config);
     const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
     const ids = preferred.length ? preferred : config.models.map(m => m.id);
     const usable: Route[] = [];
@@ -194,21 +201,23 @@ export class ChatEngine {
     for (const id of ids) {
       const model = config.models.find(m => m.id === id);
       const provider = model && config.providers.find(p => p.id === model.provider);
-      if (!model || !provider) { problems.push({ modelId: id, status: 'error', message: '設定に見つかりません' }); continue; }
+      if (!model || !provider) { problems.push({ modelId: id, status: 'error', message: engineText(language, 'problem.not_in_config') }); continue; }
       const probe = this.#d.status.get(id);
       if (probe?.status === 'ok') (this.#d.status.coolingDown(id, this.#d.now?.().getTime()) ? cooling : usable).push({ model, provider });
-      else problems.push({ modelId: id, status: probe?.status ?? 'unknown', message: probe?.message ?? 'まだ確認していません', hint: probe?.hint });
+      else problems.push({ modelId: id, status: probe?.status ?? 'unknown', message: probe?.message ?? engineText(language, 'problem.unchecked'), hint: probe?.hint });
     }
     return { usable: [...usable, ...cooling], problems };
   }
 
   #noUsableModel(problems: ModelProblem[]): SendOutcome {
     const contextProblem = problems.find(p => p.status === 'too_small' || p.status === 'exceeds_model' || p.status === 'unknown');
-    const lines = problems.map(p => `・${p.modelId}: ${p.message}${p.hint ? `（${p.hint}）` : ''}`);
+    const language = languageOf(this.#d.config());
+    const lines = problems.map(p => engineText(language, 'problem.line', { id: p.modelId, message: p.message, hintPart: p.hint ? engineText(language, 'problem.hint_suffix', { hint: p.hint }) : '' }));
     return {
       ok: false, httpStatus: 409,
       errorKind: contextProblem ? 'context_overflow' : 'provider_error',
-      errorMessage: `使えるモデルがないため送信しませんでした。設定画面で確認してください。\n${lines.join('\n') || '・routing.chat にモデルがありません'}`,
+      errorMessage: engineText(language, 'no_usable', { lines: lines.join('\n') || engineText(language, 'problem.none') }),
+      errorCode: 'engine.no_usable',
       ...(contextProblem ? { detail: { reason: contextProblem.status === 'unknown' ? 'context_unknown' : contextProblem.status === 'exceeds_model' ? 'exceeds_model_limit' : 'server_ctx_too_small', ...(contextProblem.hint ? { hint: contextProblem.hint } : {}) } } : {}),
       problems,
     };
@@ -221,8 +230,10 @@ export class ChatEngine {
       .catch((error): EngineResult => {
         this.#d.log?.(`[ERROR] run ${runId}: ${(error as Error).stack ?? error}`);
         this.#d.runs.finish(runId, { ok: false, attempts: 0, errorKind: 'internal', errorMessage: (error as Error).message });
-        this.#d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'internal', errorMessage: `内部エラー: ${(error as Error).message}` });
-        return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: `内部エラー: ${(error as Error).message}`, retryable: false };
+        const language = languageOf(this.#d.config());
+        const internal = engineText(language, 'run.internal', { detail: (error as Error).message });
+        this.#d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail: (error as Error).message } });
+        return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail: (error as Error).message }, retryable: false };
       })
       .finally(() => {
         this.#active.delete(runId);
@@ -274,8 +285,8 @@ export class ChatEngine {
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
       d.runs.finish(runId, { ok: false, attempts: counters.attempts, errorKind: f.kind, errorMessage: f.message, flags, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, modelId: route.model.id, model: route.model.model, providerId: route.provider.id });
-      d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: f.kind, errorMessage: f.message, ...(f.detail ? { detail: f.detail } : {}) });
-      return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
+      d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), ...(f.detail ? { detail: f.detail } : {}) });
+      return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
     };
 
     const maxIterations = config.tools.maxIterations;
@@ -314,11 +325,12 @@ export class ChatEngine {
       if (task && task.control.value.outcome !== 'none') return finishOk(call.text, 'end_turn');
       invalidStreak = invalidThisRound === call.toolCalls.length ? invalidStreak + 1 : 0;
       if (invalidStreak >= MAX_INVALID_STREAK) {
-        return finishFail({ kind: 'provider_error', message: `モデルが正しい形でツールを呼べませんでした（${MAX_INVALID_STREAK} 回続けて）。ツールに強いモデルに替えるか、toolMode を json_fallback にしてください`, retryable: false, detail: { reason: 'prompt_exceeds', hint: 'models[].toolMode を json_fallback にするか、maxTools で数を絞ってください' } });
+        const language = languageOf(config);
+        return finishFail({ kind: 'provider_error', message: engineText(language, 'tool.invalid_streak', { count: MAX_INVALID_STREAK }), code: 'engine.tool.invalid_streak', params: { count: MAX_INVALID_STREAK }, retryable: false, detail: { reason: 'prompt_exceeds', hint: engineText(language, 'tool.invalid_streak_hint') } });
       }
     }
     flags.push('max_iterations');
-    d.bus.publish({ type: 'warning', runId, conversationId, code: 'max_iterations', message: `ツールを使った呼び直しが上限（${maxIterations} 回）に達したため止めました。続けるなら「続けて」と送ってください` });
+    d.bus.publish({ type: 'warning', runId, conversationId, code: 'max_iterations', message: engineText(languageOf(config), 'warn.max_iterations', { max: maxIterations }), params: { max: maxIterations } });
     return finishOk('', 'other');
   }
 
@@ -326,7 +338,8 @@ export class ChatEngine {
     const d = this.#d;
     const sleep = d.sleep ?? abortableSleep;
     const retries = d.retriesPerModel ?? d.config().routing.retriesPerModel;
-    let last: Failure = { kind: 'internal', message: '実行できるモデルがありませんでした', retryable: false };
+    const language = languageOf(d.config());
+    let last: Failure = { kind: 'internal', message: engineText(language, 'run.no_model'), code: 'engine.run.no_model', retryable: false };
     for (let index = p.start; index < p.chain.length; index++) {
       const route = p.chain[index]!;
       const { model, provider } = route;
@@ -335,7 +348,7 @@ export class ChatEngine {
         d.log?.(`[WARN] model ${p.chain[index - 1]!.model.id} が使えなかったため ${model.id} に切り替えます: ${last.message.split('\n')[0]}`);
       }
       const adapter = d.registry.get(provider.id);
-      if (!adapter) { last = { kind: 'internal', message: `プロバイダ「${provider.id}」がありません`, retryable: false, route }; continue; }
+      if (!adapter) { last = { kind: 'internal', message: engineText(language, 'run.no_provider', { id: provider.id }), code: 'engine.run.no_provider', params: { id: provider.id }, retryable: false, route }; continue; }
       const toolDefs = this.#toolsFor(model, p.kind);
       const specs = ToolRegistry.specs(toolDefs);
       const fallbackMode = model.toolMode === 'json_fallback';
@@ -350,7 +363,6 @@ export class ChatEngine {
         const upto = conversation?.summary_upto ?? 0;
         const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
         const config = d.config();
-        const language = languageOf(config);
         const summary = summarySection(conversation?.summary ?? '', language);
         const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date()), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
         const system = { frozen: p.snapshot, dynamic };
@@ -365,8 +377,8 @@ export class ChatEngine {
           fitted = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor });
         } catch (error) {
           if (!(error instanceof ContextOverflow)) throw error;
-          last = { kind: 'context_overflow', message: error.message, retryable: false, route,
-            detail: { reason: 'prompt_exceeds', measured: available, required: error.required, hint: '会話を新しく始めるか、長い添付やツールの出力を減らしてください' } };
+          last = { kind: 'context_overflow', message: engineText(language, 'fit.overflow', { required: error.required.toLocaleString('en-US'), available: error.available.toLocaleString('en-US') }), code: 'engine.fit.overflow', params: { required: error.required, available: error.available }, retryable: false, route,
+            detail: { reason: 'prompt_exceeds', measured: available, required: error.required, hint: engineText(language, 'hint.prompt_exceeds') } };
           break;
         }
         // 外す発言が多ければ、外す部分を要約してから組み立て直す（1回の実行で1回まで。要約に失敗したら外すだけにする）
@@ -376,7 +388,7 @@ export class ChatEngine {
           if (ok) { if (!p.flags.includes('compacted')) p.flags.push('compacted'); attempt--; continue; }
         }
         if (fitted.removed > 0) {
-          d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'context_trimmed', message: `コンテキストに収めるため、古い発言 ${fitted.removed} 件をこの返事の材料から外しました` });
+          d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'context_trimmed', message: engineText(language, 'warn.context_trimmed', { count: fitted.removed }), params: { count: fitted.removed } });
           if (!p.flags.includes('context_trimmed')) p.flags.push('context_trimmed');
         }
 
@@ -395,17 +407,17 @@ export class ChatEngine {
           }
         } catch (error) {
           const e = error instanceof ProviderError ? error
-            : p.signal.aborted ? new ProviderError('cancelled', '中止しました', { retryable: false })
-            : new ProviderError('internal', `想定外のエラー: ${(error as Error).message}`, { retryable: false });
+            : p.signal.aborted ? providerError('cancelled', 'cancelled', {}, { retryable: false })
+            : providerError('internal', 'unexpected', { detail: (error as Error).message }, { retryable: false });
           if (e.kind === 'cancelled' || p.signal.aborted) return { ok: false, cancelled: true, partial: text, failure: last, route };
-          last = { kind: e.kind, message: e.message, retryable: e.retryable, route, ...(e.detail ? { detail: e.detail } : {}) };
+          last = { kind: e.kind, message: e.text(language), ...(e.code ? { code: `provider.${e.code}`, params: e.params } : {}), retryable: e.retryable, route, ...(e.detail ? { detail: e.detail } : {}) };
           if (text) {
-            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'partial_discarded', message: '返事の途中で失敗したため、途中までの内容は保存しませんでした' });
+            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'partial_discarded', message: engineText(language, 'warn.partial_discarded') });
             break;
           }
           if (e.retryable && attempt < retries) {
             const wait = Math.min(e.retryAfterMs ?? 1000 * 2 ** attempt, MAX_BACKOFF_MS);
-            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'retrying', message: `${e.message}。${Math.ceil(wait / 1000)} 秒後に再試行します（${attempt + 1}/${retries}）` });
+            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'retrying', message: engineText(language, 'warn.retrying', { message: e.text(language), seconds: Math.ceil(wait / 1000), attempt: attempt + 1, retries }), params: { message: e.text(language), seconds: Math.ceil(wait / 1000), attempt: attempt + 1, retries, ...(e.code ? { errorCode: `provider.${e.code}` } : {}) } });
             try { await sleep(wait, p.signal); } catch { return { ok: false, cancelled: true, partial: '', failure: last, route }; }
             continue;
           }
@@ -430,13 +442,14 @@ export class ChatEngine {
 
   #finishCancelled(runId: string, conversationId: string, counters: { attempts: number; iterations: number; toolCalls: number }, route: Route, partial: string): EngineResult {
     const d = this.#d;
+    const language = languageOf(d.config());
     if (partial.trim()) {
-      const saved = d.conversations.append(conversationId, { role: 'assistant', content: `${partial}\n\n（途中で止めました）` }, runId);
+      const saved = d.conversations.append(conversationId, { role: 'assistant', content: `${partial}\n\n${engineText(language, 'message.stopped_partway')}` }, runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
     }
-    d.runs.finish(runId, { ok: false, attempts: counters.attempts, iterations: counters.iterations, toolCalls: counters.toolCalls, errorKind: 'cancelled', errorMessage: '中止しました', modelId: route.model.id, providerId: route.provider.id, model: route.model.model });
-    d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'cancelled', errorMessage: '中止しました' });
-    return { ok: false, runId, text: '', errorKind: 'cancelled', errorMessage: '中止しました', retryable: false };
+    d.runs.finish(runId, { ok: false, attempts: counters.attempts, iterations: counters.iterations, toolCalls: counters.toolCalls, errorKind: 'cancelled', errorMessage: providerText(language, 'cancelled'), modelId: route.model.id, providerId: route.provider.id, model: route.model.model });
+    d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'cancelled', errorMessage: providerText(language, 'cancelled'), errorCode: 'provider.cancelled' });
+    return { ok: false, runId, text: '', errorKind: 'cancelled', errorMessage: providerText(language, 'cancelled'), errorCode: 'provider.cancelled', retryable: false };
   }
 
   async #compact(c: { route: Route; adapter: ProviderAdapter; runId: string; conversationId: string; removed: StoredMessage[]; previous: string | null; capacity: number; signal: AbortSignal }): Promise<boolean> {
@@ -457,11 +470,11 @@ export class ChatEngine {
       if (!text.trim()) return false;
       d.conversations.setSummary(c.conversationId, text.trim(), c.removed.at(-1)!.id);
       d.bus.publish({ type: 'compaction', runId: c.runId, conversationId: c.conversationId, summarized: c.removed.length });
-      d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compacted', message: `会話が長くなったため、古い発言 ${c.removed.length} 件を要約しました（原文は残っていて、検索や history_read で読めます）` });
+      d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compacted', message: engineText(language, 'warn.compacted', { count: c.removed.length }), params: { count: c.removed.length } });
       return true;
     } catch {
       if (c.signal.aborted) return false;
-      d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compaction_failed', message: '古い発言の要約に失敗したため、要約せずに外して続けます' });
+      d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compaction_failed', message: engineText(language, 'warn.compaction_failed') });
       return false;
     } finally { release?.(); }
   }
@@ -489,10 +502,12 @@ export class ChatEngine {
       const strikes = (d.kv.getJson<number>(key) ?? 0) + 1;
       d.kv.setJson(key, strikes);
       if (!flags.includes('server_truncation_suspected')) flags.push('server_truncation_suspected');
-      const message = `サーバーが受け取った入力（${actual.toLocaleString('en-US')} トークン）が見積もり（${estimate.tokens.toLocaleString('en-US')}）より大幅に少なく、サーバー側で切り捨てられた可能性があります`;
-      d.bus.publish({ type: 'warning', runId, conversationId, code: 'server_truncation_suspected', message });
+      const language = languageOf(d.config());
+      const params = { actual: actual.toLocaleString('en-US'), estimate: estimate.tokens.toLocaleString('en-US') };
+      const message = engineText(language, 'warn.server_truncation', params);
+      d.bus.publish({ type: 'warning', runId, conversationId, code: 'server_truncation_suspected', message, params });
       if (strikes >= TRUNCATION_STRIKES) {
-        d.status.disable(model.id, `${message}（${strikes} 回連続）。サーバー側のコンテキスト長を確認してから、設定画面で確認し直してください`);
+        d.status.disable(model.id, engineText(language, 'truncation.disable', { message, strikes }));
       }
       return;
     }

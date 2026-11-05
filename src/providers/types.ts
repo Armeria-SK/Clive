@@ -1,5 +1,7 @@
-import type { ModelConfig, ProviderConfig } from '../config/schema.ts';
+import type { Language, ModelConfig, ProviderConfig } from '../config/schema.ts';
 import type { ChatMessage, ContextDetail, EngineErrorKind, StopReason, ToolCall, ToolSpec, Usage } from '../engine/types.ts';
+import type { MessageParams } from '../shared/messages/define.ts';
+import { providerText, type ProviderMessageKey } from '../shared/messages/providers.ts';
 
 export interface ModelRequest {
   model: ModelConfig;
@@ -37,6 +39,8 @@ export interface ProbeResult {
   effective?: number | undefined;
   required: number;
   message: string;
+  messageCode?: ProviderMessageKey | undefined;
+  messageParams?: MessageParams | undefined;
   hint?: string | undefined;
   capabilities?: string[] | undefined;
   checkedAt: number;
@@ -45,7 +49,7 @@ export interface ProbeResult {
 export interface ProviderAdapter {
   readonly provider: ProviderConfig;
   stream(request: ModelRequest): AsyncIterable<StreamEvent>;
-  probe(model: ModelConfig, required: number): Promise<ProbeResult>;
+  probe(model: ModelConfig, required: number, language?: Language): Promise<ProbeResult>;
 }
 
 export class ProviderError extends Error {
@@ -54,8 +58,10 @@ export class ProviderError extends Error {
   readonly retryAfterMs: number | undefined;
   readonly status: number | undefined;
   readonly detail: ContextDetail | undefined;
+  readonly code: ProviderMessageKey | undefined;
+  readonly params: MessageParams;
   constructor(kind: EngineErrorKind, message: string, options: {
-    retryable?: boolean; retryAfterMs?: number; status?: number; detail?: ContextDetail;
+    retryable?: boolean; retryAfterMs?: number; status?: number; detail?: ContextDetail; code?: ProviderMessageKey; params?: MessageParams;
   } = {}) {
     super(message);
     this.kind = kind;
@@ -63,7 +69,15 @@ export class ProviderError extends Error {
     this.retryAfterMs = options.retryAfterMs;
     this.status = options.status;
     this.detail = options.detail;
+    this.code = options.code;
+    this.params = options.params ?? {};
   }
+
+  text(language: Language): string { return this.code ? providerText(language, this.code, this.params) : this.message; }
+}
+
+export function providerError(kind: EngineErrorKind, code: ProviderMessageKey, params: MessageParams = {}, options: { retryable?: boolean; retryAfterMs?: number; status?: number; detail?: ContextDetail } = {}): ProviderError {
+  return new ProviderError(kind, providerText('ja', code, params), { ...options, code, params });
 }
 
 export type FetchLike = typeof fetch;

@@ -99,7 +99,7 @@
 
 ### 共通の小道具 — `src/shared`
 - `url.ts`（ループバックの判定、`baseUrl` の検査）、`redaction.ts`（秘密の伏せ字）、`pdf-text.ts`（PDF から本文を取り出す）、`http-json.ts`（JSON を取る小さな関数。今はどこからも使われていない）、`language.ts`（設定から Clive の言語を決める `languageOf`）。
-- `messages/`: サーバーが作る文の、日本語と英語の対応表。`define.ts`（表の作り方と、コードと差し込みの値を持つ `LocalizedError`）、領域ごとの表（今は `tasks.ts`：タスクの経過・理由・通知・繰り返しの説明）、`index.ts`（全部の表）。文は `{名前}` で値を差し込み、キーは画面が訳すときのコードにもなる。日本語の文を変えると `tests/fixtures/messages-ja.json` との照合が落ちる。
+- `messages/`: サーバーが作る文の、日本語と英語の対応表。`define.ts`（表の作り方と、コードと差し込みの値を持つ `LocalizedError`）、領域ごとの表（`tasks.ts`：タスクの経過・理由・通知・繰り返しの説明、`providers.ts`：モデルの確認の文・直し方・プロバイダのエラー、`engine.ts`：返事の失敗・警告・添付の目印）、`index.ts`（全部の表）。文は `{名前}` で値を差し込み、キーは画面が訳すときのコードにもなる。日本語の文を変えると `tests/fixtures/messages-ja.json` との照合が落ちる。
 - 入口: 部品ごとに別（まとまった入口はない）
 - 使うもの: Node の標準だけ
 

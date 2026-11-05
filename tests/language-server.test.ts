@@ -3,15 +3,19 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import type { AppConfig, Language } from '../src/config/schema.ts';
+import type { AppConfig, Language, ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import { defaultConfig } from '../src/config/store.ts';
-import type { StopReason, ToolCall } from '../src/engine/types.ts';
+import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { ProviderError } from '../src/providers/types.ts';
+import { ProviderError, providerError } from '../src/providers/types.ts';
 import { describeCron } from '../src/tasks/schedule.ts';
 import { TaskError } from '../src/tasks/store.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { fail, FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
+import { CONTEXT_HINTS, contextHint, evaluateContext } from '../src/providers/context.ts';
+import { classifyFetchError, classifyHttpFailure, requireApiKey } from '../src/providers/http.ts';
+import { OllamaAdapter } from '../src/providers/ollama.ts';
+import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
+import { fail, fakeServer, FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
 const MIN = 60_000;
@@ -254,4 +258,210 @@ test('API: タスクの操作の失敗は、コードとパラメータを添え
   await s.app.applyConfig({ ...s.app.config(), language: 'en' });
   const again = await (await api('/api/tasks')).json() as any;
   assert.equal(again.active.find((x: any) => x.title === 'Every day').cron_text, 'Every day at 09:00');
+});
+
+// ── モデルの確認・プロバイダのエラー ──
+
+const probeModel = (over: Partial<ModelConfig> = {}): ModelConfig => ({ id: 'm', provider: 'p', model: 'test-model', contextLength: 8192, minContext: 1024, maxOutputTokens: 512, toolMode: 'native', vision: false, ...over });
+const compatProvider = (baseUrl: string, over: Partial<ProviderConfig> = {}): ProviderConfig => ({ id: 'p', kind: 'openai_compatible', baseUrl, maxParallel: 1, timeoutMs: 10_000, ...over });
+
+test('モデルの確認: 日本語の文は今までの出力と一字も違わない', () => {
+  const facts = { modelId: 'm', server: 'generic', required: 65536 };
+  const tooSmall = evaluateContext({ ...facts, measured: 4096, hint: CONTEXT_HINTS.generic(65536) });
+  assert.equal(tooSmall.message, 'コンテキスト長が足りません: measured 4,096 < required 65,536（実測 4,096）');
+  assert.equal(tooSmall.hint, 'サーバー側のコンテキスト長を 65,536 以上にして、config の contextLength も合わせてください');
+  assert.equal(evaluateContext({ ...facts, declared: 8192, hint: 'x' }).message, 'コンテキスト長が足りません: measured 8,192 < required 65,536（設定 8,192）');
+  assert.equal(evaluateContext({ ...facts, modelMax: 4096, hint: 'x' }).message, 'コンテキスト長が足りません: measured 4,096 < required 65,536（上限 4,096）');
+  const exceeds = evaluateContext({ ...facts, declared: 200000, modelMax: 131072 });
+  assert.equal(exceeds.message, '設定の contextLength（200,000）がモデルの上限（131,072）を超えています');
+  assert.equal(exceeds.hint, 'contextLength を 131,072 以下にしてください');
+  const unknown = evaluateContext(facts);
+  assert.equal(unknown.message, 'コンテキスト長が分かりません（サーバーから取得できず、設定にもありません）');
+  assert.equal(unknown.hint, 'config の models[].contextLength に、サーバー側で設定した長さを書いてください');
+  assert.equal(evaluateContext({ ...facts, declared: 70000 }).message, '使用できます: 70,000 トークン');
+  assert.equal(evaluateContext({ ...facts, declared: 70000, unmeasuredNote: 'probe.note.use_config' }).message, '使用できます: 70,000 トークン（サーバーから長さを取得できないため、設定値を使っています）');
+  assert.equal(CONTEXT_HINTS.hosted(65536), 'コンテキスト長が 65,536 以上のモデルを選んでください');
+  assert.equal(CONTEXT_HINTS.ollama(65536), 'config の contextLength を 65,536 以上にしてください（Clive は毎回 num_ctx として送ります）。VRAM が足りないと遅くなるか読み込みに失敗します');
+  assert.equal(CONTEXT_HINTS.lmstudio(65536), 'LM Studio でモデルを読み込むときの Context Length を 65,536 以上にして読み込み直し、contextLength も合わせてください');
+  assert.equal(CONTEXT_HINTS.llamacpp(65536), 'llama-server を -c で起動し、スロットあたり 65,536 以上にしてください（-np でスロットを増やすと -c が分割されます）');
+  assert.equal(CONTEXT_HINTS.vllm(65536), 'vLLM を --max-model-len 65,536 以上で起動してください');
+  assert.equal(CONTEXT_HINTS.tabbyapi(65536), 'TabbyAPI の config.yml（model の max_seq_len）を 65,536 以上にしてモデルを読み込み直し、contextLength も合わせてください（cache_size も同じ以上に）');
+});
+
+test('プロバイダのエラー: 日本語の文は今までと同じで、コードと値を添え、英語では英語で書く', () => {
+  const cases: Array<[ProviderError, string, string, string]> = [
+    [classifyHttpFailure(401, 'bad key'), '認証に失敗しました（HTTP 401: bad key）', 'Authentication failed (HTTP 401: bad key)', 'http.auth'],
+    [classifyHttpFailure(429, ''), '利用制限に達しました（HTTP 429）', 'The usage limit was reached (HTTP 429)', 'http.rate_limit'],
+    [classifyHttpFailure(404, ''), 'モデルまたは API が見つかりません（HTTP 404）', 'The model or API was not found (HTTP 404)', 'http.not_found'],
+    [classifyHttpFailure(503, 'down'), 'プロバイダ側のエラーです（HTTP 503: down）', 'The provider reported an error (HTTP 503: down)', 'http.server'],
+    [classifyHttpFailure(400, ''), 'リクエストが拒否されました（HTTP 400）', 'The request was rejected (HTTP 400)', 'http.rejected'],
+    [classifyHttpFailure(400, 'maximum context length exceeded'), '入力がモデルのコンテキスト長を超えました（HTTP 400: maximum context length exceeded）', 'The input exceeded the context length of the model (HTTP 400: maximum context length exceeded)', 'http.context_overflow'],
+    [classifyFetchError(Object.assign(new Error('x'), { cause: { code: 'ECONNREFUSED' } }), new AbortController().signal), 'プロバイダに接続できません（ECONNREFUSED）', 'Cannot connect to the provider (ECONNREFUSED)', 'connect.code'],
+    [classifyFetchError(new Error('x'), new AbortController().signal), 'プロバイダに接続できません', 'Cannot connect to the provider', 'connect'],
+  ];
+  for (const [error, ja, en, code] of cases) {
+    assert.equal(error.message, ja);
+    assert.equal(error.text('ja'), ja);
+    assert.equal(error.text('en'), en);
+    assert.equal(error.code, code);
+  }
+  assert.deepEqual(cases[0]![0].params, { status: 401, suffix: ': bad key' });
+  assert.throws(() => requireApiKey(compatProvider('http://127.0.0.1:1/v1', { apiKeyEnv: 'NOPE_KEY' }), {}), (e: unknown) => {
+    const error = e as ProviderError;
+    return error.message === '環境変数 NOPE_KEY に API キーが設定されていません（.env か OS の環境変数に書いてください）'
+      && error.text('en') === 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)' && error.code === 'key.missing';
+  });
+  for (const kind of ['ollama', 'lmstudio', 'llamacpp', 'vllm', 'tabbyapi', 'generic', 'hosted'] as const) noJapanese(`hint ${kind}`, contextHint('en', kind, 65536));
+});
+
+test('モデルの確認（英語）: 接続先ごとの message / hint / code', async t => {
+  const tabby = await fakeServer((_req, _body, res) => { res.writeHead(200); res.end(JSON.stringify({ id: 'other-model', parameters: { max_seq_len: 4096 } })); });
+  const vllm = await fakeServer((_req, _body, res) => { res.writeHead(200); res.end(JSON.stringify({ data: [{ id: 'another' }] })); });
+  const small = await fakeServer((_req, _body, res) => { res.writeHead(200); res.end(JSON.stringify({ default_generation_settings: { n_ctx: 2048 } })); });
+  const gone = await fakeServer((_req, _body, res) => { res.writeHead(404); res.end('{}'); });
+  t.after(async () => { for (const s of [tabby, vllm, small, gone]) await s.close(); });
+
+  const tabbyResult = await new OpenAiCompatibleAdapter(compatProvider(`${tabby.url}/v1`, { server: 'tabbyapi' }), {}).probe(probeModel(), 65536, 'en');
+  assert.equal(tabbyResult.status, 'not_found');
+  assert.equal(tabbyResult.message, 'TabbyAPI has "other-model" loaded, not "test-model"');
+  assert.equal(tabbyResult.hint, 'Load the model you want in TabbyAPI, or make models[].model match');
+  assert.equal(tabbyResult.messageCode, 'probe.tabby_other');
+  assert.deepEqual(tabbyResult.messageParams, { current: 'other-model', model: 'test-model' });
+  const tabbyJa = await new OpenAiCompatibleAdapter(compatProvider(`${tabby.url}/v1`, { server: 'tabbyapi' }), {}).probe(probeModel(), 65536);
+  assert.equal(tabbyJa.message, 'TabbyAPI が読み込んでいるのは「other-model」で、「test-model」ではありません');
+  assert.equal(tabbyJa.hint, 'TabbyAPI で目的のモデルを読み込むか、models[].model を合わせてください');
+
+  const vllmResult = await new OpenAiCompatibleAdapter(compatProvider(`${vllm.url}/v1`, { server: 'vllm' }), {}).probe(probeModel(), 65536, 'en');
+  assert.equal(vllmResult.message, 'vLLM does not have the model "test-model"');
+
+  const tooSmall = await new OpenAiCompatibleAdapter(compatProvider(`${small.url}/v1`, { server: 'llamacpp' }), {}).probe(probeModel(), 65536, 'en');
+  assert.equal(tooSmall.status, 'too_small');
+  assert.equal(tooSmall.message, 'The context length is too small: measured 2,048 < required 65,536 (measured 2,048)');
+  assert.equal(tooSmall.messageCode, 'probe.too_small');
+  assert.equal(tooSmall.hint, 'Start llama-server with -c so that each slot has 65,536 or more (raising the slots with -np splits -c)');
+
+  const missing = await new OllamaAdapter({ id: 'p', kind: 'ollama', baseUrl: gone.url, maxParallel: 1, timeoutMs: 10_000 }, {}).probe(probeModel(), 65536, 'en');
+  assert.equal(missing.status, 'not_found');
+  assert.equal(missing.message, 'Ollama does not have the model "test-model" (fetch it with: ollama pull test-model)');
+  const unreachable = await new OllamaAdapter({ id: 'p', kind: 'ollama', baseUrl: 'http://127.0.0.1:9', maxParallel: 1, timeoutMs: 10_000 }, {}).probe(probeModel(), 65536, 'en');
+  assert.equal(unreachable.status, 'unreachable');
+  assert.equal(unreachable.message, 'Cannot connect to Ollama (http://127.0.0.1:9). Check that it is running');
+  const noKey = await new OpenAiCompatibleAdapter(compatProvider('http://127.0.0.1:9/v1', { apiKeyEnv: 'NOPE_KEY' }), {}).probe(probeModel(), 65536, 'en');
+  assert.equal(noKey.status, 'no_api_key');
+  assert.equal(noKey.message, 'The API key is not set in the environment variable NOPE_KEY (put it in .env or in the OS environment variables)');
+  assert.equal(noKey.messageCode, 'key.missing');
+  for (const r of [tabbyResult, vllmResult, tooSmall, missing, unreachable, noKey]) { noJapanese('probe message', r.message); noJapanese('probe hint', r.hint); }
+});
+
+test('モデルの確認: 設定の language がアダプタの確認まで届き、設定を保存するたびに新しい言語で確認し直す', async t => {
+  const s = await startApp(t, { language: 'en' });
+  assert.deepEqual(s.adapter().probeLanguages, ['en']);
+  await s.app.applyConfig({ ...s.app.config(), language: 'ja' });
+  assert.deepEqual(s.adapter().probeLanguages, ['ja']);
+});
+
+// ── エンジンの失敗・警告 ──
+
+function collect(app: App): RunEvent[] {
+  const events: RunEvent[] = [];
+  app.bus.subscribe(e => events.push(e.event));
+  return events;
+}
+
+test('エンジンの失敗と警告（英語）: 文は英語で、コードと値を添え、日本語は今までのまま', async t => {
+  for (const language of ['ja', 'en'] as const) {
+    const s = await startApp(t, { language, edit: c => { c.routing.retriesPerModel = 1; c.tools.maxIterations = 1; } });
+    const events = collect(s.app);
+    const pick = <T>(ja: T, en: T): T => (language === 'ja' ? ja : en);
+    const send = async (id: string, text: string) => {
+      const outcome = s.app.engine.send(id, text);
+      assert.ok(outcome.ok);
+      return s.app.engine.wait(outcome.runId)!;
+    };
+
+    // 再試行 → 失敗
+    const down = () => fail(providerError('provider_error', 'http.server', { status: 503, suffix: '' }, { retryable: true, status: 503, retryAfterMs: 1 }));
+    s.adapter().scripts.push(down(), down());
+    const failed = await send('c1', 'hi');
+    assert.ok(!failed.ok);
+    const retrying = events.find(e => e.type === 'warning' && e.code === 'retrying') as Extract<RunEvent, { type: 'warning' }>;
+    assert.equal(retrying.message, pick('プロバイダ側のエラーです（HTTP 503）。1 秒後に再試行します（1/1）', 'The provider reported an error (HTTP 503). Retrying in 1 s (1/1)'));
+    assert.deepEqual(retrying.params, { message: pick('プロバイダ側のエラーです（HTTP 503）', 'The provider reported an error (HTTP 503)'), seconds: 1, attempt: 1, retries: 1, errorCode: 'provider.http.server' });
+    const end = events.findLast(e => e.type === 'run.end') as Extract<RunEvent, { type: 'run.end' }>;
+    assert.equal(end.errorKind, 'provider_error');
+    assert.equal(end.errorMessage, pick('プロバイダ側のエラーです（HTTP 503）', 'The provider reported an error (HTTP 503)'));
+    assert.equal(end.errorCode, 'provider.http.server');
+    assert.deepEqual(end.errorParams, { status: 503, suffix: '' });
+    if (!failed.ok) assert.equal(failed.errorCode, 'provider.http.server');
+
+    // 途中まで書いて失敗
+    s.adapter().scripts.push(fail(providerError('provider_error', 'http.rejected', { status: 400, suffix: '' }, { retryable: false }), 'partial text'));
+    await send('c2', 'hi');
+    const discarded = events.find(e => e.type === 'warning' && e.code === 'partial_discarded') as Extract<RunEvent, { type: 'warning' }>;
+    assert.equal(discarded.message, pick('返事の途中で失敗したため、途中までの内容は保存しませんでした', 'The reply failed partway, so the part written so far was not saved'));
+
+    // ツールの呼び直しが上限
+    s.adapter().scripts.push(toolCall('task_list', {}));
+    await send('c3', 'hi');
+    const limit = events.find(e => e.type === 'warning' && e.code === 'max_iterations') as Extract<RunEvent, { type: 'warning' }>;
+    assert.equal(limit.message, pick('ツールを使った呼び直しが上限（1 回）に達したため止めました。続けるなら「続けて」と送ってください', 'Stopped because the tool-calling loop reached its limit (1 times). Send "continue" if you want it to keep going'));
+    assert.deepEqual(limit.params, { max: 1 });
+
+    // 止められた返事（途中まで保存される）
+    s.adapter().scripts.push(hang());
+    const outcome = s.app.engine.send('c4', 'hi');
+    assert.ok(outcome.ok);
+    await waitFor(() => s.adapter().calls.length >= 4, 'hang starts');
+    await new Promise(r => setTimeout(r, 30));
+    s.app.engine.stop(outcome.runId);
+    const cancelled = await s.app.engine.wait(outcome.runId);
+    assert.ok(cancelled && !cancelled.ok);
+    if (cancelled && !cancelled.ok) { assert.equal(cancelled.errorMessage, pick('中止しました', 'Stopped')); assert.equal(cancelled.errorCode, 'provider.cancelled'); }
+    assert.equal(s.app.conversations.messages('c4').at(-1)!.text, `working…\n\n${pick('（途中で止めました）', '(stopped partway)')}`);
+
+    // 忙しい・やり直す発言が無い
+    s.adapter().scripts.push(hang());
+    const running = s.app.engine.send('c5', 'hi');
+    assert.ok(running.ok);
+    const busy = s.app.engine.send('c5', 'again');
+    assert.ok(!busy.ok);
+    if (!busy.ok) {
+      assert.equal(busy.errorMessage, pick('この会話はまだ返事を作っています。止めるか、終わるまで待ってください', 'This conversation is still writing a reply. Stop it or wait until it finishes'));
+      assert.equal(busy.errorCode, 'engine.send.busy_chat');
+    }
+    s.app.engine.stop(running.runId);
+    await s.app.engine.wait(running.runId);
+    const nothing = s.app.engine.retry('c-none');
+    assert.ok(!nothing.ok);
+    if (!nothing.ok) assert.equal(nothing.errorCode, 'engine.send.nothing_to_retry');
+  }
+});
+
+test('エンジンの失敗（英語）: 使えるモデルが無い・ツールを正しく呼べない・内部エラー', async t => {
+  const s = await startApp(t, { language: 'en' });
+  s.adapter().probeResult = { status: 'too_small', message: 'x' };
+  await s.app.status.probeAll(s.app.config());
+  const blocked = s.app.engine.send('c1', 'hi');
+  assert.ok(!blocked.ok);
+  if (!blocked.ok) {
+    assert.equal(blocked.errorCode, 'engine.no_usable');
+    assert.match(blocked.errorMessage, /^Nothing was sent because there is no model that can be used\. Check the settings screen\.\n- m: x$/u);
+    noJapanese('no usable model', blocked.errorMessage);
+  }
+  s.adapter().probeResult = {};
+  await s.app.status.probeAll(s.app.config());
+
+  const events = collect(s.app);
+  for (let i = 0; i < 3; i++) s.adapter().scripts.push(toolCall('no_such_tool', {}));
+  const outcome = s.app.engine.send('c2', 'hi');
+  assert.ok(outcome.ok);
+  const result = await s.app.engine.wait(outcome.runId)!;
+  assert.ok(result && !result.ok);
+  if (result && !result.ok) {
+    assert.equal(result.errorMessage, 'The model could not call tools in a valid form (3 times in a row). Switch to a model that handles tools well, or set toolMode to json_fallback');
+    assert.equal(result.errorCode, 'engine.tool.invalid_streak');
+    assert.equal(result.detail?.hint, 'Set models[].toolMode to json_fallback, or reduce the number of tools with maxTools');
+  }
+  const toolResults = events.filter(e => e.type === 'tool.result');
+  assert.ok(toolResults.length >= 1);
 });
