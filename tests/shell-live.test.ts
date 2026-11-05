@@ -188,6 +188,33 @@ for (const shell of ['powershell', 'bash'] as const) {
   });
 }
 
+// 審査の指摘（深い審査）: 洗い出しで core.quotepath と core.excludesFile まで落ち、日本語のファイル名が八進数で出る・全体の無視の一覧が効かない、が起きた。Clive のシェルを通して、本物の git で確かめる
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: ホームの core.quotepath=false と core.excludesFile は、Clive の git status でも効く（日本語のファイル名がそのまま出て、全体の無視の一覧が効く）`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const home = join(s.paths.workspace, '..', 'quote-home');
+    mkdirSync(home, { recursive: true });
+    const ignore = join(home, 'ignore-global');
+    writeFileSync(ignore, '*.secret-log\n');
+    writeFileSync(join(home, '.gitconfig'), `[user]\n\tname = Taro\n\temail = taro@example.com\n[core]\n\tquotepath = false\n\texcludesFile = ${ignore.replaceAll('\\', '/')}\n`);
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    t.after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    delete process.env.XDG_CONFIG_HOME;
+    mkdirSync(join(root, 'q'));
+    spawnSync('git', ['init', '-q'], { cwd: join(root, 'q') });
+    writeFileSync(join(root, 'q', 'ひらがな.txt'), 'x');
+    writeFileSync(join(root, 'q', 'build.secret-log'), 'x');
+    const outcome = await s.call(shell === 'powershell' ? 'cd q; git status --short' : 'cd q && git status --short');
+    assert.equal(outcome.decision, 'allow', outcome.output.content);
+    assert.match(outcome.output.content, /\?\? ひらがな\.txt/u, '日本語のファイル名が、そのまま出ていない');
+    assert.doesNotMatch(outcome.output.content, /secret-log/u, '全体の無視の一覧が効いていない');
+  });
+}
+
 // 審査の追加の指摘: cd で動いた先のリポジトリの core.fsmonitor は、許可された git status で動いていた（最初の作業フォルダの設定しか見ていなかった）。
 // 本物の git で、今回だけの確かめを断れば動かないこと、問題のないリポジトリは確かめなしで動くことを確かめる
 for (const shell of ['powershell', 'bash'] as const) {
