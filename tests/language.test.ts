@@ -10,13 +10,15 @@ import { CuriosityStore } from '../src/curiosity/store.ts';
 import { curiosityText } from '../src/curiosity/text.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { compactPrompt, compactSpeaker, compactSystem, summarySection } from '../src/engine/prompts.ts';
+import { compactPrompt, compactSpeaker, compactSystem, snapshotLanguageKey, summarySection, withReplyReminder } from '../src/engine/prompts.ts';
 import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
+import type { ChatMessage } from '../src/engine/types.ts';
 import { jsonFallbackInstructions, toJsonFallbackHistory } from '../src/engine/toolcall-parse.ts';
 import { buildDynamic, buildSnapshot, defaultTexts, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { bookPressureText, reviewPrompt, transcriptOf, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
+import type { ModelRequest } from '../src/providers/types.ts';
 import { languageOf } from '../src/shared/language.ts';
 import { taskPrompt } from '../src/tasks/worker.ts';
 import { SkillStore } from '../src/tools/skills/store.ts';
@@ -524,6 +526,84 @@ test('日本語の固定文: json_fallback の説明・スキル一覧・好奇�
   assert.equal(text.doneCriteriaQuiet, '分かったことを task_complete の summary にまとめた（知らせる価値が無ければ notify=false）');
 });
 
+// ── 言語を変えた会話にだけ付く、最後の発言への一行の注意 ──
+
+const EN_REMINDER = /\n\n\[System note: the reply language of this conversation is now English\. /u;
+const JA_REMINDER = /\n\n\[システムからの注意: この会話の返事の言語は日本語になりました。/u;
+
+test('返事の言語の注意: 最後のユーザーの発言だけに足した写しを返し、元は変えない', () => {
+  const original: ChatMessage[] = [
+    { role: 'user', content: 'first' },
+    { role: 'assistant', content: 'a' },
+    { role: 'user', content: 'second' },
+    { role: 'tool', toolCallId: '1', name: 'file_list', content: 'out' },
+  ];
+  const snapshot = JSON.stringify(original);
+  const en = withReplyReminder(original, 'en');
+  assert.equal(JSON.stringify(original), snapshot, '元の配列と発言は変えない');
+  assert.deepEqual(en.map(m => m.content), ['first', 'a', en[2]!.content, 'out']);
+  assert.match(en[2]!.content, /^second\n\n\[System note: /u);
+  assert.match(withReplyReminder(original, 'ja')[2]!.content, /^second\n\n\[システムからの注意: /u);
+  assert.doesNotMatch(withReplyReminder(original, 'en')[2]!.content, CJK);
+  assert.deepEqual(withReplyReminder([{ role: 'assistant', content: 'a' }], 'en'), [{ role: 'assistant', content: 'a' }], 'ユーザーの発言が無ければそのまま');
+});
+
+test('返事の言語の注意: 言語を変えた会話のモデルへの要求にだけ付き、保存も表示もされない', async t => {
+  const s = await startApp(t);
+  const contents = (call: ModelRequest) => call.messages.map(m => m.content);
+  const stored = (id: string) => s.app.conversations.messages(id).map(m => m.text);
+
+  await say(s, 'c1', 'one');
+  const second = await say(s, 'c1', 'two');
+  assert.deepEqual(contents(second), ['one', 'ok', 'two'], '言語を変えていない会話は、保存された発言そのまま（注意なし）');
+
+  await s.setLanguage('en');
+  const third = await say(s, 'c1', 'Hello again');
+  assert.deepEqual(contents(third).slice(0, 4), ['one', 'ok', 'two', 'ok'], '前の発言は変わらない');
+  assert.match(contents(third).at(-1)!, /^Hello again/u);
+  assert.match(contents(third).at(-1)!, EN_REMINDER, 'ja で始まった会話を en にした次の要求には英語の注意が付く');
+  const fourth = await say(s, 'c1', 'And again');
+  assert.match(contents(fourth).at(-1)!, EN_REMINDER, '会話の言語が元に戻るまで、毎回付く');
+  assert.doesNotMatch(contents(fourth).slice(0, -1).join('\n'), /System note/u, '前の発言には付けない');
+  assert.deepEqual(stored('c1'), ['one', 'ok', 'two', 'ok', 'Hello again', 'ok', 'And again', 'ok'], '保存された発言に注意は入らない');
+
+  await s.setLanguage('ja');
+  const back = await say(s, 'c1', 'three');
+  assert.deepEqual(contents(back).slice(-1), ['three'], '始めた言語（ja）に戻れば、また付かない');
+  assert.doesNotMatch(contents(back).join('\n'), /System note|システムからの注意/u);
+
+  await s.setLanguage('en');
+  const fresh = await say(s, 'c2', 'Hello');
+  assert.deepEqual(contents(fresh), ['Hello'], 'en で始めた会話は、変えるまで付かない');
+  await s.setLanguage('ja');
+  const switched = await say(s, 'c2', 'こんにちは');
+  assert.match(contents(switched).at(-1)!, JA_REMINDER, 'en で始まった会話を ja にした次の要求には日本語の注意が付く');
+  assert.deepEqual(stored('c2'), ['Hello', 'ok', 'こんにちは', 'ok']);
+});
+
+test('返事の言語の注意: 言語を記録していない前からある会話は、日本語で始まったものとして扱う', async t => {
+  const s = await startApp(t);
+  s.app.conversations.append('legacy', { role: 'user', content: 'old question' });
+  s.app.conversations.append('legacy', { role: 'assistant', content: 'old answer' });
+  assert.ok(s.app.conversations.setSnapshotOnce('legacy', '# Clive の基本ルール', 'hash'));
+  assert.equal(s.app.kv.get(snapshotLanguageKey('legacy')), undefined);
+
+  const ja = await say(s, 'legacy', 'new question');
+  assert.deepEqual(ja.messages.map(m => m.content), ['old question', 'old answer', 'new question']);
+  await s.setLanguage('en');
+  const en = await say(s, 'legacy', 'another');
+  assert.match(en.messages.at(-1)!.content as string, EN_REMINDER);
+});
+
+test('返事の言語の注意: 新しい会話は、始めたときの言語を記録する', async t => {
+  const s = await startApp(t, { language: 'en' });
+  await say(s, 'c1', 'Hello');
+  assert.equal(s.app.kv.get(snapshotLanguageKey('c1')), 'en');
+  await s.setLanguage('ja');
+  await say(s, 'c2', 'こんにちは');
+  assert.equal(s.app.kv.get(snapshotLanguageKey('c2')), 'ja');
+});
+
 // ── 実際の流れ ──
 
 test('裏で動くタスクの実行の指示が、language に合わせて渡る', async t => {
@@ -576,6 +656,7 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   web.setOrigins([origin]);
   const api = (path: string, init: RequestInit = {}) => fetch(`${origin}${path}`, { ...init, headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), Origin: origin } });
   const chatRequests = () => model.requests.filter(r => r.path.endsWith('/chat/completions'));
+  const lastSent = () => chatRequests().at(-1)!.body.messages.at(-1).content as string;
   const speak = async (id: string, text: string) => {
     const before = chatRequests().length;
     const sent = await api(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
@@ -592,6 +673,7 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   const first = await speak('c1', 'こんにちは');
   assert.ok(first.startsWith('# Clive の基本ルール'));
   assert.ok(first.includes(JA_DIRECTIVE) && !first.includes(EN_DIRECTIVE));
+  assert.equal(lastSent(), 'こんにちは', '言語を変えていない会話の最後の発言には何も足さない');
 
   const view = await (await api('/api/settings')).json() as any;
   assert.equal((await api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: { ...view.config, language: 'en' } }) })).status, 200);
@@ -599,8 +681,11 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   const second = await speak('c1', 'Hello again');
   assert.ok(second.includes(EN_DIRECTIVE) && !second.includes(JA_DIRECTIVE), '同じ会話の次の送信から英語の指示');
   assert.ok(second.startsWith('# Clive の基本ルール'), '会話の途中では固定の system（日本語のルール）は変えない');
+  assert.match(lastSent(), /^Hello again\n\n\[System note: the reply language of this conversation is now English\. /u, '言語を変えた会話の最後の発言にだけ一行の注意が付く');
+  assert.equal(((await (await api('/api/conversations/c1/messages')).json()) as any).messages.at(-2).text, 'Hello again', '画面から見える発言には注意が入らない');
 
   const fresh = await speak('c2', 'Hello');
   assert.ok(fresh.startsWith("# Clive's basic rules"), '新しい会話は英語のルールで始まる');
   assert.ok(fresh.includes(EN_DIRECTIVE));
+  assert.equal(lastSent(), 'Hello', 'en で始めた新しい会話には何も足さない');
 });

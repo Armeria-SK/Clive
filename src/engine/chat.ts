@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AppConfig, ModelConfig, ProviderConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, LANGUAGES, type AppConfig, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
@@ -23,7 +23,7 @@ import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJs
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
 import { estimateTextTokens } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
-import { compactPrompt, compactSpeaker, compactSystem, summarySection } from './prompts.ts';
+import { compactPrompt, compactSpeaker, compactSystem, snapshotLanguageKey, summarySection, withReplyReminder } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
@@ -356,6 +356,8 @@ export class ChatEngine {
         const system = { frozen: p.snapshot, dynamic };
         let history = stored.map(m => m.message);
         if (fallbackMode) history = toJsonFallbackHistory(history, language);
+        const frozenLanguage = LANGUAGES.find(l => l === d.kv.get(snapshotLanguageKey(p.conversationId))) ?? DEFAULT_LANGUAGE;
+        if (frozenLanguage !== language) history = withReplyReminder(history, language);
         const apiTools = fallbackMode ? [] : specs;
         const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
         let fitted;
@@ -474,7 +476,7 @@ export class ChatEngine {
       ...(d.memory ? { memories: renderBooks(d.memory.list(), language) } : {}),
       ...(d.skills ? { skills: d.skills.index(language) } : {}),
     }, language);
-    d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash);
+    if (d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash)) d.kv.set(snapshotLanguageKey(conversationId), language);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
 

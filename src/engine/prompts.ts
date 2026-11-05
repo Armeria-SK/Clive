@@ -1,4 +1,5 @@
 import type { Language } from '../config/schema.ts';
+import type { ChatMessage } from './types.ts';
 
 interface EngineText {
   summaryHeading: string;
@@ -59,4 +60,21 @@ export function compactPrompt(input: { previous: string | null; transcript: stri
     input.previous ? `\n${text.compactPreviousHeading}\n${input.previous}` : '',
     `\n${text.compactTranscriptHeading}\n${input.transcript}`,
   ].join('\n');
+}
+
+const REPLY_REMINDER: Record<Language, string> = {
+  ja: '[システムからの注意: この会話の返事の言語は日本語になりました。これまでの返事が英語でも、日本語で返事を書いてください。ユーザーが別の言語で話しかけたら、その言語で返してください。]',
+  en: '[System note: the reply language of this conversation is now English. Write your reply in English even if your earlier replies were in Japanese. If the user writes to you in another language, reply in that language.]',
+};
+
+export function snapshotLanguageKey(conversationId: string): string {
+  return `snapshot-language:${conversationId}`;
+}
+
+export function withReplyReminder(messages: readonly ChatMessage[], language: Language): ChatMessage[] {
+  const copy = [...messages];
+  const index = copy.findLastIndex(m => m.role === 'user');
+  const target = copy[index];
+  if (target?.role === 'user') copy[index] = { ...target, content: `${target.content}\n\n${REPLY_REMINDER[language]}` };
+  return copy;
 }

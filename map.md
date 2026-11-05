@@ -46,8 +46,8 @@
 
 ### 会話のエンジン — `src/engine`
 - `chat.ts`: `ChatEngine`。送信・やり直し・タスクの実行・振り返りの実行を受け持つ。モデルの並びを順に試し、再試行、予備のモデルへの切り替え、コンテキストへの収め方（`fit.ts`）、古い発言の要約、サーバー側の切り捨ての疑いの検知、道具呼び出しの繰り返しをここで行う。
-- 会話の system の文（ルール・SOUL・USER・記憶・スキル一覧）は、会話ごとに最初の 1 回で固定する。毎回変わる文（現在時刻・要約）は別に組み立てる（`workspace.ts` の `buildSnapshot` / `buildDynamic`）。`workspace.ts` は `SOUL.md` などの初期ファイルを置く役目も持つ。返事の言語の指示は、固定される system ではなく毎回組み立てる動的な部分（`buildDynamic`）に入れるので、すでにある会話にも言語を変えた次のリクエストから付く（ただし日本語で続いている会話をモデルが英語に切り替えるとは限らない。実機の確認結果は README の「Clive の言語」）。ルールと見出しは `language` に合う版で組み立てるが、固定されるのは新しい会話からだけ。
-- `prompts.ts`: 会話の要約の指示と、要約の見出しの言語別の文。ルールと人格の初期値の読み方（日本語は `templates/` の直下、英語は `templates/en/`、無ければ日本語に戻る）と、起動のときの「無いファイルにだけ写す」も `workspace.ts` にある。
+- 会話の system の文（ルール・SOUL・USER・記憶・スキル一覧）は、会話ごとに最初の 1 回で固定する。毎回変わる文（現在時刻・要約）は別に組み立てる（`workspace.ts` の `buildSnapshot` / `buildDynamic`）。`workspace.ts` は `SOUL.md` などの初期ファイルを置く役目も持つ。返事の言語の指示は、固定される system ではなく毎回組み立てる動的な部分（`buildDynamic`）に入れるので、すでにある会話にも言語を変えた次のリクエストから付く。それだけでは日本語で続く会話が英語に切り替わらなかったため、会話の始めに固定したときの言語（kv の `snapshot-language:<会話ID>`。記録が無い前からある会話は ja）と今の `language` が違う会話にだけ、送る写しの最後のユーザーの発言へ 1 行の注意を足す（`prompts.ts` の `withReplyReminder`。保存も表示もしない）。ルールと見出しは `language` に合う版で組み立てるが、固定されるのは新しい会話からだけ。
+- `prompts.ts`: 会話の要約の指示と、要約の見出しの言語別の文、言語を変えた会話の最後の発言に足す 1 行の注意。ルールと人格の初期値の読み方（日本語は `templates/` の直下、英語は `templates/en/`、無ければ日本語に戻る）と、起動のときの「無いファイルにだけ写す」も `workspace.ts` にある。
 - ほか: `bus.ts`（出来事の履歴と作成中の下書き。SSE が読む）、`status.ts`（モデルごとのコンテキスト長の確認結果と休ませる状態）、`health.ts`（失敗が続いたら通知して、しばらく予備のモデルを先に使わせる）、`tokens.ts`（量の見積もり）、`toolcall-parse.ts`（本文に書かれた道具呼び出しを拾う。`json_fallback` の道具の説明の文は言語別）、`types.ts`（メッセージ・出来事・結果の型）。
 - 入口: `src/engine/chat.ts`
 - 使うもの: `providers`（モデルの呼び出し）、`tools`（`pipeline` `registry` `policy`）、`memory`（`renderBooks`）、`uploads`（`stripAttachments`）、`db` `config` `tasks`（渡される）、`templates/`（`workspace.ts` 経由）、`src/shared`（`language.ts`）
