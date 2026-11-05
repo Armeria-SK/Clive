@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type Approval } from './api.ts';
+import { decideApproval, useDecisionPending, type ApprovalDecision } from './approval-decide.ts';
 import { approvalFraction, formatCountdown } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import { useNow } from './hooks.ts';
 import { useT } from './i18n/index.ts';
 import { Icon } from './icons.tsx';
-
-type Decision = 'once' | 'conversation' | 'deny';
 
 let windowRequest: Promise<number | null> | null = null;
 
@@ -33,12 +32,12 @@ function useApprovalWindow(approval: Approval): number {
 
 function useDecision(approval: Approval) {
   const t = useT();
-  const [busy, setBusy] = useState(false);
+  const busy = useDecisionPending(approval.id);
   const [error, setError] = useState('');
-  async function decide(decision: Decision): Promise<void> {
-    setBusy(true); setError('');
-    try { await api.decide(approval.id, decision); }
-    catch (e) { setError(e instanceof ApiError ? e.message : t('approval.failed')); setBusy(false); }
+  async function decide(decision: ApprovalDecision): Promise<void> {
+    setError('');
+    try { await decideApproval(approval.id, decision); }
+    catch (e) { setError(e instanceof ApiError ? e.message : t('approval.failed')); }
   }
   return { busy, error, decide };
 }

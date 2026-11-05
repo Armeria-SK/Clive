@@ -103,7 +103,7 @@
 .chat-pre { flex-direction: column; gap: 12px; padding: 14px 16px; }
 .chat-pre-head { display: flex; align-items: flex-start; gap: 10px; }
 .chat-pre-message { margin: 0; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.shell[data-mode="wide"] .chat-pre-message, .shell[data-mode="wide"] .chat-pre-hint { text-align: justify; }
+.shell[data-mode="wide"] .chat-pre-hint { text-align: justify; }
 .chat-pre-hint { font-size: 13px; overflow-wrap: anywhere; }
 .chat-pre-hint strong { margin-right: 12px; font-weight: 600; }
 .chat-numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; padding-top: 10px; border-top: 1px solid var(--color-divider); }

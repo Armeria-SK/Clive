@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type Approval, type Message, type ModelView, type Profile, type UploadView } from './api.ts';
 import { ApprovalDock } from './ApprovalCard.tsx';
+import { decideApproval } from './approval-decide.ts';
 import {
-  contextCardOf, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels, runOverflowOf, sendFailureOf, toolInputSummary,
-  type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels, runOverflowOf, sendFailureOf, toolInputSummary,
+  type ApprovalGate, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import {
@@ -53,12 +54,7 @@ interface Failure extends SendFailure { card: ContextCardData | null }
 let runsRequest: Promise<ChatRunRow[]> | null = null;
 
 function fetchRecentRuns(): Promise<ChatRunRow[]> {
-  runsRequest ??= (async () => {
-    const res = await fetch('/api/runs?limit=500');
-    const body = await res.json().catch(() => ({})) as { runs?: ChatRunRow[] };
-    if (!res.ok) throw new ApiError(res.status, body);
-    return body.runs ?? [];
-  })().finally(() => { runsRequest = null; });
+  runsRequest ??= api.runs(500).then(result => result.runs).finally(() => { runsRequest = null; });
   return runsRequest;
 }
 
@@ -105,6 +101,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const thread = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const created = useRef<string | null>(null);
+  const frontGate = useRef<ApprovalGate>({ id: null, since: 0 });
   const unresolved = useRef(new Set<string>());
   const seen = useRef(new Set<string>());
   const primed = useRef(false);
@@ -145,6 +142,8 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const errorNotice = notices.find(n => n.kind === 'error');
   const visible = messages.filter(m => !(m.role === 'assistant' && !m.text.trim() && m.toolCalls?.length));
   const assistantName = profile?.name ?? 'Clive';
+  const frontApprovalId = approvals[0]?.id ?? null;
+  useLayoutEffect(() => { frontGate.current = advanceApprovalGate(frontGate.current, frontApprovalId, Date.now()); }, [frontApprovalId]);
 
   useLayoutEffect(() => {
     const el = thread.current;
@@ -253,10 +252,9 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
     }
   }
 
-  function approveOnce(): void {
-    const first = approvals[0];
-    if (!first) return;
-    void api.decide(first.id, 'once').catch(error => {
+  function approveOnce(shownId: string): void {
+    if (!approvalEnterAllowed(frontGate.current, shownId, Date.now())) return;
+    void decideApproval(shownId, 'once').catch(error => {
       toast({ kind: 'info', icon: 'alert', title: t('approval.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
     });
   }
@@ -294,7 +292,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   }
   if (failure) {
     push('send-failure', 'fail', failure.context
-      ? <PreSendCard message={failure.card?.message || failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} />
+      ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} />
       : <SendErrorCard message={failure.message} hint={failure.hint} />);
   }
 
@@ -327,7 +325,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
           <ApprovalDock approvals={approvals} />
           <Composer
             textareaRef={textarea} fileInputRef={fileInput} input={input} attached={attached} uploading={uploading} sending={sending} generating={Boolean(draft)}
-            hasApproval={approvals.length > 0} assistantName={assistantName} modelName={modelName}
+            approvalId={frontApprovalId} assistantName={assistantName} modelName={modelName}
             onInput={setInput} onAttach={files => void attach(files)} onDetach={id => setAttached(list => list.filter(a => a.id !== id))}
             onSend={() => void send()} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
           />

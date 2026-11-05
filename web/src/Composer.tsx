@@ -16,7 +16,7 @@ interface Props {
   uploading: boolean;
   sending: boolean;
   generating: boolean;
-  hasApproval: boolean;
+  approvalId: string | null;
   assistantName: string;
   modelName: string | null;
   onInput: (value: string) => void;
@@ -24,13 +24,14 @@ interface Props {
   onDetach: (id: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onApproveOnce: () => void;
+  onApproveOnce: (approvalId: string) => void;
   onSlash: (command: SlashCommand) => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
 }
 
 export function Composer(props: Props) {
-  const { textareaRef, input, attached, uploading, sending, generating, hasApproval, assistantName, modelName } = props;
+  const { textareaRef, input, attached, uploading, sending, generating, approvalId, assistantName, modelName } = props;
+  const hasApproval = approvalId !== null;
   const t = useT();
   const [focused, setFocused] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -61,7 +62,7 @@ export function Composer(props: Props) {
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (empty && hasApproval) props.onApproveOnce();
+      if (empty && approvalId !== null) props.onApproveOnce(approvalId);
       else props.onSend();
     }
   }

@@ -3,9 +3,10 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  approvalFraction, chatTime, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels,
   runOverflowOf, SLASH_COMMANDS, sendFailureOf, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
+import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
@@ -34,7 +35,6 @@ test('contextCardOf: 送る前の 409 の problems と、モデルの確認結�
   const card = contextCardOf(body, [model('down'), model('small', { probe: probe({ effective: 2048, required: 17260, declared: 2048, measured: undefined as unknown as number, modelMax: 32768 }) })]);
   assert.ok(card);
   assert.equal(card.modelId, 'small', '長さの問題ではないモデル（接続できない）は飛ばす');
-  assert.equal(card.message, '長さが足りません');
   assert.equal(card.hint, 'このモデルの直し方', 'problems[].hint を優先する');
   assert.deepEqual(card.numbers, { effective: 2048, required: 17260, declared: 2048, measured: null, modelMax: 32768 });
 });
@@ -49,7 +49,8 @@ test('contextCardOf: probe が無いモデルは数字なし、hint は detail.h
   assert.equal(contextCardOf(null, []), null);
   assert.equal(contextCardOf('x', []), null);
   const noProblems = contextCardOf({ error: 'context_overflow', errorMessage: '本文だけ' }, []);
-  assert.equal(noProblems?.message, '本文だけ', 'problems が無いときはサーバーの本文を出す');
+  assert.equal(noProblems?.hint, null);
+  assert.equal(noProblems?.numbers.required, null, 'problems が無ければ数字も無い（札の本文は sendFailureOf の message を使う）');
 });
 
 test('sendFailureOf: ApiError の 409 は context と見分け、ApiError 以外は渡された代わりの文にする', () => {
@@ -199,9 +200,56 @@ test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引
     assert.equal(typeof out, 'string', key);
     assert.ok(!kana.test(String(out)), `${key} の英語に日本語が混ざっている: ${String(out)}`);
   }
-  assert.equal(en['notice.compacted'](1), 'Summarized 1 older message');
-  assert.equal(en['notice.compacted'](4), 'Summarized 4 older messages');
-  assert.equal(ja['notice.compacted'](4), '古い発言 4 件を要約しました');
+  assert.match(en['notice.compacted'](1), /^Summarized 1 older message \(/u);
+  assert.match(en['notice.compacted'](4), /^Summarized 4 older messages \(/u);
+  assert.match(en['notice.compacted'](4), /originals are kept/u, '原文が残っていることを伝える');
+  assert.match(ja['notice.compacted'](4), /^古い発言 4 件を要約しました（原文は残っていて、.*探せます）$/u);
   assert.equal(en['chat.pdfPages'](1), 'PDF, 1 page');
   assert.equal(en['approval.position'](1, 2), '1 / 2');
+});
+
+test('approvalEnterAllowed: 空の Enter での承認は、表示している札の id が合い、出てから 1 秒たったあとだけ', () => {
+  let gate = advanceApprovalGate({ id: null, since: 0 }, 'a', 10_000);
+  assert.equal(approvalEnterAllowed(gate, 'a', 10_000 + APPROVAL_ENTER_GRACE_MS - 1), false, '出たばかりの札は、連打の Enter で承認されない');
+  assert.equal(approvalEnterAllowed(gate, 'a', 10_000 + APPROVAL_ENTER_GRACE_MS), true);
+  assert.equal(approvalEnterAllowed(gate, 'b', 99_999), false, '表示している札と違う id には効かない');
+  assert.equal(approvalEnterAllowed(gate, null, 99_999), false, '札が無いとき');
+  gate = advanceApprovalGate(gate, 'a', 50_000);
+  assert.equal(gate.since, 10_000, '同じ札のままなら、出た時刻は変えない');
+  gate = advanceApprovalGate(gate, 'b', 60_000);
+  assert.deepEqual(gate, { id: 'b', since: 60_000 }, '先頭の札が替わったら、数え直す');
+  assert.equal(approvalEnterAllowed(gate, 'b', 60_500), false, '前の札を承認した直後に次の札が出ても、すぐには承認されない');
+  assert.equal(approvalEnterAllowed(gate, 'a', 70_000), false, '古い札の id では通らない');
+  gate = advanceApprovalGate(gate, null, 80_000);
+  assert.equal(approvalEnterAllowed(gate, 'b', 90_000), false);
+});
+
+test('createDecisionTracker: 同じ札への決定は、終わるまで 1 回だけ。失敗したら送り直せる', () => {
+  const tracker = createDecisionTracker();
+  assert.equal(tracker.has('x'), false);
+  assert.equal(tracker.start('x'), true);
+  assert.equal(tracker.start('x'), false, '2 回目は受けない');
+  assert.equal(tracker.start('y'), true, '別の札には効く');
+  assert.equal(tracker.has('x'), true);
+  tracker.release('x');
+  assert.equal(tracker.start('x'), true, '失敗して戻したあとは、もう一度送れる');
+});
+
+test('decideApproval: Enter と札のボタンが同じ札に同時に決定を送っても、サーバーへは 1 回だけ', async () => {
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push(`${String(url)} ${String(init?.body)}`);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    return String(url).includes('/bad') ? Response.json({ error: 'nope' }, { status: 500 }) : Response.json({ ok: true });
+  }) as typeof fetch;
+  try {
+    const [first, second, other] = await Promise.all([decideApproval('ok1', 'once'), decideApproval('ok1', 'deny'), decideApproval('ok2', 'conversation')]);
+    assert.deepEqual([first, second, other], [true, false, true], '同じ札の 2 つ目は送らない（404 の知らせにならない）');
+    assert.equal(await decideApproval('ok1', 'once'), false, '送れたあとも、札が消えるまでは送らない');
+    assert.deepEqual(calls, ['/api/approvals/ok1 {"decision":"once"}', '/api/approvals/ok2 {"decision":"conversation"}']);
+    await assert.rejects(decideApproval('bad1', 'once'));
+    await assert.rejects(decideApproval('bad1', 'once'), '失敗したときは受け付けを戻すので、もう一度送れる');
+    assert.equal(calls.filter(c => c.includes('/bad1')).length, 2);
+  } finally { globalThis.fetch = original; }
 });

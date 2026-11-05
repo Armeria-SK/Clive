@@ -112,7 +112,7 @@ export const api = {
   },
   retry: (id: string) => call<{ runId: string }>(`/api/conversations/${id}/retry`, { method: 'POST', body: '{}' }),
   stop: (runId: string) => call(`/api/runs/${runId}/stop`, { method: 'POST', body: '{}' }),
-  runs: () => call<{ runs: RunRow[] }>('/api/runs?limit=200'),
+  runs: (limit = 200) => call<{ runs: RunRow[] }>(`/api/runs?limit=${limit}`),
   settings: () => call<SettingsView>('/api/settings'),
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),

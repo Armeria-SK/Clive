@@ -137,7 +137,7 @@ export const ja = {
   'chat.archive.done': 'アーカイブしました',
   'chat.archive.failed': 'アーカイブできませんでした',
   'chat.stopNothing': '止める返事はありません',
-  'notice.compacted': (n: number) => `古い発言 ${n} 件を要約しました`,
+  'notice.compacted': (n: number) => `古い発言 ${n} 件を要約しました（原文は残っていて、記憶の「過去の会話を探す」で探せます）`,
   'notice.stopped': '止めました',
   'toast.undo': '取り消す',
   'toast.memoryUndone': '記憶を取り消しました',

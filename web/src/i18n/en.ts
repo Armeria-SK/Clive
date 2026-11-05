@@ -140,7 +140,7 @@ export const en: Dict = {
   'chat.archive.done': 'Archived',
   'chat.archive.failed': 'Could not archive the chat',
   'chat.stopNothing': 'No reply to stop',
-  'notice.compacted': n => `Summarized ${n} older ${pluralEn(n, { one: 'message', other: 'messages' })}`,
+  'notice.compacted': n => `Summarized ${n} older ${pluralEn(n, { one: 'message', other: 'messages' })} (the originals are kept; find them with "Search past chats" in Memory)`,
   'notice.stopped': 'Stopped',
   'toast.undo': 'Undo',
   'toast.memoryUndone': 'Memory change undone',

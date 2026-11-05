@@ -15,7 +15,6 @@ export interface ContextNumbers {
 export interface ContextCardData {
   modelId: string;
   status: string;
-  message: string;
   hint: string | null;
   numbers: ContextNumbers;
 }
@@ -58,7 +57,6 @@ export function contextCardOf(body: unknown, models: readonly ModelView[]): Cont
   return {
     modelId: problem?.modelId ?? '',
     status: problem?.status ?? '',
-    message: problem?.message ?? text(record.errorMessage) ?? '',
     hint: text(problem?.hint) ?? text(asRecord(record.detail)?.hint),
     numbers: {
       effective: num(probe?.effective), required: num(probe?.required), declared: num(probe?.declared),
@@ -178,6 +176,29 @@ export function chatTime(ms: number, language = getLanguage(), zone = getTimezon
     clockFormatters.set(key, formatter);
   }
   return formatter.format(ms);
+}
+
+export const APPROVAL_ENTER_GRACE_MS = 1000;
+
+export interface ApprovalGate { id: string | null; since: number }
+
+export function advanceApprovalGate(gate: ApprovalGate, frontId: string | null, now: number): ApprovalGate {
+  return gate.id === frontId ? gate : { id: frontId, since: now };
+}
+
+export function approvalEnterAllowed(gate: ApprovalGate, shownId: string | null, now: number, graceMs = APPROVAL_ENTER_GRACE_MS): boolean {
+  return shownId !== null && gate.id === shownId && now - gate.since >= graceMs;
+}
+
+export interface DecisionTracker { start: (id: string) => boolean; release: (id: string) => void; has: (id: string) => boolean }
+
+export function createDecisionTracker(): DecisionTracker {
+  const pending = new Set<string>();
+  return {
+    start: id => { if (pending.has(id)) return false; pending.add(id); return true; },
+    release: id => { pending.delete(id); },
+    has: id => pending.has(id),
+  };
 }
 
 export function isNearBottom(el: { scrollHeight: number; scrollTop: number; clientHeight: number }, slack = 80): boolean {
