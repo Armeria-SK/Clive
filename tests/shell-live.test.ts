@@ -306,6 +306,61 @@ for (const shell of ['powershell', 'bash'] as const) {
   });
 }
 
+// 審査の指摘（深い審査）: git のフックを毎回空のフォルダへ向けていたので、「フックが動きうります」の確かめを許しても pre-commit や秘密のスキャナーが動かなかった。
+// 確かめなしの git はこれまでどおりフックの置き場所が空。持ち主がそのコマンドの確かめを許したときだけ、持ち主のフックのまま動く
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: フックのあるリポジトリの git commit は今回だけの確かめになり、許したときだけ pre-commit が動く。フックが拒めば commit も止まる`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const fwd = (p: string): string => p.replaceAll('\\', '/');
+    const repo = join(root, 'hk');
+    mkdirSync(repo);
+    const git = (...args: string[]) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.name', 'Taro');
+    git('config', 'user.email', 'taro@example.com');
+    const marker = join(root, 'hook-ran');
+    const writeHook = (exitCode: number): void => writeFileSync(join(repo, '.git', 'hooks', 'pre-commit'), `#!/bin/sh\necho ran >> "${fwd(marker)}"\nexit ${exitCode}\n`, { mode: 0o755 });
+    const ask = async (command: string, decision: 'once' | 'deny') => {
+      const pending = s.call(command);
+      for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+      const request = s.approvals.pending()[0];
+      assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
+      assert.equal(request.onceOnly, true);
+      assert.match(request.reasons.join('\n'), /フックが動きうります/u);
+      s.approvals.decide(request.id, decision);
+      return pending;
+    };
+    // コマンドの中の git config で、その実行の git に渡った設定を見る
+    const commit = 'cd hk; git config --get core.hooksPath; git commit --allow-empty -q -m x';
+    const count = (): number => Number(git('rev-list', '--all', '--count').stdout.trim() || 0);
+
+    writeHook(0);
+    // 許さなければ、フックは動かない
+    const denied = await ask(commit, 'deny');
+    assert.equal(denied.output.isError, true);
+    assert.equal(existsSync(marker), false, '拒否したのにフックが動いた');
+    // 確かめなしで動く git は、フックの置き場所が空のフォルダ
+    const free = await s.call('cd hk; git config --get core.hooksPath');
+    assert.equal(free.decision, 'allow', free.output.content);
+    assert.match(free.output.content, /git-run\S*hooks/u);
+    // 許せば、持ち主のフックが動く（フックの置き場所の上書きは無い）
+    const allowed = await ask(commit, 'once');
+    assert.equal(allowed.output.isError, false, allowed.output.content);
+    assert.doesNotMatch(allowed.output.content, /git-run/u, '許した実行に、フックの置き場所の上書きがある');
+    assert.equal(existsSync(marker), true, '許したのにフックが動かない');
+    assert.equal(count(), 1);
+    // フックが拒めば、commit も止まる（秘密のスキャナーが効く）
+    rmSync(marker);
+    writeHook(1);
+    const blocked = await ask(commit, 'once');
+    assert.equal(blocked.output.isError, true);
+    assert.equal(existsSync(marker), true);
+    assert.equal(count(), 1, 'フックが拒んだのに commit できた');
+  });
+}
+
 // 審査の指摘: 子の PATH の '.'・空・相対の項目は、本物のシェルでは cd のあとの場所を指す。許可の一覧は最初の場所で調べるので、cd で動いた先に置いた git を見逃した
 for (const shell of ['powershell', 'bash'] as const) {
   const available = shell === 'powershell' ? psAvailable : bashAvailable;

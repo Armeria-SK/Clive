@@ -101,10 +101,11 @@ const RUN_FOLDER = 'git-run';
 // プログラムを動かす決まった名前の項目を、リポジトリの見つけ方（git-repo.ts）が git とずれても動かないように、先に打ち消す。
 // 打ち消せないもの: diff.external（どんな値でもプログラムとして動かされ、空にすると git diff が動かなくなる）と、名前が決まっていない項目
 // （filter.<名前>.clean・smudge、diff.<名前>.textconv・command、merge.<名前>.driver、alias.<名前>、pager.<コマンド>、url.<先>.insteadOf、credential.<URL>.helper、
-// remote.<名前>.uploadpack・receivepack・vcs、submodule.<名前>.update、trailer.<名前>.command）。これらは git-repo.ts がリポジトリの設定を調べて今回だけにする
-function overrides(hooksDir: string, helpers: readonly string[]): Array<[string, string]> {
+// remote.<名前>.uploadpack・receivepack・vcs、submodule.<名前>.update、trailer.<名前>.command）。これらは git-repo.ts がリポジトリの設定を調べて今回だけにする。
+// フックの置き場所（core.hooksPath）は、hooksDir があるときだけ空のフォルダへ向ける。持ち主がそのコマンドの「今回だけ」の確かめを許したときは null で、持ち主のフックのまま動く
+function overrides(hooksDir: string | null, helpers: readonly string[]): Array<[string, string]> {
   return [
-    ['core.fsmonitor', 'false'], ['core.hooksPath', hooksDir], ['core.pager', 'cat'], ['core.editor', 'true'], ['sequence.editor', 'true'],
+    ['core.fsmonitor', 'false'], ...(hooksDir === null ? [] : [['core.hooksPath', hooksDir] as [string, string]]), ['core.pager', 'cat'], ['core.editor', 'true'], ['sequence.editor', 'true'],
     ['core.sshCommand', 'ssh'], ['core.askPass', ''], ['core.gitProxy', 'none'],
     ['gpg.program', 'gpg'], ['gpg.openpgp.program', 'gpg'], ['gpg.x509.program', 'gpgsm'], ['gpg.ssh.program', 'ssh-keygen'], ['gpg.ssh.defaultKeyCommand', 'ssh-add -L'],
     ['protocol.ext.allow', 'never'], ['log.showSignature', 'false'],
@@ -143,14 +144,14 @@ function sweepStale(root: string): void {
 }
 
 // シェルを1回動かす分の、洗い出した設定とその環境変数。置き場所は毎回新しい。書けなければ、無いファイルを指すことになり、git は何も読まない（安全側）
-export function prepareGitRun(options: { dataDir: string; env: Env; gitExe?: string }): GitRun {
+export function prepareGitRun(options: { dataDir: string; env: Env; gitExe?: string; ownerHooks?: boolean }): GitRun {
   const root = join(options.dataDir, RUN_FOLDER);
   const dir = join(root, randomUUID());
   const file = join(dir, 'gitconfig');
-  const hooks = join(dir, 'hooks');
+  const hooks = options.ownerHooks ? null : join(dir, 'hooks');
   let helpers: string[] = [];
   try {
-    mkdirSync(hooks, { recursive: true });
+    mkdirSync(hooks ?? dir, { recursive: true });
     sweepStale(root);
     const texts = gitConfigSources(options.env, options.gitExe).flatMap(source => readSmall(source) ?? []);
     const sanitized = sanitizeGitConfig(texts);

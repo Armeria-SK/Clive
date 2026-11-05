@@ -36,6 +36,12 @@ export interface PreCheck {
   bind?: string;
 }
 
+// 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果
+export interface ExecuteInfo {
+  // 持ち主が、この呼び出しの「今回だけ」の確かめ（コードを動かす確かめ）を許した
+  approvedOnce: boolean;
+}
+
 export interface ToolContext {
   runId: string;
   conversationId: string;
@@ -75,5 +81,5 @@ export interface ToolDef<I = any> {
   // 外から読んだ内容（Web・添付）のあとで確認を求める道具。書き込み・実行の道具は、これが無くても確認する
   escalateOnTaint?: boolean;
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
-  execute: (input: I, ctx: ToolContext) => Promise<ToolOutput>;
+  execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

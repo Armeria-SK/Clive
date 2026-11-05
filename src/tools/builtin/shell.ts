@@ -116,7 +116,7 @@ export const shellRun: ToolDef<ShellInput> = {
   allowedIn: ['chat', 'task'],
   preCheck: shellPreCheck,
   summarize: (input, language) => ({ title: toolText(language, 'summary.shell'), body: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) }),
-  async execute(input, ctx) {
+  async execute(input, ctx, info) {
     const cwd = resolveCwd(input, ctx);
     if ('problem' in cwd) return { content: cwd.problem, isError: true };
     const language = languageOf(ctx.config);
@@ -124,7 +124,7 @@ export const shellRun: ToolDef<ShellInput> = {
     const shell = resolveShell(settings.shell);
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
     const child = childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh');
-    const gitRun = child.gitIsolated ? prepareGitRun({ dataDir: ctx.paths.data, env: child.env, ...(child.gitExe ? { gitExe: child.gitExe } : {}) }) : undefined;
+    const gitRun = child.gitIsolated ? prepareGitRun({ dataDir: ctx.paths.data, env: child.env, ownerHooks: info?.approvedOnce === true, ...(child.gitExe ? { gitExe: child.gitExe } : {}) }) : undefined;
     let result;
     try {
       result = await runProcess(shell.file, shell.args(input.command), {

@@ -108,6 +108,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (decision === 'deny') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
 
   let approvalId: string | undefined;
+  let approvedOnce = false;
   if (decision === 'ask') {
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
@@ -132,11 +133,12 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       if (again.decision === 'deny') return finish({ output: { content: toolText(language, 'pipeline.denied', { reasons: again.reasons.join('\n- ') }), isError: true }, decision: 'deny', decidedBy: 'recheck', invalidArguments: false }, approvalId);
       if (again.bind !== first?.bind) return finish({ output: { content: toolText(language, 'pipeline.changed'), isError: true }, decision: 'deny', decidedBy: 'recheck', invalidArguments: false }, approvalId);
     }
+    approvedOnce = onceOnly;
   }
 
   // ── 実行 ──
   let output: ToolOutput;
-  try { output = await tool.execute(args, ctx); }
+  try { output = await tool.execute(args, ctx, { approvedOnce }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
   if (tool.effect === 'network') { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 

@@ -254,6 +254,25 @@ test('コマンドレベルの上書き: プログラムを動かす決まった
   assert.equal(new Set(keys).size, keys.length);
 });
 
+// 審査の指摘（深い審査）: フックを毎回空のフォルダへ向けると、持ち主が許したコマンドでも pre-commit や秘密のスキャナーが動かない。許したときだけ、フックの上書きを外す
+test('コマンドレベルの上書き: 持ち主が許したコマンドでは、フックの置き場所の上書きだけを外す。ほかの上書きは同じ', t => {
+  const root = tempDir(t);
+  const home = join(root, 'home');
+  mkdirSync(home);
+  const env = { HOME: home, USERPROFILE: home };
+  const normal = prepareGitRun({ dataDir: join(root, 'data'), env });
+  const owner = prepareGitRun({ dataDir: join(root, 'data'), env, ownerHooks: true });
+  const normalKeys = overridesOf(normal.env).map(([k]) => k);
+  const ownerList = overridesOf(owner.env);
+  assert.equal(normalKeys.includes('core.hooksPath'), true, '許していない実行は、これまでどおりフックの置き場所を上書きする');
+  assert.equal(ownerList.some(([k]) => k === 'core.hooksPath'), false, '許した実行に、フックの置き場所の上書きがある');
+  assert.deepEqual(ownerList.map(([k]) => k), normalKeys.filter(k => k !== 'core.hooksPath'), 'フック以外の上書きは同じ');
+  assert.equal(existsSync(join(dirname(owner.env.GIT_CONFIG_GLOBAL!), 'hooks')), false, '使わない空のフォルダは作らない');
+  assert.equal(owner.env.GIT_CONFIG_NOSYSTEM, '1');
+  normal.cleanup();
+  owner.cleanup();
+});
+
 test('コマンドレベルの上書き: ホームの設定の安全な認証の補助は、空にしたあとに足し直す', t => {
   const root = tempDir(t);
   const home = join(root, 'home');

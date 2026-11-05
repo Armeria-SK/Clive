@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, join } from 'node:path';
 import { test } from 'node:test';
+import { Type } from '@sinclair/typebox';
 import type { AppConfig } from '../src/config/schema.ts';
 import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
@@ -16,7 +17,7 @@ import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import { findExecutable, resolveShell, runProcess, scrubEnv } from '../src/tools/shell/runner.ts';
-import type { ToolContext } from '../src/tools/types.ts';
+import type { ExecuteInfo, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) => void = () => undefined) {
@@ -252,6 +253,44 @@ test('V7: 許可のあとで判定が deny になったら（設定が変わる�
   assert.equal(outcome.decision, 'deny');
   assert.match(outcome.output.content, /実行しませんでした（拒否）/u);
   assert.equal(existsSync(join(s.paths.workspace, 'ran.txt')), false);
+});
+
+// 審査の指摘（深い審査）: 洗い出した git は、フックを必ず空にしていたので、持ち主が許したコマンドでも pre-commit が動かなかった。
+// 実行する道具には、持ち主が「今回だけ」の確かめを許した呼び出しかどうかを、呼び出しごとに渡す
+test('V8: 道具には、持ち主が「今回だけ」の確かめを許した呼び出しだけ、許したと渡す。確かめなし・ふつうの確かめ・会話の許可・拒否では渡さない', async t => {
+  const s = setup(t);
+  const seen: Array<ExecuteInfo | undefined> = [];
+  const probe: ToolDef<{ mode: 'allow' | 'ask' | 'once' }> = {
+    name: 'probe', description: 'x', input: Type.Object({ mode: Type.String() }), effect: 'read', allowedIn: ['chat', 'task'],
+    preCheck: input => (input.mode === 'once'
+      ? { decision: 'ask', reasons: ['code'], onceOnly: true, askKinds: ['code'] }
+      : { decision: input.mode, reasons: input.mode === 'ask' ? ['ask'] : [] }),
+    execute: async (_input, _ctx, info) => { seen.push(info); return { content: 'ok' }; },
+  };
+  const registry = new ToolRegistry().register(probe);
+  const call = (mode: string) => runToolCall({ id: 'p', name: 'probe', arguments: { mode } }, s.ctx, { registry, approvals: s.approvals, db: s.db, emit: () => undefined });
+
+  await call('allow');
+  const plain = call('ask');
+  await decideNext(s, 'once');
+  await plain;
+  const conversation = call('ask');
+  await decideNext(s, 'conversation');
+  await conversation;
+  assert.equal((await call('ask')).decidedBy, 'conversation-grant');
+  assert.deepEqual(seen, [{ approvedOnce: false }, { approvedOnce: false }, { approvedOnce: false }, { approvedOnce: false }]);
+
+  seen.length = 0;
+  const once = call('once');
+  await decideNext(s, 'once');
+  await once;
+  assert.deepEqual(seen, [{ approvedOnce: true }]);
+
+  seen.length = 0;
+  const denied = call('once');
+  await decideNext(s, 'deny');
+  await denied;
+  assert.deepEqual(seen, [], '拒否したのに実行された');
 });
 
 test('V6: 裏で動くタスクも、コードを動かす前は人の許可を待つ。時間が過ぎたら動かさない', async t => {
