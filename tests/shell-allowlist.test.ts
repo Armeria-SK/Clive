@@ -409,9 +409,11 @@ test('入れるもの（11.7）はすべて今回だけ、情報を見るだけ�
   for (const c of ['npm install', 'npm i x', 'npm ci', 'npm add x', 'pnpm install', 'pnpm add x', 'yarn add x', 'bun install', 'bun add x', 'pip install .', 'pip install -e .', 'pip3 install x', 'pipx install x', 'uv pip install x', 'uv sync', 'cargo install x', 'go install x', 'go get x', 'gem install x', 'composer install', 'poetry add x', 'conda install x']) {
     assert.ok(keysOf(c).includes('once:list.install'), c);
   }
-  for (const c of ['npm --version', 'npm ls --depth=1', 'npm list --json', 'npm outdated', 'npm view left-pad', 'npm view left-pad version', 'pnpm --version', 'yarn --version', 'pip --version', 'pip list --outdated', 'pip show requests', 'go version', 'go env', 'cargo --version', 'rustc --version', 'deno --version', 'bun --version', 'tsc --version', 'py -V', 'python3.11 -V']) {
+  for (const c of ['npm --version', 'npm ls --depth=1', 'npm list --json', 'npm outdated', 'npm view left-pad', 'npm view left-pad version', 'pip --version', 'pip list --outdated', 'pip show requests', 'deno --version', 'bun --version', 'tsc --version', 'py -V', 'python3.11 -V']) {
     assert.equal(levelOf(c), 'allow', c);
   }
+  // 作業フォルダの設定を起動のときに読む道具（yarn・pnpm・cargo・rustc・go）のバージョンの形は、今回だけ（tests/shell-lang-version.test.ts）
+  for (const c of ['yarn --version', 'pnpm --version', 'cargo --version', 'rustc --version', 'go version', 'go env']) assert.equal(levelOf(c), 'once', c);
   for (const c of ['npm view "x&calc"', 'npm view x --registry http://e', 'npm ls --prefix /x', 'pip list --index-url x', 'pip show -f x', 'python3 -m pip install x', 'go run x.go', 'cargo build', 'cargo run', 'deno run x.ts', 'bun run x', 'tsc', 'tsc -p tsconfig.json']) {
     assert.notEqual(levelOf(c), 'allow', c);
   }

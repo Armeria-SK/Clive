@@ -533,11 +533,11 @@ register(['wget'], (words, acc, ctx) => {
 });
 
 // ── 言語の道具（11.3.5）と、入れるもの（11.7）──
+// 作業フォルダの設定を起動のときに読む道具は入れない: yarn（.yarnrc の yarn-path・corepack の packageManager）・pnpm（packageManager）・cargo と rustc（rustup の rust-toolchain）・go（go.mod の toolchain 行で別の Go を取ってくる）
 const INFO_FORMS: Array<[RegExp, string[][]]> = [
   [/^(?:node|nodejs)$/u, [['--version'], ['-v']]],
   [/^(?:python\d*(?:\.\d+)?|py)$/u, [['--version'], ['-V']]],
-  [/^(?:deno|bun|cargo|rustc|tsc)$/u, [['--version']]],
-  [/^go$/u, [['version'], ['env']]],
+  [/^(?:deno|bun|tsc)$/u, [['--version']]],
 ];
 const INSTALL_SUBS = new Set(['install', 'i', 'add', 'ci', 'update', 'upgrade', 'up', 'dedupe', 'rebuild', 'link', 'sync', 'get', 'develop']);
 const PACKAGE_TOOLS = ['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3', 'pipx', 'uv', 'poetry', 'conda', 'cargo', 'go', 'gem', 'composer', 'pdm', 'hatch'];
@@ -554,7 +554,7 @@ function langInfo(name: string, words: Word[], acc: Acc): void {
   if (PACKAGE_TOOLS.includes(name) && installing) { acc.add('once', 'list.install', { cmd: name }, false); return; }
   const info = INFO_FORMS.find(([re]) => re.test(name));
   if (info && exactForm(words, info[1])) return;
-  if (/^(?:npm|pnpm|yarn)$/u.test(name) && exactForm(words, [['--version'], ['-v']])) return;
+  if (name === 'npm' && exactForm(words, [['--version'], ['-v']])) return;
   if (name === 'npm' && args.length > 0) { npmForms(words, acc); return; }
   if (/^pip3?$/u.test(name) && args.length > 0) { pipForms(words, acc); return; }
   formOnce(acc, name, rest);

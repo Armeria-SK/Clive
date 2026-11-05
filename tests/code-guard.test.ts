@@ -287,7 +287,7 @@ test('V2: 包み方を変えても、コードを動かすものは、どのシ�
 // 毎日使うコマンドを、誤って確かめにしない（シェルごと。第 2 版の一覧で「許す」になるもの）
 const LEGIT_BASH = [
   'ls', 'ls -la sub', 'cat put.js', 'grep -rn foo .', 'rg fetch put.js', 'git status', 'git log --oneline -5', 'git diff', 'git diff put.js', 'git show HEAD', 'git branch', 'git stash list',
-  'git config --get user.name', 'node --version', 'node -v', 'python -V', 'python --version', 'npm ls', 'npm --version', 'npm -v', 'npm view left-pad version', 'pnpm -v', 'go version', 'cargo --version',
+  'git config --get user.name', 'node --version', 'node -v', 'python -V', 'python --version', 'npm ls', 'npm --version', 'npm -v', 'npm view left-pad version',
   'echo "see put.js"', 'find . -name "*.md"', 'find . -name "*.js"', 'ls *.ts', 'wc -l put.js', 'diff put.js b.js', 'cp put.js b.js', 'mv put.js c.js', 'rm sub/old.js', 'mkdir sub2', 'touch new.js',
   'curl https://example.com', 'curl -sS https://example.com/x -o -', 'wget --max-redirect=0 -O - https://example.com/notes.txt', 'wget --max-redirect=0 -qO- https://example.com',
   'for f in a b; do echo hi; done', 'if [ -f put.js ]; then echo yes; fi', 'echo hi > out.txt', 'echo hi >> out.txt', 'ls 2>&1 | head', 'cat put.js | grep fetch', 'cat put.js | wc -l', 'git diff SOUL.md', 'cat SOUL.md',
@@ -296,7 +296,7 @@ const LEGIT_BASH = [
 ];
 const LEGIT_PS = [
   'ls', 'Get-ChildItem -Recurse -Filter *.js', 'cat put.js', 'Get-Content put.js', 'type put.js', 'git status', 'git log --oneline -5', 'git diff', 'git show HEAD', 'git branch', 'rg fetch put.js',
-  'node --version', 'node -v', 'python -V', 'npm ls', 'npm --version', 'npm view left-pad version', 'go version', 'cargo --version',
+  'node --version', 'node -v', 'python -V', 'npm ls', 'npm --version', 'npm view left-pad version',
   '[DateTime]::Now', '[int]$x', '$x = 5', '$x = "a" + "b"', '(Get-Date).ToString("yyyy")', 'Get-Date', 'Write-Host hello', 'echo "see put.js"', 'Get-ChildItem -Name', 'iwr https://example.com -MaximumRedirection 0', 'curl.exe https://example.com',
   'Get-Process | Sort-Object CPU -Descending | Select-Object -First 5', 'if (Test-Path put.js) { Write-Host yes }', 'if (Test-Path put.js) { Write-Host yes } else { Write-Host no }',
   'Get-Content put.js | Select-String fetch', 'Get-Content put.js | Measure-Object -Line', 'git diff SOUL.md', 'cat SOUL.md',
