@@ -316,11 +316,16 @@ test('V5: スキルのフォルダと .git への書き込みは、シェルな�
   writeFileSync(join(s.paths.workspace, 'skills', 'ok', 'SKILL.md'), 'old');
   mkdirSync(join(s.paths.workspace, 'proj', '.git', 'hooks'), { recursive: true });
   writeFileSync(join(s.paths.workspace, 'proj', '.git', 'config'), '[core]');
+  // .git でない名前の裏のリポジトリ（HEAD・objects/・refs/ がある）も、同じ
+  for (const d of ['hooks', 'objects', 'refs']) mkdirSync(join(s.paths.workspace, 'up', d), { recursive: true });
+  writeFileSync(join(s.paths.workspace, 'up', 'HEAD'), 'ref: refs/heads/main\n');
   const cases: Array<[string, RegExp]> = [
     ['skills/evil/SKILL.md', /スキルのフォルダ/u],
     ['skills/ok/extra.md', /スキルのフォルダ/u],
     ['.git/hooks/pre-commit', /git のフォルダ/u],
     ['proj/.git/hooks/post-checkout', /git のフォルダ/u],
+    ['up/hooks/pre-receive', /git のフォルダ/u],
+    ['up/config', /git のフォルダ/u],
   ];
   if (process.platform === 'win32') cases.push(['proj/.GIT/config', /git のフォルダ/u]);
   for (const [path, reason] of cases) {
@@ -328,7 +333,7 @@ test('V5: スキルのフォルダと .git への書き込みは、シェルな�
     const request = await decideNext(s, 'deny');
     assert.match(request.reasons.join(), reason, path);
     // .git はフックや設定というコードを書くことになるので会話の許可を越えて毎回確かめる。スキルは中身が引数にあるので、これまでの承認と同じ
-    assert.equal(request.onceOnly, /\.git/iu.test(path), path);
+    assert.equal(request.onceOnly, /\.git|^up\//iu.test(path), path);
     assert.match((await pending).output.content, /拒否しました/u, path);
     assert.equal(existsSync(join(s.paths.workspace, path)) && readFileSync(join(s.paths.workspace, path), 'utf8') === 'x', false, `${path} に書かれてしまった`);
   }
