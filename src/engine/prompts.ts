@@ -9,6 +9,11 @@ interface EngineText {
   compactTranscriptHeading: string;
   user: string;
   toolResult: (name: string) => string;
+  wrapUpSystem: string;
+  wrapUpInstructions: readonly string[];
+  wrapUpTranscriptHeading: string;
+  doneHeading: string;
+  nextHeading: string;
 }
 
 const TEXT: Record<Language, EngineText> = {
@@ -24,6 +29,16 @@ const TEXT: Record<Language, EngineText> = {
     compactTranscriptHeading: '# 会話の古い部分',
     user: 'ユーザー',
     toolResult: name => `道具（${name}）の結果`,
+    wrapUpSystem: 'あなたは作業の引き継ぎ係です。指示されたとおりに、短い引き継ぎのメモだけを書きます。道具は使えません。',
+    wrapUpInstructions: [
+      'ここまでの作業は、道具を使う回数の上限に達したため途中で止まりました。次の 2 つだけを、日本語で短く（全体で 10 行以内）書いてください。',
+      '「ここまでにやったこと」: 実際に終わったこと（書いたファイル・分かった事実を含む）。',
+      '「次の一手」: 続けるなら、最初に何をするか。',
+      '見ていないこと・やっていないことを、やったことにしないでください。',
+    ],
+    wrapUpTranscriptHeading: '# ここまでの作業の記録',
+    doneHeading: 'ここまでにやったこと',
+    nextHeading: '次の一手',
   },
   en: {
     summaryHeading: '# Summary of the conversation so far (the older part; the original text can be read with history_read)',
@@ -37,6 +52,16 @@ const TEXT: Record<Language, EngineText> = {
     compactTranscriptHeading: '# Older part of the conversation',
     user: 'User',
     toolResult: name => `Result of tool (${name})`,
+    wrapUpSystem: 'You write handover notes. Write only a short handover note, exactly as instructed. You cannot use tools.',
+    wrapUpInstructions: [
+      'The work so far stopped partway because the tool-call limit was reached. Write only the following two parts, briefly in English (10 lines or fewer in total).',
+      '"Done so far": what was actually finished (including files written and facts found).',
+      '"Next step": what to do first if the work continues.',
+      'Do not present things you have not seen or done as done.',
+    ],
+    wrapUpTranscriptHeading: '# Record of the work so far',
+    doneHeading: 'Done so far',
+    nextHeading: 'Next step',
   },
 };
 
@@ -46,6 +71,22 @@ export function summarySection(summary: string, language: Language): string {
 
 export function compactSystem(language: Language): string {
   return TEXT[language].compactSystem;
+}
+
+export function wrapUpSystem(language: Language): string {
+  return TEXT[language].wrapUpSystem;
+}
+
+export function wrapUpPrompt(transcript: string, language: Language): string {
+  const text = TEXT[language];
+  return [...text.wrapUpInstructions, `\n${text.wrapUpTranscriptHeading}\n${transcript}`, `\n${text.doneHeading}:`].join('\n');
+}
+
+// まとめの「次の一手」の部分（見出しの後ろ）。見つからなければ undefined
+export function nextStepOf(summary: string): string | undefined {
+  const m = /(?:^|\n)[ \t]*(?:次の一手|Next step)[ \t]*[:：][ \t]*([\s\S]+)$/iu.exec(summary);
+  const step = m?.[1]?.trim();
+  return step ? step.slice(0, 500) : undefined;
 }
 
 export function compactSpeaker(message: { role: string; name?: string }, language: Language): string {

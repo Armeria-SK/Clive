@@ -127,6 +127,8 @@
     "problem.line": "・{id}: {message}{hintPart}",
     "problem.none": "・モデルがまだ設定されていません（画面の「はじめの設定」で足してください）",
     "usage.model_missing": "モデル「{id}」が設定にありません",
+    "wrapup.fallback": "道具の上限（{max} 回）に達したので止めました。続けるなら「続けて」と送ってください",
+    "handover.note": "この会話で進めた分: {text}",
     "no_usable": "使えるモデルがないため送信しませんでした。設定画面で確認してください。\n{lines}",
     "tool.invalid_streak": "モデルが正しい形でツールを呼べませんでした（{count} 回続けて）。ツールに強いモデルに替えるか、toolMode を json_fallback にしてください",
     "tool.invalid_streak_hint": "models[].toolMode を json_fallback にするか、maxTools で数を絞ってください",

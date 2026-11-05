@@ -28,7 +28,7 @@ import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
-import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapshotLanguageKey, summarySection, withReplyReminder } from './prompts.ts';
+import { compactPrompt, compactSpeaker, compactSystem, nextStepOf, replyLanguageKey, snapshotLanguageKey, summarySection, withReplyReminder, wrapUpPrompt, wrapUpSystem } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
@@ -102,13 +102,15 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-interface Active { runId: string; conversationId: string; kind: RunKind; providers: Set<string>; controller: AbortController; done: Promise<EngineResult> }
+interface Active { runId: string; conversationId: string; kind: RunKind; taskId?: string; providers: Set<string>; controller: AbortController; done: Promise<EngineResult> }
 
 export class ChatEngine {
   readonly #d: ChatEngineDeps;
   #active = new Map<string, Active>();
   #byConversation = new Map<string, string>();
   #preempted = new Set<string>();
+  // 会話の実行が止めたタスク（会話の実行が終わるとき、会話で進んだ分をこのタスクに引き継ぐ）
+  #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
@@ -123,12 +125,13 @@ export class ChatEngine {
     if (this.#byConversation.has(conversationId)) return this.#busy('send.busy_chat');
     const chain = this.#chain('chat');
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
-    this.#preemptFor(chain.usable);
+    const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: text, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
     // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
     this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(text).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : text);
     const runId = randomUUID();
+    if (preempted.length) this.#preemptedTasks.set(runId, preempted);
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     // 添付の中身は外部のデータなので、この実行ではシェルと書き込みを承認制にする（taint）
     if (attachments.length) this.#initialTaint.set(runId, attachments.map(a => engineText(languageOf(this.#d.config()), 'attachment.taint', { name: a.name })));
@@ -142,9 +145,10 @@ export class ChatEngine {
     if (!last || last.role === 'assistant') return { ok: false, httpStatus: 409, errorKind: 'not_found', errorMessage: engineText(languageOf(this.#d.config()), 'send.nothing_to_retry'), errorCode: 'engine.send.nothing_to_retry' };
     const chain = this.#chain('chat');
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
-    this.#preemptFor(chain.usable);
+    const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     const runId = randomUUID();
+    if (preempted.length) this.#preemptedTasks.set(runId, preempted);
     this.#start(runId, conversationId, chain.usable, 'chat');
     return { ok: true, runId };
   }
@@ -208,13 +212,17 @@ export class ChatEngine {
     return smallest;
   }
 
-  #preemptFor(routes: Route[]): void {
+  // 会話の実行が使うプロバイダを使っている裏の実行を止める。止めたタスクの id を返す
+  #preemptFor(routes: Route[]): string[] {
     const providers = new Set(routes.map(r => r.provider.id));
+    const tasks: string[] = [];
     for (const active of this.#active.values()) {
       if (active.kind === 'chat' || ![...active.providers].some(p => providers.has(p))) continue;
       this.#preempted.add(active.runId);
+      if (active.taskId) tasks.push(active.taskId);
       active.controller.abort(new ProviderError('cancelled', engineText('ja', 'run.preempted'), { retryable: false }));
     }
+    return tasks;
   }
 
   stop(runId: string): boolean {
@@ -282,10 +290,11 @@ export class ChatEngine {
       .finally(() => {
         this.#active.delete(runId);
         this.#byConversation.delete(conversationId);
+        this.#preemptedTasks.delete(runId);
         setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
         try { this.onRunEnd?.({ runId, conversationId, kind }); } catch (error) { this.#d.log?.(`[ERROR] onRunEnd: ${(error as Error).message}`); }
       });
-    this.#active.set(runId, { runId, conversationId, kind, providers: new Set(chain.map(r => r.provider.id)), controller, done });
+    this.#active.set(runId, { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), controller, done });
   }
 
   #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>): ToolDef[] {
@@ -302,7 +311,7 @@ export class ChatEngine {
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
     const flags: string[] = [];
     const usage: Usage = {};
-    const counters = { attempts: 0, iterations: 0, toolCalls: 0 };
+    const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0 };
     let index = 0;
     let invalidStreak = 0;
     let lastEstimate = 0;
@@ -324,8 +333,9 @@ export class ChatEngine {
       }
     };
     let replyLanguage: Language | undefined;
-    const finishOk = (text: string, stop: StopReason): EngineResult => {
+    const finishOk = (text: string, stop: StopReason, handover?: { note: string; nextAction?: string | undefined }): EngineResult => {
       if (replyLanguage && this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
+      if (kind === 'chat') this.#handOver(runId, conversationId, handover ?? { note: text }, counters.workCalls);
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop };
@@ -363,6 +373,7 @@ export class ChatEngine {
       for (const toolCall of call.toolCalls) {
         if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
         counters.toolCalls++;
+        if (!toolCall.name.startsWith('task_')) counters.workCalls++;
         const toolModel = lastRoute.model;
         const toolCapacity = d.status.get(toolModel.id)?.effective ?? toolModel.contextLength ?? 0;
         ctx.outputLimit = toolCapacity > 0 ? toolOutputLimit(contextAvailable(toolCapacity, toolModel), TOOL_OUTPUT_LIMIT) : undefined;
@@ -384,7 +395,62 @@ export class ChatEngine {
     }
     flags.push('max_iterations');
     d.bus.publish({ type: 'warning', runId, conversationId, code: 'max_iterations', message: engineText(languageOf(config), 'warn.max_iterations', { max: maxIterations }), params: { max: maxIterations } });
-    return finishOk('', 'other');
+    if (kind !== 'chat') return finishOk('', 'other');
+    // 会話は黙って止まらない: 道具なしで 1 回だけ、ここまで・次の一手を書かせて返事として残す。書けなければ決まった文
+    const wrapped = await this.#wrapUp({ route: lastRoute, conversationId, signal });
+    if (wrapped === 'cancelled') return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
+    const text = wrapped ?? engineText(languageOf(config), 'wrapup.fallback', { max: maxIterations });
+    const saved = d.conversations.append(conversationId, { role: 'assistant', content: text }, runId);
+    d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
+    return finishOk(text, 'other', { note: text, nextAction: wrapped ? nextStepOf(wrapped) : undefined });
+  }
+
+  // 上限で止まった会話のまとめ。道具を渡さず、直近のやり取りを文字の記録にして 1 通で渡す（道具の呼び出しの履歴を送ると、道具の定義が要るプロバイダがあるため）。
+  // 書けた文を返す。空・失敗は null、止められたときは 'cancelled'
+  async #wrapUp(c: { route: Route; conversationId: string; signal: AbortSignal }): Promise<string | 'cancelled' | null> {
+    const d = this.#d;
+    const language = languageOf(d.config());
+    const { model, provider } = c.route;
+    const adapter = d.registry.get(provider.id);
+    if (!adapter) return null;
+    const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
+    const available = contextAvailable(capacity, model);
+    const conversation = d.conversations.get(c.conversationId);
+    const stored = d.conversations.messages(c.conversationId).filter(m => m.id > (conversation?.summary_upto ?? 0));
+    const maxChars = Math.min(COMPACT_TRANSCRIPT_CHARS, Math.max(1000, Math.floor(available * 0.5)));
+    const transcript = stored.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, 1500)}`).join('\n').slice(-maxChars);
+    let release: (() => void) | undefined;
+    try {
+      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, c.signal);
+      let text = '';
+      for await (const event of adapter.stream({
+        model, system: { frozen: wrapUpSystem(language), dynamic: '' },
+        messages: [{ role: 'user', content: wrapUpPrompt(transcript, language) }], tools: [], maxOutputTokens: Math.min(1000, model.maxOutputTokens), signal: c.signal,
+      })) if (event.type === 'text') text += event.delta;
+      return text.trim() || null;
+    } catch {
+      return c.signal.aborted ? 'cancelled' : null;
+    } finally { release?.(); }
+  }
+
+  // 会話の実行が終わるとき、会話で進んだ分をタスクに渡す: この実行が止めたタスクと、この会話で作った実行待ち・返事待ちのタスクの経過（メモ）に書く。
+  // 上限のまとめがあれば、次の一手も書く。会話で作ったタスクへは、作る以外の道具を使った実行だけ（作っただけの確認の返事はメモにしない）
+  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, workCalls: number): void {
+    const d = this.#d;
+    const note = summary.note.trim();
+    if (!d.tasks || !note) return;
+    const preempted = new Set(this.#preemptedTasks.get(runId) ?? []);
+    const targets = new Set(preempted);
+    if (workCalls > 0) for (const id of d.tasks.createdByConversation(conversationId)) targets.add(id);
+    if (!targets.size) return;
+    const language = languageOf(d.config());
+    for (const id of targets) {
+      const task = d.tasks.get(id);
+      if (!task) continue;
+      const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
+      if (!open.includes(task.status)) continue;
+      d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }), ...(summary.nextAction ? { nextAction: summary.nextAction } : {}) }, 'clive', runId);
+    }
   }
 
   async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: { done: boolean }; kind: RunKind; forbid?: ReadonlySet<string> | undefined }): Promise<CallResult> {

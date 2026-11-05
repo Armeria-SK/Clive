@@ -88,6 +88,12 @@ export class TaskStore {
     return rows.length === 1 ? rows[0] : undefined;
   }
 
+  // この会話の task_create で作られたタスクの id（作ったときに残す経過 'context' の本文に会話の id が入る）
+  createdByConversation(conversationId: string): string[] {
+    const rows = this.#db.prepare("SELECT DISTINCT task_id FROM task_events WHERE kind = 'context' AND instr(content, ?) > 0").all(conversationId) as Array<{ task_id: string }>;
+    return rows.map(r => r.task_id);
+  }
+
   byConversation(conversationId: string): Task | undefined {
     return this.#db.prepare('SELECT * FROM tasks WHERE conversation_id = ? ORDER BY updated_at DESC LIMIT 1').get(conversationId) as Task | undefined;
   }
