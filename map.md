@@ -151,7 +151,7 @@
   - `language.ts`: 言語の設定の読み書き。「Clive も英語にしますか」を聞くかの判定（`shouldAskLanguage`）と答えの保存、`language` を足す・消す（`configWithLanguage`。`auto` は消す）、設定を読み直して言語だけ変えて保存し画面に反映する `saveLanguage`、設定を開いたまま言語が変わったときの合わせ直し（`withAdoptedLanguage` `adoptLanguageInDraft`）。`clipboard.ts`: コピー（`navigator.clipboard` が使えない http の画面では選択してコピーに切り替え、できたかどうかを返す）。
   - `Avatar.tsx` `avatar.ts` `avatars/*.svg`: 姿（20 種）と動き、様子の一言（`presenceOf`。文は辞書）。
   - `Markdown.tsx`: 返事の Markdown 表示。
-  - `styles/tokens.css`: デザインの色・字体・余白・角丸・影のトークン。字体は本文も見出しも `--font-body`（Inter → IBM Plex Sans JP → システムのゴシック）の 1 つで、見出しは太さで分ける（`--font-heading-weight` 600、大きな題は `--font-display-weight` 500）。`:root` がライト、`:root[data-theme="dark"]` がダークの上書き。文字用のアクセント色（`--color-accent-text`）と薄い文字の 3 段階（`--color-text-muted*`）は、ライトで WCAG AA（4.5:1）に届くようデザインより少し濃くしてある。
+  - `styles/tokens.css`: デザインの色・字体・余白・角丸・影のトークン。字体は本文も見出しも `--font-body`（Inter → IBM Plex Sans JP → システムのゴシック）の 1 つで、見出しは太さで分ける（`--font-heading-weight` 600、大きな題は `--font-display-weight` 500）。中身の横幅は `--content-max`（1280px）と左右の余白 `--content-gutter` の 2 つだけで決め、会話の列・入力欄の台・ページ（`.view-inner`、実行ログも同じ）・タスクがこれを使う（幅を変えるときはここだけ直す。`tests/shell.test.ts` が見張る）。`:root` がライト、`:root[data-theme="dark"]` がダークの上書き。文字用のアクセント色（`--color-accent-text`）と薄い文字の 3 段階（`--color-text-muted*`）は、ライトで WCAG AA（4.5:1）に届くようデザインより少し濃くしてある。
   - `styles/components.css`: デザインの部品クラス（`.btn*` `.input` `.field` `.radio` `.seg` `.card*` `.tag*` `.table` `.dialog*` `.hr`）、スクロールバー、keyframes、`prefers-reduced-motion`。
   - `styles/logs.css`: 実行ログの表（グリッド。狭い幅では横に送れる）と振り返りの記録の寸法。
   - `styles/skills.css`: スキル・ツールの一覧・道具・フォルダと、スキルの窓（画面全体に重なる窓の枠: 背景・Esc・Tab の巡回）の寸法と動き。

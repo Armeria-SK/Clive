@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { ModelView, WorkerStatus } from '../web/src/api.ts';
 import { presenceOf } from '../web/src/avatar.ts';
@@ -390,4 +391,27 @@ test('isChatGenerating: 承認待ちの会話は「返事を作っている」�
   reset();
   const line = (generating: boolean) => presenceOf({ ...base, generating, approvals: 1 }).line;
   assert.equal(line(isChatGenerating(drafts, [{ conversationId: 'c1' }], undefined)), '承認を待っています（1 件）', '姿と一言も、承認待ちが勝つ');
+});
+
+const styleOf = (name: string): string => readFileSync(new URL(`../web/src/styles/${name}`, import.meta.url), 'utf8').replace(/\r/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+const ruleOf = (css: string, selector: string): string => {
+  const line = css.split('\n').find(l => l.startsWith(`${selector} {`));
+  assert.ok(line, `${selector} の規則が見つからない`);
+  return line;
+};
+
+test('幅の決まり: 会話の列・入力欄・ページ・タスク・実行ログの幅は tokens.css の --content-max と --content-gutter の 1 か所で決まる', () => {
+  const tokens = styleOf('tokens.css');
+  assert.match(tokens, /--content-max: \d+px;/, '最大の幅の変数');
+  assert.match(tokens, /--content-gutter: clamp\(/, '左右の余白の変数');
+  const targets: Array<[string, string]> = [
+    ['chat.css', '.chat-col'], ['chat.css', '.chat-dock-inner'], ['shell.css', '.view-inner'], ['tasks.css', '.tk-inner'],
+  ];
+  for (const [file, selector] of targets) {
+    const rule = ruleOf(styleOf(file), selector);
+    assert.match(rule, /max-width: var\(--content-max\)/, `${selector} は最大の幅を変数で持つ`);
+    assert.match(rule, /(padding-inline|padding): [^;]*var\(--content-gutter\)/, `${selector} は左右の余白を変数で持つ`);
+    assert.doesNotMatch(rule, /max-width: \d+px/, `${selector} に数字の幅を書き戻さない`);
+  }
+  assert.doesNotMatch(styleOf('logs.css'), /lg-inner \{[^}]*max-width/, '実行ログだけ別の幅にしない（.view-inner と同じ）');
 });

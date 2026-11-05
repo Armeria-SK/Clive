@@ -46,6 +46,9 @@
   --font-heading: var(--font-body);
   --font-heading-weight: 600;
   --font-display-weight: 500;
+
+  --content-max: 1280px;
+  --content-gutter: clamp(16px, 4vw, 48px);
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --space-1: 4.6px;

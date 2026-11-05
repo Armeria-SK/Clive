@@ -3,7 +3,7 @@
 
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-thread { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
-.chat-col { width: 100%; max-width: 720px; margin: 0 auto; padding: 40px 28px 28px; display: flex; flex-direction: column; gap: 18px; min-height: 100%; box-sizing: border-box; }
+.chat-col { width: 100%; max-width: var(--content-max); margin: 0 auto; padding: 40px var(--content-gutter) 28px; display: flex; flex-direction: column; gap: 18px; min-height: 100%; box-sizing: border-box; }
 .shell[data-mode="narrow"] .chat-col { padding: 20px 16px; }
 .chat-item { display: flex; flex-direction: column; min-width: 0; }
 .chat-item.indent { padding-left: 38px; }
@@ -23,7 +23,7 @@
 .chat-suggest-icon { display: inline-flex; flex: none; width: 14px; height: 14px; color: var(--color-accent); }
 
 .chat-user { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.chat-user-bubble { max-width: 82%; padding: 9px 14px; border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg); background: var(--color-surface); white-space: pre-wrap; overflow-wrap: anywhere; text-wrap: pretty; font-size: 14.5px; line-height: 1.65; }
+.chat-user-bubble { max-width: min(82%, 760px); padding: 9px 14px; border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg); background: var(--color-surface); white-space: pre-wrap; overflow-wrap: anywhere; text-wrap: pretty; font-size: 14.5px; line-height: 1.65; }
 .chat-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .chat-chip { gap: 5px; max-width: 100%; overflow-wrap: anywhere; }
 
@@ -113,9 +113,10 @@
 .chat-number-value.warn { color: var(--color-accent-text); }
 .chat-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.chat-dock { flex: none; padding: 0 28px 18px; }
-.shell[data-mode="narrow"] .chat-dock { padding: 0 10px 10px; }
-.chat-dock-inner { position: relative; display: flex; flex-direction: column; max-width: 720px; margin: 0 auto; }
+.chat-dock { flex: none; padding: 0 0 18px; }
+.shell[data-mode="narrow"] .chat-dock { padding: 0 0 10px; }
+.chat-dock-inner { position: relative; display: flex; flex-direction: column; width: 100%; max-width: var(--content-max); margin: 0 auto; padding-inline: var(--content-gutter); box-sizing: border-box; }
+.shell[data-mode="narrow"] .chat-dock-inner { padding-inline: 10px; }
 
 .chat-approval-stack { position: relative; margin-bottom: 10px; }
 .chat-approval-stack.behind { padding-top: 7px; }

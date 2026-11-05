@@ -138,7 +138,7 @@ button.sb-item:hover { background: color-mix(in srgb, var(--color-text) 7%, tran
 
 /* ページ（デザインの「スキル・ツール」「実行ログ」などと同じ並び: 大きな題 + 説明 + 中身） */
 .view { overflow-y: auto; scrollbar-width: thin; }
-.view-inner { width: 100%; max-width: 900px; margin: 0 auto; padding: 34px 36px 56px; display: flex; flex-direction: column; gap: 18px; box-sizing: border-box; }
+.view-inner { width: 100%; max-width: var(--content-max); margin: 0 auto; padding: 34px var(--content-gutter) 56px; display: flex; flex-direction: column; gap: 18px; box-sizing: border-box; }
 .shell[data-mode="narrow"] .view-inner { padding: 22px 16px 40px; }
 .view-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
 .view-titles { display: flex; flex-direction: column; gap: 4px; }

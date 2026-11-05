@@ -1,5 +1,4 @@
 /* 実行ログ: 実行・道具の表と、振り返りの記録。寸法と動きはデザインに合わせる。 */
-.view-inner.lg-inner { max-width: 980px; }
 .lg-seg .seg-opt { padding: 5px 12px; font-size: 12.5px; }
 .lg-scroll { overflow-x: auto; }
 .lg-table { display: grid; font-size: 13px; }
