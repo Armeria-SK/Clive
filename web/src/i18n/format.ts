@@ -41,6 +41,12 @@ export function formatDateTime(ms: number | null | undefined, style: DateStyle =
   return ms ? dateFormatter(getLanguage(), getTimezone(), style).format(ms) : '—';
 }
 
+// 今日の時刻は時刻だけ、別の日は日付つきで。
+export function formatDateTimeSmart(ms: number | null | undefined, now = Date.now()): string {
+  if (!ms) return '—';
+  return formatDateTime(ms, startOfDay(ms) === startOfDay(now) ? 'time' : 'compact');
+}
+
 export function parseZonedInput(value: string, zone = getTimezone()): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/u.exec(value.trim());
   if (!m) return null;

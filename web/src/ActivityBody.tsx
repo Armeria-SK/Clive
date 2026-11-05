@@ -5,7 +5,7 @@ import { Avatar } from './Avatar.tsx';
 import type { Runtime } from './avatar.ts';
 import { useNow } from './hooks.ts';
 import { Icon, type IconName } from './icons.tsx';
-import { formatDateTime, formatElapsed, startOfDay, useT, type PlainKey } from './i18n/index.ts';
+import { formatDateTime, formatDateTimeSmart, formatElapsed, startOfDay, useT, type PlainKey } from './i18n/index.ts';
 import { toast } from './toast.tsx';
 import { ZoneNote } from './ZoneNote.tsx';
 
@@ -58,12 +58,14 @@ export function ActivityBody(props: Props) {
     api.setWorker(patch).then(onWorker).catch(() => toast({ title: t('toast.actionFailed'), icon: 'alert' }));
   };
 
+  const stopRun = (runId: string) => { api.stop(runId).catch(() => toast({ title: t('toast.actionFailed'), icon: 'alert' })); };
+
   const done = tasks ? finishedToday(tasks.finished, startOfDay(clock)) : [];
-  const upNext = tasks ? upNextTasks(tasks.active, clock) : [];
+  const upNext = tasks ? upNextTasks(tasks.active, clock, { allowSelf: Boolean(worker?.autonomy) }) : [];
   const recent = recentRuns(runs);
   const paused = Boolean(worker?.paused);
   const elapsed = running && props.runStartedAt !== undefined ? formatElapsed(tick - props.runStartedAt) : '';
-  const nextWake = !worker ? '—' : paused ? '—' : running ? t('activity.running') : worker.nextWakeAt ? formatDateTime(Math.max(worker.nextWakeAt, clock), 'time') : '—';
+  const nextWake = !worker ? '—' : paused ? '—' : running ? t('activity.running') : worker.nextWakeAt ? formatDateTimeSmart(Math.max(worker.nextWakeAt, clock), clock) : '—';
 
   return (
     <div className="act">
@@ -136,15 +138,18 @@ export function ActivityBody(props: Props) {
       <section className="act-section">
         <span className="act-label">{t('activity.running')}</span>
         {running ? (
-          <a className="act-run" href={running.kind === 'task' && running.taskId ? taskHref(running.taskId) : '#/review'}>
-            <span className="act-run-head">
-              <span className={`act-run-spin${paused ? '' : ' spin'}`}><Icon name="loader" size={13} /></span>
-              <span className="act-run-title">{running.title}</span>
-              <span className="act-run-elapsed">{elapsed}</span>
-            </span>
+          <div className="act-run">
+            <div className="act-run-top">
+              <a className="act-run-head" href={running.kind === 'task' && running.taskId ? taskHref(running.taskId) : '#/review'}>
+                <span className={`act-run-spin${paused ? '' : ' spin'}`}><Icon name="loader" size={13} /></span>
+                <span className="act-run-title">{running.title}</span>
+                <span className="act-run-elapsed">{elapsed}</span>
+              </a>
+              <button className="btn btn-ghost btn-icon act-run-stop" onClick={() => stopRun(running.runId)} aria-label={t('activity.stopRun')} data-tip={t('activity.stopRun')}><Icon name="square" size={12} /></button>
+            </div>
             {(paused || note) && <span className="act-run-note swap" key={paused ? 'paused' : note}>{paused ? t('activity.paused') : note}</span>}
             <span className="act-run-line"><span className={paused ? undefined : 'flow'} /></span>
-          </a>
+          </div>
         ) : <span className="act-none">{t('activity.runningNone')}</span>}
       </section>
 
@@ -157,7 +162,7 @@ export function ActivityBody(props: Props) {
             <a key={task.id} className="act-next" href={taskHref(task.id)}>
               <span className="act-next-icon"><Icon name={icon} size={14} /></span>
               <span className="act-next-title">{task.title}</span>
-              <span className="act-next-when">{when.kind === 'priority' ? t('activity.priority', when.priority) : when.kind === 'cron' ? when.text : formatDateTime(when.at)}</span>
+              <span className="act-next-when">{when.kind === 'priority' ? t('activity.priority', when.priority) : when.kind === 'cron' ? (when.at ? `${when.text} · ${formatDateTimeSmart(when.at, clock)}` : when.text) : formatDateTime(when.at)}</span>
             </a>
           );
         }) : <span className="act-none">{t('activity.upNextNone')}</span>}
@@ -173,7 +178,7 @@ export function ActivityBody(props: Props) {
           const kindKey = RUN_KIND_KEY[run.kind];
           return (
             <div key={run.id} className="act-recent">
-              <span className="act-recent-time">{formatDateTime(run.started_at, 'time')}</span>
+              <span className="act-recent-time">{formatDateTimeSmart(run.started_at, clock)}</span>
               <span className="act-recent-kind">{kindKey ? t(kindKey) : run.kind}{run.model_id && <span className="act-recent-model"> {run.model_id}</span>}</span>
               <span className={`act-recent-result${outcome.kind === 'ok' ? '' : ' bad'}`}>
                 <Icon name={outcome.kind === 'ok' ? 'check' : outcome.kind === 'running' ? 'loader' : 'x'} size={11} />

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { DAY_MAP } from '../src/tasks/schedule.ts';
 import { en } from '../web/src/i18n/en.ts';
 import {
-  formatDateTime, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getTimezone, initLanguage, loadTimezone, parseZonedInput, pluralEn,
+  formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getTimezone, initLanguage, loadTimezone, parseZonedInput, pluralEn,
   resolveLanguage, setLanguagePreference, setTimezone, startOfDay, t, timezoneLabel,
 } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
@@ -324,4 +324,19 @@ test('t(): 引数が違うキーの和集合は型で断り、引数が同じ和
   assert.equal(t(memory, 'x'), '記憶しました: x');
   const plain = 'nav.tasks' as 'nav.tasks' | 'nav.memory';
   assert.equal(t(plain), 'タスク');
+});
+
+test('formatDateTimeSmart: 今日（設定のタイムゾーンで）の時刻は時刻だけ、別の日は日付つき', () => {
+  reset();
+  const now = Date.UTC(2026, 10, 5, 3, 0);
+  assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 0, 30), now), '09:30', '同じ日（東京）は時刻だけ');
+  assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 20, 0), now), '11/6 05:00', '翌日は日付つき');
+  assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 4, 14, 59), now), '11/4 23:59', '前日は日付つき');
+  assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 14, 59), now), '23:59', '今日の終わりまで');
+  assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 15, 0), now), '11/6 00:00', '東京の 0 時から別の日');
+  assert.equal(formatDateTimeSmart(null, now), '—');
+  setTimezone('America/New_York');
+  assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 0, 30), now), '19:30', 'ニューヨークでは now と同じ日（11/4）の晩');
+  assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 12, 0), now), '11/5 07:00', 'ニューヨークでは翌日（11/5）の朝');
+  reset();
 });

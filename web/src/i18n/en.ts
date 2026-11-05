@@ -162,6 +162,7 @@ export const en: Dict = {
   'activity.runFailed': 'Failed',
   'activity.runCancelled': 'Stopped',
   'activity.runInProgress': 'Running',
+  'activity.stopRun': 'Stop',
   'run.kind.chat': 'Chat',
   'run.kind.task': 'Task',
   'run.kind.review': 'Memory review',

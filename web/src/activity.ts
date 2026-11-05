@@ -7,24 +7,29 @@ const NOTE_CHARS = 120;
 // 今すぐ動ける実行待ち（日時の指定が無いか、もう過ぎている）
 export const isReadyNow = (task: Task, now: number): boolean => task.status === 'ready' && (task.run_at === null || task.run_at <= now);
 
-// 「次に動くタスク」: 今すぐ動けるもの（優先度の高い順）→ 予定（日時の早い順）。実行中・返事待ち・提案・終わったものは出さない。
-export function upNextTasks(active: readonly Task[], now: number, limit = UP_NEXT_LIMIT): Task[] {
-  const candidates = active.filter(t => t.status === 'ready' || t.status === 'scheduled');
-  const when = (t: Task) => t.run_at ?? Number.MAX_SAFE_INTEGER;
-  return [...candidates].sort((a, b) => {
-    const aNow = isReadyNow(a, now);
-    const bNow = isReadyNow(b, now);
-    if (aNow !== bNow) return aNow ? -1 : 1;
-    if (aNow) return a.priority - b.priority || a.created_at - b.created_at;
-    return when(a) - when(b) || a.priority - b.priority;
-  }).slice(0, limit);
+const ORIGIN_RANK: Record<Task['origin'], number> = { user: 0, schedule: 1, self: 2, curiosity: 3 };
+
+// 「次に動くタスク」: サーバーが実際に選ぶ順（src/tasks/store.ts の pickNext）に合わせる。
+// 今すぐ動けるもの（実行待ちで、日時が無いか過ぎていて、試行の上限に達していない）を、出どころ（あなた → 予定 → Clive → 好奇心）、
+// 優先度、日時（無ければ作った順）で並べる。自発行動がオフのあいだは、Clive が自分で作ったもの・好奇心のものは動かないので出さない。
+// そのあとに、日時が先の予定を日時の早い順に置く。実行中・返事待ち・提案・終わったものは出さない。
+export function upNextTasks(active: readonly Task[], now: number, options: { allowSelf: boolean }, limit = UP_NEXT_LIMIT): Task[] {
+  const allowed = (t: Task) => options.allowSelf || t.origin === 'user' || t.origin === 'schedule';
+  const retriable = (t: Task) => t.attempts < t.max_attempts;
+  const runnable = active
+    .filter(t => isReadyNow(t, now) && retriable(t) && allowed(t))
+    .sort((a, b) => ORIGIN_RANK[a.origin] - ORIGIN_RANK[b.origin] || a.priority - b.priority || (a.run_at ?? a.created_at) - (b.run_at ?? b.created_at));
+  const later = active
+    .filter(t => !isReadyNow(t, now) && (t.status === 'scheduled' || (t.status === 'ready' && retriable(t) && allowed(t))))
+    .sort((a, b) => (a.run_at ?? Number.MAX_SAFE_INTEGER) - (b.run_at ?? Number.MAX_SAFE_INTEGER) || a.priority - b.priority);
+  return [...runnable, ...later].slice(0, limit);
 }
 
-export type TaskWhen = { kind: 'priority'; priority: number } | { kind: 'cron'; text: string } | { kind: 'at'; at: number };
+export type TaskWhen = { kind: 'priority'; priority: number } | { kind: 'cron'; text: string; at: number | null } | { kind: 'at'; at: number };
 
 export function taskWhen(task: Task, now: number): TaskWhen {
   if (isReadyNow(task, now)) return { kind: 'priority', priority: task.priority };
-  if (task.cron_text) return { kind: 'cron', text: task.cron_text };
+  if (task.cron_text) return { kind: 'cron', text: task.cron_text, at: task.run_at };
   return task.run_at ? { kind: 'at', at: task.run_at } : { kind: 'priority', priority: task.priority };
 }
 

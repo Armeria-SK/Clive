@@ -160,6 +160,7 @@ export const ja = {
   'activity.runFailed': '失敗',
   'activity.runCancelled': '中止',
   'activity.runInProgress': '実行中',
+  'activity.stopRun': '止める',
   'run.kind.chat': 'チャット',
   'run.kind.task': 'タスク',
   'run.kind.review': '振り返り',

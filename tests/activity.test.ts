@@ -22,32 +22,65 @@ function run(id: string, patch: Partial<RunRow> = {}): RunRow {
   };
 }
 
-test('upNextTasks: 今すぐ動けるもの（優先度の高い順）→ 予定（日時の早い順）。動いているもの・返事待ち・提案・終わったものは出さない', () => {
+test('upNextTasks: サーバーの選び方（出どころ → 優先度 → 日時）に合わせ、そのあとに先の予定。自発行動がオフなら Clive 自身のタスクは出さない', () => {
   const tasks = [
     task('low', { priority: 3, created_at: 1 }),
     task('high-late', { priority: 1, created_at: 9 }),
     task('high-early', { priority: 1, created_at: 2 }),
-    task('later', { status: 'scheduled', run_at: NOW + 7_200_000, cron_text: '毎日 09:00' }),
-    task('soon', { status: 'scheduled', run_at: NOW + 3_600_000 }),
+    task('schedule-origin', { origin: 'schedule', priority: 1, created_at: 3 }),
+    task('self-high', { origin: 'self', priority: 1, created_at: 1 }),
+    task('curiosity', { origin: 'curiosity', priority: 1, created_at: 1 }),
+    task('later', { status: 'scheduled', origin: 'schedule', run_at: NOW + 7_200_000, cron_text: '毎日 09:00' }),
+    task('soon', { status: 'scheduled', origin: 'schedule', run_at: NOW + 3_600_000 }),
     task('ready-in-future', { status: 'ready', run_at: NOW + 1_800_000 }),
     task('past-run-at', { status: 'ready', run_at: NOW - 5000, priority: 2, created_at: 5 }),
+    task('exhausted', { priority: 1, attempts: 3, max_attempts: 3 }),
     task('running', { status: 'running' }),
     task('waiting', { status: 'waiting' }),
     task('inbox', { status: 'inbox' }),
     task('done', { status: 'done' }),
   ];
-  const all = upNextTasks(tasks, NOW, 99).map(t => t.id);
-  assert.deepEqual(all, ['high-early', 'high-late', 'past-run-at', 'low', 'ready-in-future', 'soon', 'later']);
-  assert.equal(upNextTasks(tasks, NOW).length, UP_NEXT_LIMIT, '既定は 4 件まで');
-  assert.deepEqual(upNextTasks([], NOW), []);
+  const off = upNextTasks(tasks, NOW, { allowSelf: false }, 99).map(t => t.id);
+  assert.deepEqual(off, ['high-early', 'high-late', 'past-run-at', 'low', 'schedule-origin', 'ready-in-future', 'soon', 'later']);
+  const on = upNextTasks(tasks, NOW, { allowSelf: true }, 99).map(t => t.id);
+  assert.ok(on.includes('self-high') && on.includes('curiosity'), '自発行動がオンなら Clive 自身のタスクも動く');
+  assert.ok(!off.includes('self-high') && !off.includes('curiosity'), '自発行動がオフなら出さない');
+  assert.ok(!off.includes('exhausted') && !on.includes('exhausted'), '試行の上限に達したものは動かない');
+  assert.ok(!on.includes('running') && !on.includes('waiting') && !on.includes('inbox') && !on.includes('done'));
+  assert.equal(upNextTasks(tasks, NOW, { allowSelf: false }).length, UP_NEXT_LIMIT, '既定は 4 件まで');
+  assert.deepEqual(upNextTasks([], NOW, { allowSelf: false }), []);
   assert.equal(isReadyNow(task('a', { run_at: NOW + 1 }), NOW), false);
   assert.equal(isReadyNow(task('a', { run_at: NOW }), NOW), true, '日時ちょうどは動ける');
   assert.equal(isReadyNow(task('a', { status: 'scheduled' }), NOW), false);
 });
 
-test('taskWhen: すぐ動けるものは優先度、繰り返しはその説明、日時の予定は日時', () => {
+test('upNextTasks: 今すぐ動ける順は 出どころ（あなた → 予定 → Clive → 好奇心）→ 優先度 → 日時（無ければ作った順）、先の予定は日時の早い順', () => {
+  const ids = (tasks: Task[], allowSelf = true) => upNextTasks(tasks, NOW, { allowSelf }, 99).map(t => t.id);
+  assert.deepEqual(ids([
+    task('curiosity-p1', { origin: 'curiosity', priority: 1 }),
+    task('self-p1', { origin: 'self', priority: 1 }),
+    task('schedule-p3', { origin: 'schedule', priority: 3 }),
+    task('user-p3', { origin: 'user', priority: 3 }),
+    task('user-p1', { origin: 'user', priority: 1 }),
+  ]), ['user-p1', 'user-p3', 'schedule-p3', 'self-p1', 'curiosity-p1'], '優先度より出どころが先');
+  assert.deepEqual(ids([
+    task('b-late-run-at', { priority: 2, run_at: NOW - 1000, created_at: 1 }),
+    task('a-early-run-at', { priority: 2, run_at: NOW - 9000, created_at: 9 }),
+    task('c-created-first', { priority: 2, run_at: null, created_at: NOW - 20_000 }),
+  ]), ['c-created-first', 'a-early-run-at', 'b-late-run-at'], '同じ優先度なら、日時（無ければ作った日時）の早い順');
+  assert.deepEqual(ids([
+    task('later-b', { status: 'scheduled', origin: 'schedule', run_at: NOW + 9000 }),
+    task('later-a', { status: 'ready', run_at: NOW + 5000 }),
+    task('now', { priority: 3 }),
+  ]), ['now', 'later-a', 'later-b'], '今動けるものが先、そのあと先の予定を日時順');
+  assert.deepEqual(ids([task('self-future', { origin: 'self', run_at: NOW + 5000 })], false), [], '自発行動がオフのとき、先の予定でも Clive 自身のものは出さない');
+  assert.deepEqual(ids([task('scheduled-self-off', { status: 'scheduled', origin: 'schedule', run_at: NOW + 5000 })], false), ['scheduled-self-off'], '予定（schedule の出どころ）は自発行動に関係なく動く');
+});
+
+test('taskWhen: すぐ動けるものは優先度、繰り返しは説明と次の日時、日時の予定は日時', () => {
   assert.deepEqual(taskWhen(task('a', { priority: 1 }), NOW), { kind: 'priority', priority: 1 });
-  assert.deepEqual(taskWhen(task('a', { status: 'scheduled', cron_text: '毎週 月曜 09:00', run_at: NOW + 1000 }), NOW), { kind: 'cron', text: '毎週 月曜 09:00' });
+  assert.deepEqual(taskWhen(task('a', { status: 'scheduled', cron_text: '毎週 月曜 09:00', run_at: NOW + 1000 }), NOW), { kind: 'cron', text: '毎週 月曜 09:00', at: NOW + 1000 });
+  assert.deepEqual(taskWhen(task('a', { status: 'scheduled', cron_text: '毎日', run_at: null }), NOW), { kind: 'cron', text: '毎日', at: null });
   assert.deepEqual(taskWhen(task('a', { status: 'scheduled', run_at: NOW + 1000 }), NOW), { kind: 'at', at: NOW + 1000 });
   assert.deepEqual(taskWhen(task('a', { status: 'ready', run_at: NOW + 1000 }), NOW), { kind: 'at', at: NOW + 1000 }, '日時が先の実行待ちは日時');
   assert.deepEqual(taskWhen(task('a', { status: 'scheduled', priority: 3 }), NOW), { kind: 'priority', priority: 3 }, '日時も説明も無ければ優先度');

@@ -4,7 +4,7 @@ import { ja } from './ja.ts';
 import { getLanguage, getVersion, subscribe, type Lang } from './state.ts';
 import type { ArgsOf, Dict, DictKey } from './types.ts';
 
-export { formatDateTime, formatList, formatNumber, formatRelative, parseZonedInput, pluralEn, startOfDay, timezoneLabel, type DateStyle } from './format.ts';
+export { formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, parseZonedInput, pluralEn, startOfDay, timezoneLabel, type DateStyle } from './format.ts';
 export { formatElapsed } from './elapsed.ts';
 export { loadTimezone, type LoadTimezoneOptions, type TimezoneSettingsView } from './load-timezone.ts';
 export {
