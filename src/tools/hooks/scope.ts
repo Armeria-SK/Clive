@@ -117,7 +117,7 @@ const hasGitSegment = (p: string): boolean => p.split(/[\\/]/u).some(part => fol
 export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKind | undefined {
   if (isRemotePath(abs)) return 'git';
   const real = realish(abs);
-  if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || insideGitDir(real)) return 'git';
+  if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || (real !== abs && insideGitDir(real))) return 'git';
   if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';
   return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
 }
