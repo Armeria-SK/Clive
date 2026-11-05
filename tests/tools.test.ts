@@ -568,6 +568,21 @@ test('ツールの設定ファイル（PowerShell のプロファイルなど）
   assert.equal((await s.call('file_write', { path: 'dot/notes.md', content: 'x' })).decision, 'allow');
 });
 
+test('作業フォルダの .curlrc・_curlrc・.wgetrc への file_write も、会話の許可を越えて毎回確かめる。名前が似ているだけのファイルは、これまでどおり', async t => {
+  const s = setup(t);
+  for (const path of ['.curlrc', 'proj/_curlrc', 'a/b/.wgetrc']) {
+    const first = s.call('file_write', { path, content: 'output = "SOUL.md"' });
+    const request = await decideNext(s, 'conversation');
+    assert.equal(request.onceOnly, true, path);
+    assert.match(request.reasons.join(), /ツールの設定ファイル/u, path);
+    await first;
+    const second = s.call('file_write', { path, content: 'x' });
+    assert.equal((await decideNext(s, 'deny')).onceOnly, true, `${path}: 会話の許可があっても、また確かめる`);
+    await second;
+  }
+  for (const path of ['.curlrc.example', 'proj/curlrc', 'notes/.wgetrc.bak']) assert.equal((await s.call('file_write', { path, content: 'x' })).decision, 'allow', path);
+});
+
 // 洗い出せない git（2.32 より古い、または版を確かめられない）では、git は何であれ今回だけにする。作業フォルダの中の git は、版を調べるためにも動かさない
 async function withGitFirstOnPath<T>(dir: string, body: () => Promise<T>): Promise<T> {
   const key = Object.keys(process.env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH';

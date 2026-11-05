@@ -29,6 +29,8 @@ function allowed(entry: ConfigEntry): boolean {
   if (EXTRA_PLAIN.has(entry.key)) return true;
   // リポジトリの設定では読むサブコマンドのときだけ許していたが、ホームの設定では書くサブコマンド（commit など）のフックの場所にもなるので落とす
   if (entry.key === 'core.hookspath') return false;
+  // git log が署名の検証のために gpg を動かす
+  if (entry.key === 'log.showsignature') return false;
   return unusualKey([entry]) === null && parts[0] !== 'extensions';
 }
 
@@ -105,7 +107,7 @@ function overrides(hooksDir: string, helpers: readonly string[]): Array<[string,
     ['core.fsmonitor', 'false'], ['core.hooksPath', hooksDir], ['core.pager', 'cat'], ['core.editor', 'true'], ['sequence.editor', 'true'],
     ['core.sshCommand', 'ssh'], ['core.askPass', ''], ['core.gitProxy', 'none'],
     ['gpg.program', 'gpg'], ['gpg.openpgp.program', 'gpg'], ['gpg.x509.program', 'gpgsm'], ['gpg.ssh.program', 'ssh-keygen'], ['gpg.ssh.defaultKeyCommand', 'ssh-add -L'],
-    ['protocol.ext.allow', 'never'],
+    ['protocol.ext.allow', 'never'], ['log.showSignature', 'false'],
     // 認証の補助は足し算なので、先に空にして（リポジトリの設定の補助を捨てる）、洗い出した設定にある安全な補助だけを足し直す
     ['credential.helper', ''], ...helpers.map((helper): [string, string] => ['credential.helper', helper]),
   ];

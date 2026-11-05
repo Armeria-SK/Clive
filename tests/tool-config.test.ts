@@ -218,3 +218,25 @@ test('本物の wget: ~/.wgetrc と WGETRC は、本当に読まれる場所と�
   assert.equal(version({ WGETRC: env }).includes(`${env} (env)`), true, 'wget --version に (env) の WGETRC が載らない');
   assert.equal(wgetConfigFile({ HOME: f.home, WGETRC: env }), env);
 });
+
+// 審査の指摘: .curlrc・_curlrc・.wgetrc は、作業フォルダでもどのフォルダでも、書くと次の curl・wget の設定になる
+test('.curlrc・_curlrc・.wgetrc への書き込み・消すこと・名前の変更は、どのフォルダでも今回だけ。名前が似ているだけのファイルは、これまでどおり', t => {
+  const f = fixture(t);
+  for (const rel of ['workspace/.curlrc', 'workspace/sub/_curlrc', 'workspace/a/b/.wgetrc', '.curlrc', 'elsewhere/.WGETRC', 'x/_CURLRC']) assert.equal(isToolConfigPath(join(f.home, ...rel.split('/')), f.env), true, rel);
+  for (const rel of ['workspace/.curlrc.example', 'workspace/curlrc', 'workspace/my.curlrc', 'workspace/.wgetrc.bak', 'workspace/notes/_curlrc.md', 'workspace/sub/curlrc.txt']) assert.equal(isToolConfigPath(join(f.home, ...rel.split('/')), f.env), false, rel);
+  mkdirSync(join(f.ws, 'sub'), { recursive: true });
+  for (const command of ['echo x > .curlrc', 'echo x >> sub/_curlrc', 'tee .wgetrc', 'cp a.txt .curlrc', 'cp a.txt sub/_curlrc', 'mv a.txt .wgetrc', 'rm .curlrc', 'rm sub/_curlrc', 'touch .wgetrc', 'mkdir .curlrc', 'printf x | tee sub/.wgetrc']) {
+    const v = f.bash(command);
+    assert.equal(v.onceOnly, true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+    assert.match(v.reasons.join(), /ツールの設定ファイル/u, command);
+  }
+  for (const command of ['Set-Content .curlrc x', 'Add-Content sub\\_curlrc x', 'Out-File .wgetrc', 'Copy-Item a.txt .curlrc', 'Move-Item a.txt sub\\.wgetrc', 'Remove-Item .curlrc', 'New-Item -Path . -Name _curlrc', 'Rename-Item notes.md -NewName .wgetrc']) {
+    const v = f.ps(command);
+    assert.equal(v.onceOnly, true, `${command}: ${v.decision} ${v.reasons.join(' / ')}`);
+  }
+  // 読む・名前が似ているだけのファイルは、これまでどおり
+  assert.equal(f.bash('cat .curlrc').decision, 'allow');
+  assert.equal(f.bash('echo x > .curlrc.example').decision, 'allow');
+  assert.equal(f.bash('echo x > sub/curlrc').decision, 'allow');
+  assert.equal(f.ps('Set-Content .curlrc.bak x').decision, 'allow');
+});

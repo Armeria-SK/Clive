@@ -46,9 +46,12 @@ export function toolConfigPaths(env: Env = process.env): string[] {
 // どこにあっても、この名前のファイルは PowerShell のプロファイル（読み込まれるたびに動く）
 const PROFILE_NAME = /^(?:microsoft\.powershell_profile|microsoft\.vscode_profile|microsoft\.powershellise_profile)\.ps1$/iu;
 
+// どのフォルダにあっても、この名前のファイルは curl・wget の設定（作業フォルダのものも、cd のあとの curl・wget が読む場所になりうる）
+const RC_NAME = /^(?:\.curlrc|_curlrc|\.wgetrc)$/iu;
+
 export function isToolConfigPath(abs: string, env: Env = process.env): boolean {
   const name = abs.split(/[\\/]/u).pop() ?? '';
-  if (PROFILE_NAME.test(name)) return true;
+  if (PROFILE_NAME.test(name) || RC_NAME.test(name)) return true;
   return toolConfigPaths(env).some(p => isInside(p, abs));
 }
 

@@ -186,7 +186,7 @@ test('コマンドレベルの上書き: プログラムを動かす決まった
   const list = overridesOf(run.env);
   const map = new Map(list);
   for (const [key, value] of [['core.fsmonitor', 'false'], ['core.pager', 'cat'], ['core.editor', 'true'], ['sequence.editor', 'true'], ['core.sshCommand', 'ssh'], ['core.askPass', ''], ['core.gitProxy', 'none'],
-    ['gpg.program', 'gpg'], ['gpg.openpgp.program', 'gpg'], ['gpg.x509.program', 'gpgsm'], ['gpg.ssh.program', 'ssh-keygen'], ['gpg.ssh.defaultKeyCommand', 'ssh-add -L'], ['protocol.ext.allow', 'never']] as const) {
+    ['gpg.program', 'gpg'], ['gpg.openpgp.program', 'gpg'], ['gpg.x509.program', 'gpgsm'], ['gpg.ssh.program', 'ssh-keygen'], ['gpg.ssh.defaultKeyCommand', 'ssh-add -L'], ['protocol.ext.allow', 'never'], ['log.showSignature', 'false']] as const) {
     assert.equal(map.get(key), value, key);
   }
   const hooks = map.get('core.hooksPath')!;
@@ -258,5 +258,43 @@ test('本物の git: リポジトリの設定の fsmonitor・フック・sshComm
   exercise(withFakeGpg({ ...baseEnv, ...run.env }));
   assert.deepEqual(names.filter(n => existsSync(marker(n))), [], '上書きがあっても動いた');
   assert.equal(existsSync(marker('pathgpg')), true, 'gpg.program=gpg の上書きは、PATH の gpg を指す');
+  run.cleanup();
+});
+
+test('git の設定の洗い出し: log.showSignature は落とす（git log が gpg を動かす）。ふつうの表示の項目は残す', () => {
+  const kept = parseGitConfig(sanitizeGitConfig(['[log]\n\tshowSignature = true\n\tdate = iso\n\tdecorate = short\n\tabbrevCommit = true\n[LOG]\n\tSHOWSIGNATURE = yes\n']))!.map(e => e.key);
+  assert.deepEqual(kept, ['log.date', 'log.decorate', 'log.abbrevcommit']);
+});
+
+test('本物の git: リポジトリの設定の log.showSignature は、git log が gpg を動かす。上書きがあると動かさない', { skip: !gitAvailable && 'git が無い' }, t => {
+  const root = tempDir(t);
+  const home = join(root, 'home');
+  const repo = join(root, 'repo');
+  mkdirSync(home);
+  mkdirSync(repo);
+  const marker = join(root, 'm-gpg');
+  const fakeBin = join(root, 'bin');
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, 'gpg'), `#!/bin/sh\necho ran > "${slash(marker)}"\nexit 1\n`, { mode: 0o755 });
+  writeFileSync(join(root, 'empty-global'), '');
+  const baseEnv: Record<string, string> = {
+    ...(process.env as Record<string, string>), HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(root, 'empty-global'), GIT_TERMINAL_PROMPT: '0',
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e', PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+  };
+  for (const key of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete baseEnv[key];
+  const git = (args: string[], env: Record<string, string>, input?: string) => spawnSync('git', args, { cwd: repo, env, encoding: 'utf8', ...(input === undefined ? {} : { input }) });
+  assert.equal(git(['init', '-q'], baseEnv).status, 0);
+  // 署名つきに見える commit（gpgsig ヘッダ）を作る
+  const tree = git(['write-tree'], baseEnv).stdout.trim();
+  const raw = `tree ${tree}\nauthor t <t@e> 1 +0000\ncommitter t <t@e> 1 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n x\n -----END PGP SIGNATURE-----\n\nsigned\n`;
+  const commit = git(['hash-object', '-t', 'commit', '-w', '--stdin'], baseEnv, raw).stdout.trim();
+  git(['update-ref', 'HEAD', commit], baseEnv);
+  git(['config', 'log.showSignature', 'true'], baseEnv);
+  git(['log', '-1'], baseEnv);
+  assert.equal(existsSync(marker), true, '前提: 本物の git は、log.showSignature のとき gpg を動かす');
+  rmSync(marker);
+  const run = prepareGitRun({ dataDir: join(root, 'data'), env: baseEnv });
+  git(['log', '-1'], { ...baseEnv, ...run.env });
+  assert.equal(existsSync(marker), false, '上書きがあっても gpg が動いた');
   run.cleanup();
 });
