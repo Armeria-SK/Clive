@@ -1,4 +1,4 @@
-import { ApiError, type ModelView } from './api.ts';
+import { ApiError, type ApprovalPathView, type ModelView } from './api.ts';
 import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
 import type { IconName } from './icon-paths.ts';
 import { probeMessage, serverText } from './server-text.ts';
@@ -265,6 +265,19 @@ export function firstLine(value: string, max = 160): string {
 }
 
 export const formatCountdown = (ms: number): string => formatElapsed(Math.max(0, ms));
+
+// 承認の札の、見つけたパスごとの判定の札。中は読み書き・読むだけで文が分かれ、知らない判定は「判定できない」
+export function approvalPathKey(path: Pick<ApprovalPathView, 'verdict' | 'mode'>): PlainKey {
+  switch (path.verdict) {
+    case 'in': return path.mode === 'read' ? 'approval.verdict.inRead' : 'approval.verdict.inWrite';
+    case 'out': return 'approval.verdict.out';
+    case 'deny': return 'approval.verdict.deny';
+    default: return 'approval.verdict.unknown';
+  }
+}
+
+// 許可フォルダの中は目立たせず、それ以外（外・拒否・判定できない）は縁取りで目立たせる（デザインどおり）
+export const approvalPathTone = (verdict: ApprovalPathView['verdict']): 'neutral' | 'outline' => (verdict === 'in' ? 'neutral' : 'outline');
 
 export function approvalFraction(expiresAt: number, now: number, totalMs: number): number {
   if (!(totalMs > 0)) return 0;

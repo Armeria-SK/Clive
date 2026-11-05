@@ -296,3 +296,39 @@ test('API: 設定の問題は文（problems）のほかに、ID で書いた場�
   assert.deepEqual(broken.configError.issues, [{ path: 'routing.background', message: 'モデル「ghost」がありません' }]);
   assert.deepEqual(broken.configError.problems, ['routing.background: モデル「ghost」がありません']);
 });
+
+test('API: 承認の札の paths は、承認の一覧・会話・タスクの詳細・SSE のどれでも同じ形で、無ければ空の配列', async t => {
+  const s = await startApp(t);
+  const seen: RunEvent[] = [];
+  s.app.bus.subscribe(e => seen.push(e.event));
+  const conversation = s.app.conversations.create({ kind: 'chat' });
+  const task = s.app.tasks.create({ title: '調べもの', origin: 'user', actor: 'user' });
+  const taskConversation = s.app.conversations.create({ kind: 'task' });
+  s.app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(taskConversation.id, task.id);
+  const paths = [
+    { input: 'a.txt', path: '/w/a.txt', verdict: 'in', mode: 'write' },
+    { input: '../out.txt', path: '/out.txt', verdict: 'out' },
+    { input: '$x', verdict: 'unknown' },
+  ] as const;
+  const signal = new AbortController().signal;
+  const request = (conversationId: string, extra: object) => s.app.approvals.request(
+    { runId: 'r1', conversationId, tool: 'shell_run', input: { command: `x ${conversationId}` }, title: '実行', body: 'x', reasons: [], details: [], ...extra }, 60_000, signal,
+  );
+  void request(conversation.id, { paths: [...paths] });
+  void request(taskConversation.id, { paths: [...paths] });
+  void request('plain', {});
+
+  const list = (await (await s.api('/api/approvals')).json() as any).approvals as Array<{ conversationId: string; paths: unknown }>;
+  assert.deepEqual(list.find(a => a.conversationId === conversation.id)!.paths, paths);
+  assert.deepEqual(list.find(a => a.conversationId === 'plain')!.paths, [], 'パスが無ければ空の配列');
+  const chat = (await (await s.api(`/api/conversations/${conversation.id}/messages`)).json() as any).approvals;
+  assert.deepEqual(chat.map((a: any) => a.paths), [paths]);
+  const detail = (await (await s.api(`/api/tasks/${task.id}`)).json() as any).approvals;
+  assert.deepEqual(detail.map((a: any) => a.paths), [paths]);
+  const sse = (seen.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>).find(e => e.conversationId === conversation.id)!;
+  assert.deepEqual(sse.approval.paths, paths);
+  const strip = (a: any) => { const { runId, conversationId, ...rest } = a; void runId; void conversationId; return rest; };
+  assert.deepEqual(strip(chat[0]), JSON.parse(JSON.stringify(sse.approval)), 'API と SSE は同じ形（API は runId と conversationId を添える）');
+  assert.deepEqual(Object.keys(chat[0]).sort(), Object.keys(detail[0]).sort(), '会話の応答とタスクの詳細は同じ項目を持つ');
+  s.app.approvals.cancelAll();
+});

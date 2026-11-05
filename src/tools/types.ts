@@ -11,7 +11,7 @@ import type { SearchThrottle } from './web/search.ts';
 import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
-import type { PreviewFile } from './approvals.ts';
+import type { ApprovalPath, PreviewFile } from './approvals.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -27,6 +27,8 @@ export interface PreCheck {
   decision: Decision;
   reasons: string[];
   details?: string[];
+  // 見つけたパスごとの判定（details と同じ材料を構造で。判定には使わず、承認の札に出すだけ）
+  paths?: ApprovalPath[];
   // コードを動かす確かめ（種類 'code'）を含む。会話の許可を越えず、毎回確かめる
   onceOnly?: boolean;
   askKinds?: Array<'code'>;

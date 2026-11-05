@@ -185,6 +185,8 @@
 .chat-dialog-mono { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
 .chat-dialog-mono.small { font-size: 12px; }
 .chat-dialog-list { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.chat-dialog-path { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.chat-dialog-path .tag { padding: 1px 8px; font-size: 10.5px; }
 .chat-dialog-text { margin: 0; font-size: 14px; color: var(--color-text-muted); overflow-wrap: anywhere; }
 .chat-dialog-actions { flex-wrap: wrap; margin-top: 4px; }
 @media (max-width: 759px) {

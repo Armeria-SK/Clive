@@ -7,7 +7,7 @@ import { candidateModelIds } from '../engine/chat.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
-import { approvalPublic, type ApprovalView } from '../tools/approvals.ts';
+import { approvalWire } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
 import { MemoryError, planBooks } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
@@ -46,10 +46,6 @@ function settingsView(app: App) {
 
 function isLanguage(value: string): value is Language {
   return (LANGUAGES as readonly string[]).includes(value);
-}
-
-function approvalView(a: ApprovalView) {
-  return { runId: a.runId, conversationId: a.conversationId, ...approvalPublic(a) };
 }
 
 function modelsView(app: App) {
@@ -118,7 +114,7 @@ export function createWebServer(app: App): WebServer {
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError) } : {}),
       })),
       activeRun: active ? { runId: active.runId, draft: app.bus.drafts().find(d => d.runId === active.runId)?.text ?? '' } : null,
-      approvals: app.approvals.pending().filter(a => a.conversationId === id).map(approvalView),
+      approvals: app.approvals.pending().filter(a => a.conversationId === id).map(approvalWire),
     });
   });
   router.add('POST', '/api/conversations/:id/messages', async ({ req, res, params }) => {
@@ -182,7 +178,7 @@ export function createWebServer(app: App): WebServer {
   });
 
   // ── 承認とツールの記録 ──
-  router.add('GET', '/api/approvals', ({ res }) => sendJson(res, 200, { approvals: app.approvals.pending().map(approvalView) }));
+  router.add('GET', '/api/approvals', ({ res }) => sendJson(res, 200, { approvals: app.approvals.pending().map(approvalWire) }));
   router.add('POST', '/api/approvals/:id', async ({ req, res, params }) => {
     const body = requireObject(await readJson(req));
     const decision = body.decision;

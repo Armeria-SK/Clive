@@ -7,7 +7,7 @@ import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { redactSecrets } from '../../shared/redaction.ts';
-import type { PreviewFile } from '../approvals.ts';
+import { approvalPaths, type PreviewFile } from '../approvals.ts';
 import { selfTouchMarkers } from '../hooks/code-guard.ts';
 import { expandPath, isInside, placePath } from '../hooks/scope.ts';
 import { checkShellCommand } from '../hooks/shell-guard.ts';
@@ -86,13 +86,14 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
     place: guardText(language, p.placement.kind === 'inside' ? (p.placement.mode === 'write' ? 'shell.place.write' : 'shell.place.read')
       : p.placement.kind === 'outside' ? 'shell.place.outside' : p.placement.kind === 'deny' ? 'shell.place.deny' : 'shell.place.unknown'),
   }));
-  if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, details };
+  const paths = approvalPaths(verdict.paths);
+  if (!verdict.onceOnly || verdict.decision === 'deny') return { decision: verdict.decision, reasons: verdict.reasons, details, paths };
   const peeked = verdict.scripts.map(file => peek(file, language));
   const markers = selfTouchMarkers([input.command, ...peeked.flatMap(p => p.content ?? [])].join('\n'), selfHostsOf(ctx.config));
   const base = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
   const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
   return {
-    decision: verdict.decision, reasons, details, onceOnly: true, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}),
+    decision: verdict.decision, reasons, details, paths, onceOnly: true, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}),
     preview: peeked.map(p => p.preview), bind: sha256(peeked.map(p => p.fingerprint).join('\n')),
   };
 }

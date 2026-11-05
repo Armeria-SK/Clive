@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type Approval } from './api.ts';
 import { decideApproval, useDecisionPending, type ApprovalDecision } from './approval-decide.ts';
-import { approvalFraction, formatCountdown } from './chat-logic.ts';
+import { approvalFraction, approvalPathKey, approvalPathTone, formatCountdown } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import { useNow } from './hooks.ts';
 import { useT } from './i18n/index.ts';
@@ -119,7 +119,19 @@ function ApprovalDetails({ approval, onClose }: { approval: Approval; onClose: (
             <div className="chat-dialog-list">{approval.reasons.map(reason => <span key={reason}>{reason}</span>)}</div>
           </>
         )}
-        {approval.details.length > 0 && (
+        {approval.paths.length > 0 ? (
+          <>
+            <span className="chat-dialog-key">{t('approval.paths')}</span>
+            <div className="chat-dialog-list">
+              {approval.paths.map((found, i) => (
+                <div key={`${i}:${found.path ?? found.input}`} className="chat-dialog-path">
+                  <span className="chat-dialog-mono small">{found.path ?? found.input}</span>
+                  <span className={`tag tag-${approvalPathTone(found.verdict)}`}>{t(approvalPathKey(found))}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : approval.details.length > 0 && (
           <>
             <span className="chat-dialog-key">{t('approval.paths')}</span>
             <div className="chat-dialog-list">{approval.details.map(path => <span key={path} className="chat-dialog-mono small">{path}</span>)}</div>

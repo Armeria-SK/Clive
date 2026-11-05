@@ -5,6 +5,7 @@ import { atomicWriteFile } from '../../config/store.ts';
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
+import { approvalPaths } from '../approvals.ts';
 import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
 import { isToolConfigPath } from '../hooks/tool-config.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
@@ -22,19 +23,21 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   if ('unresolved' in expanded) return { abs: '', check: { decision: 'deny', reasons: [guardText(language, 'guard.path_unresolved', { input, detail: expanded.unresolved })] } };
   const abs = expanded.path;
   const placement = placePath(abs, ctx.policy);
-  if (placement.kind === 'deny') return { abs, check: { decision: 'deny', reasons: [placement.reason] } };
+  const paths = approvalPaths([{ input, path: abs, placement }]);
+  const result = (check: PreCheck): { abs: string; check: PreCheck } => ({ abs, check: { ...check, paths } });
+  if (placement.kind === 'deny') return result({ decision: 'deny', reasons: [placement.reason] });
   if (placement.kind === 'outside') {
-    return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.outside', { path: abs, roots: ctx.policy.roots.map(r => guardText(language, r.mode === 'write' ? 'file.root_write' : 'file.root_read', { path: r.path })).join(guardText(language, 'file.root_sep')) })] } };
+    return result({ decision: 'deny', reasons: [guardText(language, 'file.outside', { path: abs, roots: ctx.policy.roots.map(r => guardText(language, r.mode === 'write' ? 'file.root_write' : 'file.root_read', { path: r.path })).join(guardText(language, 'file.root_sep')) })] });
   }
-  if (need === 'write' && placement.mode === 'read') return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.readonly', { root: placement.root })] } };
-  if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.symlink')] } };
+  if (need === 'write' && placement.mode === 'read') return result({ decision: 'deny', reasons: [guardText(language, 'file.readonly', { root: placement.root })] });
+  if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return result({ decision: 'deny', reasons: [guardText(language, 'file.symlink')] });
   const protectedKind = need === 'write' ? writeApprovalKind(abs, ctx.policy) : undefined;
   // .git への書き込みはフックや設定というコードを書くことになるので、会話の許可を越えて毎回確かめる。人格・スキルは、中身が引数にあるので今までどおり
-  if (protectedKind === 'git') return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] } };
-  if (protectedKind) return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])] } };
+  if (protectedKind === 'git') return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] });
+  if (protectedKind) return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])] });
   // git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンドにコードを読み込ませられるので、毎回確かめる
-  if (need === 'write' && isToolConfigPath(abs)) return { abs, check: { decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'] } };
-  return { abs, check: { decision: 'allow', reasons: [] } };
+  if (need === 'write' && isToolConfigPath(abs)) return result({ decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'] });
+  return result({ decision: 'allow', reasons: [] });
 }
 
 const shown = (abs: string, ctx: ToolContext) => {

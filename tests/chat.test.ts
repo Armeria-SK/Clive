@@ -3,7 +3,7 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathTone, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
   restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
@@ -429,4 +429,21 @@ test('流れている文の間引き: 短い返事は届くたびに描き、続
   long.render(`${base}bc`, 1002);
   assert.equal(long.state.cancelled, 1, '届くたびに前の待ちを止めて置き直す');
   assert.notEqual(long.render('別の文'.repeat(2000), 1003), base, '文が前の続きでなければ、すぐ描き直す');
+});
+
+test('承認の札のパス: 判定の札の辞書キーは 5 通り（中は読み書き・読むだけで分かれる）。辞書は ja にも en にもある', () => {
+  assert.equal(approvalPathKey({ verdict: 'in', mode: 'write' }), 'approval.verdict.inWrite');
+  assert.equal(approvalPathKey({ verdict: 'in', mode: 'read' }), 'approval.verdict.inRead');
+  assert.equal(approvalPathKey({ verdict: 'in' }), 'approval.verdict.inWrite', 'mode が無い古い応答でも落ちない');
+  assert.equal(approvalPathKey({ verdict: 'out' }), 'approval.verdict.out');
+  assert.equal(approvalPathKey({ verdict: 'deny' }), 'approval.verdict.deny');
+  assert.equal(approvalPathKey({ verdict: 'unknown' }), 'approval.verdict.unknown');
+  assert.equal(approvalPathKey({ verdict: 'something-new' as 'in' }), 'approval.verdict.unknown', '知らない判定は「判定できない」');
+  for (const key of ['approval.verdict.inWrite', 'approval.verdict.inRead', 'approval.verdict.out', 'approval.verdict.deny', 'approval.verdict.unknown'] as const) {
+    assert.equal(typeof ja[key], 'string', key);
+    assert.equal(typeof en[key], 'string', key);
+    assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, `${key}: 英語に日本語が混ざらない`);
+  }
+  assert.deepEqual(approvalPathTone('in'), 'neutral');
+  assert.deepEqual([approvalPathTone('out'), approvalPathTone('deny'), approvalPathTone('unknown')], ['outline', 'outline', 'outline']);
 });
