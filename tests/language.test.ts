@@ -10,7 +10,7 @@ import { CuriosityStore } from '../src/curiosity/store.ts';
 import { curiosityText } from '../src/curiosity/text.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { compactPrompt, compactSpeaker, compactSystem, snapshotLanguageKey, summarySection, withReplyReminder } from '../src/engine/prompts.ts';
+import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapshotLanguageKey, summarySection, withReplyReminder } from '../src/engine/prompts.ts';
 import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
 import type { ChatMessage } from '../src/engine/types.ts';
 import { jsonFallbackInstructions, toJsonFallbackHistory } from '../src/engine/toolcall-parse.ts';
@@ -556,6 +556,7 @@ test('返事の言語の注意: 言語を変えた会話のモデルへの要求
   await say(s, 'c1', 'one');
   const second = await say(s, 'c1', 'two');
   assert.deepEqual(contents(second), ['one', 'ok', 'two'], '言語を変えていない会話は、保存された発言そのまま（注意なし）');
+  assert.equal(s.app.kv.get(replyLanguageKey('c1')), undefined, '言語を変えていない会話には、何も記録しない');
 
   await s.setLanguage('en');
   const third = await say(s, 'c1', 'Hello again');
@@ -569,8 +570,13 @@ test('返事の言語の注意: 言語を変えた会話のモデルへの要求
 
   await s.setLanguage('ja');
   const back = await say(s, 'c1', 'three');
-  assert.deepEqual(contents(back).slice(-1), ['three'], '始めた言語（ja）に戻れば、また付かない');
-  assert.doesNotMatch(contents(back).join('\n'), /System note|システムからの注意/u);
+  assert.match(contents(back).at(-1)!, JA_REMINDER, '始めた言語（ja）に戻した最初の要求には、直前の返事が英語だったので日本語の注意が付く');
+  assert.match(contents(back).at(-1)!, /^three/u);
+  assert.doesNotMatch(contents(back).slice(0, -1).join('\n'), /System note|システムからの注意/u, '前の発言には付けない');
+  const backAgain = await say(s, 'c1', 'four');
+  assert.deepEqual(contents(backAgain).slice(-1), ['four'], '直前の返事が日本語になれば、また付かない');
+  assert.equal(s.app.kv.get(replyLanguageKey('c1')), 'ja');
+  assert.deepEqual(stored('c1').slice(-4), ['three', 'ok', 'four', 'ok']);
 
   await s.setLanguage('en');
   const fresh = await say(s, 'c2', 'Hello');
@@ -579,6 +585,24 @@ test('返事の言語の注意: 言語を変えた会話のモデルへの要求
   const switched = await say(s, 'c2', 'こんにちは');
   assert.match(contents(switched).at(-1)!, JA_REMINDER, 'en で始まった会話を ja にした次の要求には日本語の注意が付く');
   assert.deepEqual(stored('c2'), ['Hello', 'ok', 'こんにちは', 'ok']);
+});
+
+test('返事の言語の注意: en で始めた会話を ja に変え、また en に戻したときも、直前の返事の言語とずれる間は付く', async t => {
+  const s = await startApp(t, { language: 'en' });
+  const contents = (call: ModelRequest) => call.messages.map(m => m.content);
+  const first = await say(s, 'c3', 'Hello');
+  assert.deepEqual(contents(first), ['Hello'], 'en で始めた会話は、変えるまで付かない');
+  await s.setLanguage('ja');
+  const toJa = await say(s, 'c3', 'こんにちは');
+  assert.match(contents(toJa).at(-1)!, JA_REMINDER);
+  const toJaAgain = await say(s, 'c3', 'もう一度');
+  assert.match(contents(toJaAgain).at(-1)!, JA_REMINDER, '始めた言語と違う間は、毎回付く');
+  await s.setLanguage('en');
+  const backToEn = await say(s, 'c3', 'Hi');
+  assert.match(contents(backToEn).at(-1)!, EN_REMINDER, '始めた言語に戻した最初の要求には、直前の返事が日本語だったので英語の注意が付く');
+  const backAgain = await say(s, 'c3', 'again');
+  assert.deepEqual(contents(backAgain).slice(-1), ['again'], '直前の返事が英語になれば、また付かない');
+  assert.deepEqual(s.app.conversations.messages('c3').map(m => m.text), ['Hello', 'ok', 'こんにちは', 'ok', 'もう一度', 'ok', 'Hi', 'ok', 'again', 'ok']);
 });
 
 test('返事の言語の注意: 言語を記録していない前からある会話は、日本語で始まったものとして扱う', async t => {
@@ -688,4 +712,13 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   assert.ok(fresh.startsWith("# Clive's basic rules"), '新しい会話は英語のルールで始まる');
   assert.ok(fresh.includes(EN_DIRECTIVE));
   assert.equal(lastSent(), 'Hello', 'en で始めた新しい会話には何も足さない');
+
+  // 日本語に戻したあと: 直前の返事が英語なので、最初の要求にだけ日本語の注意が付く（ルールは日本語のままでも、英語の履歴に引きずられないように）
+  const viewBefore = await (await api('/api/settings')).json() as any;
+  assert.equal((await api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: { ...viewBefore.config, language: 'ja' } }) })).status, 200);
+  const backToJa = await speak('c1', '👋');
+  assert.ok(backToJa.includes(JA_DIRECTIVE) && !backToJa.includes(EN_DIRECTIVE));
+  assert.match(lastSent(), /^👋\n\n\[システムからの注意: この会話の返事の言語は日本語になりました。/u, '英語で返した直後に日本語へ戻すと、最初の要求にだけ日本語の注意が付く');
+  await speak('c1', '👋');
+  assert.equal(lastSent(), '👋', '日本語で返したあとは、始めた言語どうしなので付かない');
 });

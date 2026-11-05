@@ -71,6 +71,10 @@ export function snapshotLanguageKey(conversationId: string): string {
   return `snapshot-language:${conversationId}`;
 }
 
+export function replyLanguageKey(conversationId: string): string {
+  return `reply-language:${conversationId}`;
+}
+
 export function withReplyReminder(messages: readonly ChatMessage[], language: Language): ChatMessage[] {
   const copy = [...messages];
   const index = copy.findLastIndex(m => m.role === 'user');

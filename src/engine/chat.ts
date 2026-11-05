@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_LANGUAGE, LANGUAGES, type AppConfig, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
+import { DEFAULT_LANGUAGE, LANGUAGES, type AppConfig, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
 import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
@@ -26,7 +26,7 @@ import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
-import { compactPrompt, compactSpeaker, compactSystem, snapshotLanguageKey, summarySection, withReplyReminder } from './prompts.ts';
+import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapshotLanguageKey, summarySection, withReplyReminder } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
@@ -308,6 +308,8 @@ export class ChatEngine {
       // 考える部分を別に返すモデル（Qwen3 など）は、答えの頭に空行が付く。保存する前に落とす
       call.text = call.text.replace(/^\s+/u, '');
 
+      const replyLanguage = languageOf(d.config());
+      if (this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
       const saved = d.conversations.append(conversationId, { role: 'assistant', content: call.text, ...(call.toolCalls.length ? { toolCalls: call.toolCalls } : {}) }, runId);
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
       if (!call.toolCalls.length) return finishOk(call.text, call.stop);
@@ -372,8 +374,7 @@ export class ChatEngine {
         const system = { frozen: p.snapshot, dynamic };
         let history = stored.map(m => m.message);
         if (fallbackMode) history = toJsonFallbackHistory(history, language);
-        const frozenLanguage = LANGUAGES.find(l => l === d.kv.get(snapshotLanguageKey(p.conversationId))) ?? DEFAULT_LANGUAGE;
-        if (frozenLanguage !== language) history = withReplyReminder(history, language);
+        if (this.#frozenLanguage(p.conversationId) !== language || this.#lastReplyLanguage(p.conversationId) !== language) history = withReplyReminder(history, language);
         const apiTools = fallbackMode ? [] : specs;
         const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
         let fitted;
@@ -481,6 +482,14 @@ export class ChatEngine {
       d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compaction_failed', message: engineText(language, 'warn.compaction_failed') });
       return false;
     } finally { release?.(); }
+  }
+
+  #frozenLanguage(conversationId: string): Language {
+    return LANGUAGES.find(l => l === this.#d.kv.get(snapshotLanguageKey(conversationId))) ?? DEFAULT_LANGUAGE;
+  }
+
+  #lastReplyLanguage(conversationId: string): Language {
+    return LANGUAGES.find(l => l === this.#d.kv.get(replyLanguageKey(conversationId))) ?? this.#frozenLanguage(conversationId);
   }
 
   #snapshot(conversationId: string): string {
