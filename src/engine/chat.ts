@@ -17,6 +17,7 @@ import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import type { RunBus } from './bus.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable } from './context-budget.ts';
 import { ContextOverflow, fitMessages } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
@@ -30,8 +31,7 @@ import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapsho
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
-export const CONTEXT_FILL_RATIO = 0.95;
-export const MEMORY_BUDGET_RATIO = 0.12;
+export { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable };
 export const TRUNCATION_RATIO = 0.6;
 const TRUNCATION_MIN_ESTIMATE = 2048;
 const TRUNCATION_STRIKES = 2;
@@ -74,9 +74,6 @@ export type SendOutcome =
   | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; detail?: ContextDetail; problems?: ModelProblem[] };
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
-
-// 古い発言を削り始める境目（コンテキストの 95% から最大出力を引いた量）。
-export const contextAvailable = (capacity: number, model: ModelConfig): number => Math.floor(capacity * CONTEXT_FILL_RATIO) - model.maxOutputTokens;
 
 // 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
 // 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。

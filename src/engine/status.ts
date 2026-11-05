@@ -4,17 +4,30 @@ import type { ProviderRegistry } from '../providers/registry.ts';
 import type { ProbeResult } from '../providers/types.ts';
 import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
+import { contextAvailable, MEMORY_BUDGET_RATIO } from './context-budget.ts';
 
 export const HISTORY_RESERVE = 8192;
 
-export function requiredContext(model: ModelConfig, baseTokens: number): number {
-  return Math.max(model.minContext, baseTokens + HISTORY_RESERVE + model.maxOutputTokens);
+// 必要な長さ。記憶の分は、そのモデル自身の「古い発言を削り始める境目」の 12% までしか数えない（会話に入れる記憶の予算が、実行のときもそれ以下になるため）。
+// 長さが分からないと予算が決まらず、予算が決まらないと必要な長さが決まらない、という堂々巡りを避けるため、
+// 「その長さで足りる」いちばん短い長さを二分探索で求める（長さが増えるほど足りないものは減るので、答えは 1 つに決まる）。
+export function requiredContext(model: ModelConfig, baseTokens: number, memoryTokens = 0): number {
+  const fixed = baseTokens + HISTORY_RESERVE + model.maxOutputTokens;
+  const needAt = (capacity: number) => Math.max(model.minContext, fixed + Math.min(memoryTokens, Math.floor(MEMORY_BUDGET_RATIO * Math.max(0, contextAvailable(capacity, model)))));
+  let low = 0;
+  let high = Math.max(model.minContext, fixed + memoryTokens);
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (middle >= needAt(middle)) high = middle; else low = middle + 1;
+  }
+  return high;
 }
 
 export interface ModelStatusDeps {
   registry: ProviderRegistry;
   kv: KV;
   baseTokens: () => number;
+  memoryTokens?: (() => number) | undefined;
   log?: (line: string) => void;
 }
 
@@ -26,9 +39,10 @@ export class ModelStatus {
 
   async probeAll(config: AppConfig): Promise<ProbeResult[]> {
     const base = this.#deps.baseTokens();
+    const memory = this.#deps.memoryTokens?.() ?? 0;
     const language = languageOf(config);
     const results = await Promise.all(config.models.map(async model => {
-      const required = requiredContext(model, base);
+      const required = requiredContext(model, base, memory);
       const adapter = this.#deps.registry.get(model.provider);
       if (!adapter) {
         return { modelId: model.id, status: 'error', server: '?', required, message: providerText(language, 'probe.no_provider', { id: model.provider }), messageCode: 'provider.probe.no_provider', messageParams: { id: model.provider }, checkedAt: Date.now() } satisfies ProbeResult;

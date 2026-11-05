@@ -111,7 +111,7 @@ export class App {
       ...(options.adapterOverride ? { override: options.adapterOverride } : {}),
     });
     this.registry.reload(config);
-    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: () => this.baseTokens(), log: this.log });
+    this.status = new ModelStatus({ registry: this.registry, kv: this.kv, baseTokens: () => this.baseTokens(), memoryTokens: () => this.memoryTokens(), log: this.log });
     this.bus = new RunBus();
     this.limiter = new EndpointLimiter();
     this.tools = new ToolRegistry();
@@ -212,10 +212,14 @@ export class App {
     const config = this.config();
     // probeAll はコンストラクタの途中（記憶やツールを作る前）からも呼ばれうるので、無ければ 0 として扱う
     const language = languageOf(config);
-    const memoryNow = this.memory ? estimateTextTokens(renderBooks(this.memory.list(), language, this.engine?.memoryBudget())) : 0;
     const tools = this.tools ? estimateToolTokens(ToolRegistry.specs(this.tools.forRun('chat'))) : 0;
-    return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + memoryNow + tools
+    return estimateTextTokens(buildSnapshot(this.paths, { skills: this.skills?.index(language) ?? '' }, language).text) + tools
       + estimateTextTokens(buildDynamic(config.timezone, language)) + 64;
+  }
+
+  // 記憶を全部入れたときの見積もり。必要な長さには、各モデルの available の 12% までだけが数えられる（requiredContext）
+  memoryTokens(): number {
+    return this.memory ? estimateTextTokens(renderBooks(this.memory.list(), languageOf(this.config()))) : 0;
   }
 
   async applyConfig(next: AppConfig): Promise<AppConfig> {

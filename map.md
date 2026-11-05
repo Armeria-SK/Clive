@@ -60,7 +60,7 @@
 
 ### 記憶 — `src/memory`
 - 記憶 2 冊（`user` と `notes`）の保存・変更履歴と取り消し（`store.ts`。本の大きさに上限は無く、保存は断らない。1 件は 600 文字まで）、過去の会話の検索（`history.ts`、FTS5 trigram）、振り返りの待ち行列とモデルへの指示文（`review.ts`。指示文は言語別）。
-- 会話の最初に固定する system へ入れる量には予算がある（`store.ts` の `planBooks` / `renderBooks`）: 新しく直した順（`updated_at`、同じなら id の大きい方）に、入らない 1 件で止めて入れ、入らなかった分は「ほか N 件。memory_search で探せます」の 1 行にする。予算（トークン）は `ChatEngine.memoryBudget()` が、チャットと裏方で使える（確認が通った）モデルのうち容量の分かるものの `available`（コンテキストの 95% − 最大出力）のいちばん小さい値の 12% で決める（容量の分かるモデルが無い・モデルが 0 個なら予算なし = 全部入れる）。整理の振り返り（`book_full`。記憶が予算を超えたら 1 日 1 回、`dedupKey` は `book:all:<日>`）の依頼文は、入りきらない記憶を古い順に、同じ予算まで挙げる。
+- 会話の最初に固定する system へ入れる量には予算がある（`store.ts` の `planBooks` / `renderBooks`）: 新しく直した順（`updated_at`、同じなら id の大きい方）に、入らない 1 件で止めて入れ、入らなかった分は「ほか N 件。memory_search で探せます」の 1 行にする。予算（トークン）は `ChatEngine.memoryBudget()` が、チャットと裏方で使える（確認が通った）モデルのうち容量の分かるものの `available`（コンテキストの 95% − 最大出力）のいちばん小さい値の 12% で決める（容量の分かるモデルが無い・モデルが 0 個なら予算なし = 全部入れる）。モデルの「必要な長さ」（`status.ts` の `requiredContext`）は、起動直後で確認の結果がまだ無くても決まるよう、記憶の分を「そのモデル自身の available の 12% まで」として数える（他のモデルや確認の結果に左右されない。記憶の見積もりは `App.memoryTokens()`、`baseTokens()` は記憶を含まない）。12%・95% の割合と available の式は `engine/context-budget.ts`。整理の振り返り（`book_full`。記憶が予算を超えたら 1 日 1 回、`dedupKey` は `book:all:<日>`）の依頼文は、入りきらない記憶を古い順に、同じ予算まで挙げる。
 - 入口: `src/memory/store.ts`（`MemoryStore`）
 - 使うもの: `db`（`transaction`）、`src/shared`（`redaction`）、`engine/tokens.ts`（量の見積もりだけ）
 

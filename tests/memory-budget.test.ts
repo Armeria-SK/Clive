@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig, ModelConfig } from '../src/config/schema.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
-import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO } from '../src/engine/chat.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable } from '../src/engine/chat.ts';
+import { requiredContext } from '../src/engine/status.ts';
 import { estimateTextTokens } from '../src/engine/tokens.ts';
 import { bookPressureText } from '../src/memory/review.ts';
 import { MemoryError, MemoryStore, planBooks, renderBooks, type Memory } from '../src/memory/store.ts';
@@ -215,14 +217,64 @@ test('会話の最初に固定する system には、予算まで（新しく直
   assert.equal(s.adapter().calls[1]!.system.frozen, frozen, 'すでに固定した会話の system は、あとで記憶や予算が変わっても変わらない');
 });
 
-test('baseTokens: 記憶は予算までしか数えない（以前の上限の見込みは足さない）', async t => {
+test('必要な長さ: 記憶が増えても base は変わらず、必要な長さ（確認の required）がそのモデルの available の 12% 分までだけ増える', async t => {
   const s = await setup(t, c => { c.models = [model('big', 'fa', 20_000)]; });
-  const empty = s.app.baseTokens();
+  const m = s.app.config().models[0]!;
+  const base = s.app.baseTokens();
+  const before = s.app.status.get('big')!.required;
   s.fill(8);
-  const budget = s.app.engine.memoryBudget()!;
-  const grown = s.app.baseTokens() - empty;
-  assert.ok(grown > 0, '記憶が増えれば base も増える');
-  assert.ok(grown <= budget + 40, `増える分は予算（${budget}）を超えない: ${grown}`);
+  assert.equal(s.app.baseTokens(), base, 'base には記憶を含めない');
+  await s.reprobe();
+  const after = s.app.status.get('big')!.required;
+  assert.equal(after, requiredContext(m, base, s.app.memoryTokens()), '確認の required は、base と記憶の全部の見積もりから決まる');
+  assert.ok(after > before, '記憶が増えれば必要な長さも増える');
+  assert.ok(after - before <= Math.floor(MEMORY_BUDGET_RATIO * contextAvailable(20_000, m)), '増える分は、そのモデルの available の 12% まで');
+});
+
+test('requiredContext: 記憶の分は、そのモデル自身の available の 12% までしか数えない（ほかのモデルや確認の結果に左右されない）', () => {
+  const m = model('m', 'fa', 16_384);
+  const base = 3500;
+  const fixed = base + 8192 + m.maxOutputTokens;
+  assert.equal(requiredContext(m, base), Math.max(m.minContext, fixed), '記憶が無ければ今までと同じ');
+  assert.equal(requiredContext(m, base, 0), requiredContext(m, base));
+  const needAt = (capacity: number, memory: number) => Math.max(m.minContext, fixed + Math.min(memory, Math.floor(MEMORY_BUDGET_RATIO * (Math.floor(capacity * CONTEXT_FILL_RATIO) - m.maxOutputTokens))));
+  let previous = 0;
+  for (const memory of [0, 300, 2000, 12_000, 1_000_000]) {
+    const required = requiredContext(m, base, memory);
+    assert.ok(required >= needAt(required, memory), `${memory}: その長さで足りる`);
+    assert.ok(required - 1 < needAt(required - 1, memory), `${memory}: 1 つ短いと足りない（いちばん短い）`);
+    assert.ok(required >= previous, '記憶が増えて必要な長さが減ることはない');
+    previous = required;
+  }
+  assert.ok(requiredContext(m, base, 1_000_000) < fixed * 1.2, '記憶がどれだけ大きくても、必要な長さは頭打ち');
+  assert.equal(requiredContext(model('small-min', 'fa', 16_384, { minContext: 30_000 }), base, 5000), 30_000, 'minContext が大きければそちら');
+});
+
+test('起動したばかりで確認の結果がまだ無くても、大きな記憶のせいでモデルが使えなくならない', async t => {
+  const dir = tempDir(t);
+  const paths = resolvePaths(dir);
+  mkdirSync(paths.data, { recursive: true });
+  const config = testConfig();
+  config.providers = [{ id: 'fa', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
+  config.models = [model('m', 'fa', 16_384)];
+  config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
+  writeFileSync(paths.config, JSON.stringify(config));
+  const databasePath = join(dir, 'cold.db');
+  const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
+  const first = open();
+  for (let i = 0; i < 20; i++) first.memory.save({ book: i % 2 ? 'notes' : 'user', content: `${String(i).padStart(2, '0')}${'あ'.repeat(598)}`, actor: 'user' });
+  first.close();
+
+  const cold = open();
+  try {
+    assert.equal(cold.status.all().length, 0, '起動直後は確認の結果が 1 つも無い');
+    assert.ok(cold.memoryTokens() > 10_000, '記憶は 16k のモデルに全部は入らない大きさ');
+    await cold.status.probeAll(cold.config());
+    const probe = cold.status.get('m')!;
+    assert.equal(probe.status, 'ok', probe.message);
+    assert.ok(probe.required <= 16_384, `必要な長さ ${probe.required} が、モデルの長さに収まる`);
+    assert.ok(cold.engine.memoryBudget()! > 0, '確認が通れば、会話に入れる予算も決まる');
+  } finally { cold.close(); }
 });
 
 // ── 整理の振り返り ──
