@@ -18,6 +18,8 @@ export function useTabs(route: Route, conversations: Conversation[], conversatio
   const [titles, setTitles] = useState<Record<string, string>>({});
   const current = toTab(routeHash(route));
   const activeKey = useRef<string | null>(null);
+  const shownKey = useRef<string | null>(null);
+  shownKey.current = current?.key ?? null;
   const append = useRef(false);
 
   useLayoutEffect(() => {
@@ -48,7 +50,7 @@ export function useTabs(route: Route, conversations: Conversation[], conversatio
   }, [conversations, conversationsLoaded]);
 
   const close = useCallback((key: string) => {
-    const result = closeTab(tabs, key, activeKey.current);
+    const result = closeTab(tabs, key, shownKey.current);
     setTabs(result.tabs);
     if (result.go !== null && location.hash !== result.go) location.hash = result.go;
   }, [tabs]);

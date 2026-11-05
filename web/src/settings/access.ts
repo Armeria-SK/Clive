@@ -1,3 +1,4 @@
+import { allowEntryRunsCode } from '../../../src/tools/hooks/listed-commands.ts';
 import { deepEqual } from './merge.ts';
 import type { Config } from './model.ts';
 import { foldersFromConfig, wideningChanges, type Widening } from '../skills-meta.ts';
@@ -14,7 +15,8 @@ export interface HookSummary { matcher: string; command: string[] }
 export type Access =
   | Widening
   | { kind: 'shell-enabled' }
-  | { kind: 'shell-allow-added'; command: string }
+  // runsCode: 項目のとおりのコマンドは一覧に無いので、足すと Clive も書き換えられるコード（スクリプト・scripts・テストなど）を確かめずに動かすことになる
+  | { kind: 'shell-allow-added'; command: string; runsCode: boolean }
   | { kind: 'shell-ask-removed'; command: string }
   | { kind: 'shell-deny-removed'; command: string }
   | { kind: 'shell-env-added'; name: string }
@@ -98,7 +100,7 @@ export function accessWidening(before: Config, after: Config): Access[] {
   const as = obj(at.shell);
 
   if ((bs.enabled ?? true) === false && (as.enabled ?? true) === true) out.push({ kind: 'shell-enabled' });
-  for (const command of added(strings(bs.allow), strings(as.allow))) out.push({ kind: 'shell-allow-added', command });
+  for (const command of added(strings(bs.allow), strings(as.allow))) out.push({ kind: 'shell-allow-added', command, runsCode: allowEntryRunsCode(command) });
   for (const command of removed(strings(bs.ask), strings(as.ask))) out.push({ kind: 'shell-ask-removed', command });
   for (const command of removed(strings(bs.deny), strings(as.deny))) out.push({ kind: 'shell-deny-removed', command });
   for (const name of added(strings(bs.envAllow), strings(as.envAllow))) out.push({ kind: 'shell-env-added', name });

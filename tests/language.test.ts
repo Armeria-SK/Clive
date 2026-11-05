@@ -14,6 +14,7 @@ import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapsho
 import { estimateTextTokens, estimateToolTokens } from '../src/engine/tokens.ts';
 import type { ChatMessage } from '../src/engine/types.ts';
 import { jsonFallbackInstructions, toJsonFallbackHistory } from '../src/engine/toolcall-parse.ts';
+import { shellRun } from '../src/tools/builtin/shell.ts';
 import { buildDynamic, buildSnapshot, defaultTexts, ensureWorkspace, readTemplate, WORKSPACE_FILES } from '../src/engine/workspace.ts';
 import { bookPressureText, reviewPrompt, transcriptOf, type ReviewTrigger } from '../src/memory/review.ts';
 import { renderBooks, type Memory } from '../src/memory/store.ts';
@@ -100,6 +101,13 @@ test('設定: language は保存して読み直せ、未選択のときは設定
 });
 
 // ── テンプレート ──
+
+test('テンプレート: PowerShell の制限モードで動かない書き方を避けるよう、日本語・英語の基本ルールとシェルの道具の説明に書いてある', t => {
+  const real = paths(t);
+  assert.match(readTemplate(real, 'rules', 'ja'), /## シェルを使うとき\r?\n\r?\n- Windows の PowerShell は制限モードで動く[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n\r?\n## やらないこと/u);
+  assert.match(readTemplate(real, 'rules', 'en'), /## When you use the shell\r?\n\r?\n- On Windows, PowerShell runs in constrained mode[^\r\n]*\[pscustomobject\][^\r\n]*New-Object[^\r\n]*\r?\n\r?\n## What you do not do/u);
+  assert.match(shellRun.description, /制限モード[^。]*\[pscustomobject\]/u);
+});
 
 test('テンプレート: 言語ごとに読み分け、英語のファイルが無ければ日本語に戻る', t => {
   const real = paths(t);
@@ -229,7 +237,7 @@ test('baseTokens: 言語に合うルールの長さで見積もる', async t => 
   const s = await startApp(t);
   const rest = () => {
     const config = s.app.config();
-    return config.memory.userMaxChars + config.memory.notesMaxChars + estimateToolTokens(ToolRegistry.specs(s.app.tools.forRun('chat'))) + 64;
+    return estimateToolTokens(ToolRegistry.specs(s.app.tools.forRun('chat'))) + 64;
   };
   const expected = (language: Language) => estimateTextTokens(buildSnapshot(s.paths, { skills: '' }, language).text)
     + estimateTextTokens(buildDynamic(s.app.config().timezone, language)) + rest();
@@ -324,7 +332,7 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
     { id: 3, role: 'tool', text: 'out', message: { role: 'tool', name: 'file_list' } },
   ] as any;
   const triggers: ReviewTrigger[] = ['task', 'idle', 'heavy_run', 'book_full', 'manual'];
-  const usage = { user: { used: 10, max: 20 }, notes: { used: 5, max: 30 } };
+  const pressure = { tokens: 900, budget: 500, outside: [{ id: 1, book: 'user' as const, content: 'Old fact' }, { id: 2, book: 'notes' as const, content: 'Old lesson' }] };
   const texts: Record<string, string> = {
     books: renderBooks(memories, 'en'),
     skills: skills.index('en'),
@@ -336,10 +344,10 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
     fallback: jsonFallbackInstructions([{ name: 'file_list', description: 'List files', inputSchema: { type: 'object' } }], 'en'),
     fallbackHistory: JSON.stringify(toJsonFallbackHistory([{ role: 'tool', name: 'file_list', content: 'x', isError: true, toolCallId: '1' }], 'en')),
     transcript: transcriptOf(stored, 15_000, 'en'),
-    pressure: bookPressureText(usage, 'en'),
+    pressure: bookPressureText(pressure, 'en'),
     curiosity: Object.values(curiosityText('en')).map(v => (typeof v === 'function' ? v('Topic') : v)).join('\n'),
     ...Object.fromEntries(triggers.map(trigger => [`review:${trigger}`, reviewPrompt({
-      trigger, language: 'en', forgotten: ['Forgotten fact'], bookPressure: bookPressureText(usage, 'en'),
+      trigger, language: 'en', forgotten: ['Forgotten fact'], bookPressure: bookPressureText(pressure, 'en'),
       task: { title: 'T', status: 'done', result_summary: 'Result', body: 'Body' }, taskEvents: [{ kind: 'note', content: 'Event' }], transcript: transcriptOf(stored, 15_000, 'en'),
     })])),
   };
@@ -349,7 +357,7 @@ test('決まり文: 英語にすると、モデルに渡す文に日本語が混
   }
   assert.match(texts.task!, /^\[Task run\]/u);
   assert.match(texts.task!, /Where it came from: From your curiosity/u);
-  assert.match(texts['review:book_full']!, /Memory usage\nAbout the user: 10\/20 characters, Notes and lessons: 5\/30 characters\. Prioritize/u);
+  assert.match(texts['review:book_full']!, /Memory usage\nMemory totals about 900 tokens, over the guideline for what goes into a conversation \(about 500 tokens\)\. 2 memories do not fit in a conversation\. Propose merging overlapping memories and trimming old ones\nMemories that do not fit \(oldest first\):\n- \[u1\] Old fact\n- \[n2\] Old lesson/u);
   assert.match(texts.fallbackHistory!, /\[Result of tool \\"file_list\\" \(error\)\]/u);
 });
 
@@ -389,6 +397,15 @@ const JA_REVIEW_POLICY = [
   '- することがなければ、道具を使わずに「変更なし」とだけ返す',
   '- 最後に、何をしたかを1〜2文で返す',
 ];
+const JA_TIDY_POLICY = [
+  '',
+  '# 方針',
+  '- 今回の目的は、記憶を整理する案を出すこと。新しく覚えることはしない（memory_save は使えない）',
+  '- 下に挙げた「会話に入りきらない記憶」のうち、重なりがはっきりしているものだけ、memory_update で 1 つにまとめてよい。memory_forget は使えない（消すかどうかはユーザーが決める）',
+  '- 消したほうがよい・まとめたほうがよいと思う記憶は、最後の返事に 1 件 1 行で書く。書き方は「[n3] 消す: 理由（短く）」「[u1] [u4] まとめる: 理由（短く）」。多くても 10 行',
+  '- 古くなったもの・ほかの記憶と重なるもの・一時的な出来事のものを優先して挙げる。ユーザーの大事な事実は挙げない',
+  '- 提案が無ければ、道具を使わずに「変更なし」とだけ返す',
+];
 const jaReviewIntro = (trigger: string) => `[振り返り] きっかけ: ${trigger}。下の記録を読んで、記憶を整える（ユーザーとの会話ではありません。返事は記録に残るだけです）。`;
 
 test('日本語の固定文: タスクの実行の指示は 0250344 の出力と一字も違わない', () => {
@@ -424,14 +441,14 @@ test('日本語の固定文: タスクの実行の指示は 0250344 の出力と
 
 test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字も違わない', () => {
   assert.equal(reviewPrompt({ trigger: 'book_full', forgotten: ['忘れた記憶'], bookPressure: 'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字' }), [
-    jaReviewIntro('記憶が上限に近い'),
-    ...JA_REVIEW_POLICY,
+    jaReviewIntro('記憶が大きくなった'),
+    ...JA_TIDY_POLICY,
     '',
     '# ユーザーが消した記憶（同じ内容を覚え直さない）',
     '- 忘れた記憶',
     '',
     '# 記憶の量',
-    'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字。重なりをまとめて減らすことを優先する',
+    'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字',
   ].join('\n'));
 
   assert.equal(reviewPrompt({
@@ -465,7 +482,7 @@ test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字
     '【道具 file_list】tool out',
   ].join('\n'));
 
-  const triggers = { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が上限に近い', manual: '手動' };
+  const triggers = { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が大きくなった', manual: '手動' };
   for (const [trigger, label] of Object.entries(triggers)) {
     assert.equal(reviewPrompt({ trigger: trigger as ReviewTrigger, forgotten: [] }).split('\n')[0], jaReviewIntro(label), trigger);
   }
@@ -474,7 +491,12 @@ test('日本語の固定文: 振り返りの指示は 0250344 の出力と一字
     { id: 2, role: 'tool', text: 'い'.repeat(310), message: { role: 'tool', name: 'file_list' } },
   ] as any;
   assert.equal(transcriptOf(long), `【ユーザー】${'あ'.repeat(3000)}…（略）\n【道具 file_list】${'い'.repeat(300)}…（略）`);
-  assert.equal(bookPressureText({ user: { used: 10, max: 20 }, notes: { used: 5, max: 30 } }), 'ユーザーについて: 10/20 文字、メモと教訓: 5/30 文字');
+  assert.equal(bookPressureText({ tokens: 900, budget: 500, outside: [{ id: 1, book: 'user', content: '古い事実' }, { id: 2, book: 'notes', content: '古い教訓' }] }), [
+    '記憶の合計は約 900 トークンで、会話に入れる量の目安（約 500 トークン）を超えています。会話に入りきらない記憶が 2 件あります。重なりをまとめる・古いものを減らす案を出す',
+    '会話に入りきらない記憶（古い順）:',
+    '- [u1] 古い事実',
+    '- [n2] 古い教訓',
+  ].join('\n'));
 });
 
 test('日本語の固定文: json_fallback の説明・スキル一覧・好奇心のタスクの文は 0250344 の出力と一字も違わない', t => {
@@ -733,7 +755,7 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
     return chatRequests().at(-1)!.body.messages[0].content as string;
   };
 
-  const first = await speak('c1', 'こんにちは');
+  const first = await speak('00000000-0000-4000-8000-000000000001', 'こんにちは');
   assert.ok(first.startsWith('# Clive の基本ルール'));
   assert.ok(first.includes(JA_DIRECTIVE) && !first.includes(EN_DIRECTIVE));
   assert.equal(lastSent(), 'こんにちは', '言語を変えていない会話の最後の発言には何も足さない');
@@ -741,13 +763,13 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   const view = await (await api('/api/settings')).json() as any;
   assert.equal((await api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: { ...view.config, language: 'en' } }) })).status, 200);
 
-  const second = await speak('c1', 'Hello again');
+  const second = await speak('00000000-0000-4000-8000-000000000001', 'Hello again');
   assert.ok(second.includes(EN_DIRECTIVE) && !second.includes(JA_DIRECTIVE), '同じ会話の次の送信から英語の指示');
   assert.ok(second.startsWith('# Clive の基本ルール'), '会話の途中では固定の system（日本語のルール）は変えない');
   assert.match(lastSent(), /^Hello again\n\n\[System note: the reply language of this conversation is now English\. /u, '言語を変えた会話の最後の発言にだけ一行の注意が付く');
-  assert.equal(((await (await api('/api/conversations/c1/messages')).json()) as any).messages.at(-2).text, 'Hello again', '画面から見える発言には注意が入らない');
+  assert.equal(((await (await api('/api/conversations/00000000-0000-4000-8000-000000000001/messages')).json()) as any).messages.at(-2).text, 'Hello again', '画面から見える発言には注意が入らない');
 
-  const fresh = await speak('c2', 'Hello');
+  const fresh = await speak('00000000-0000-4000-8000-000000000002', 'Hello');
   assert.ok(fresh.startsWith("# Clive's basic rules"), '新しい会話は英語のルールで始まる');
   assert.ok(fresh.includes(EN_DIRECTIVE));
   assert.equal(lastSent(), 'Hello', 'en で始めた新しい会話には何も足さない');
@@ -755,9 +777,9 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   // 日本語に戻したあと: 直前の返事が英語なので、最初の要求にだけ日本語の注意が付く（ルールは日本語のままでも、英語の履歴に引きずられないように）
   const viewBefore = await (await api('/api/settings')).json() as any;
   assert.equal((await api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: { ...viewBefore.config, language: 'ja' } }) })).status, 200);
-  const backToJa = await speak('c1', '👋');
+  const backToJa = await speak('00000000-0000-4000-8000-000000000001', '👋');
   assert.ok(backToJa.includes(JA_DIRECTIVE) && !backToJa.includes(EN_DIRECTIVE));
   assert.match(lastSent(), /^👋\n\n\[システムからの注意: この会話の返事の言語は日本語になりました。/u, '英語で返した直後に日本語へ戻すと、最初の要求にだけ日本語の注意が付く');
-  await speak('c1', '👋');
+  await speak('00000000-0000-4000-8000-000000000001', '👋');
   assert.equal(lastSent(), '👋', '日本語で返したあとは、始めた言語どうしなので付かない');
 });

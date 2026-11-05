@@ -1,9 +1,9 @@
-/* 設定の画面（左に節の一覧、右に中身、下に保存の帯）。「Clive も英語にしますか」の帯もここ。 */
+/* 設定の画面（左に節の一覧、右に中身、下に保存の帯）。モーダルの枠は末尾。「Clive も英語にしますか」の帯もここ。 */
 .set-loading { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 34px 36px; }
 .set { display: flex; flex-direction: row; }
 .set-nav { display: flex; flex-direction: column; flex: none; gap: 2px; width: 232px; padding: 30px 12px 20px; border-right: 1px solid var(--color-divider); overflow: auto; scrollbar-width: none; box-sizing: border-box; }
 .shell[data-mode="mid"] .set-nav { width: 200px; }
-.set-nav-title { margin: 0; padding: 0 10px 10px; font-family: var(--font-heading); font-size: 28px; font-weight: 400; line-height: 1.1; }
+.set-nav-title { margin: 0; padding: 0 10px 10px; font-family: var(--font-heading); font-size: 28px; font-weight: var(--font-display-weight); line-height: 1.1; }
 .set-nav-group { display: flex; flex-direction: column; gap: 1px; }
 .set-nav-label { padding: 12px 10px 4px; font-size: 11px; letter-spacing: .12em; color: var(--color-accent-text); }
 .set-nav-item { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; height: 32px; padding: 0 10px; border: 0; border-radius: var(--radius-md); background: transparent; color: color-mix(in srgb, var(--color-text) 78%, transparent); font: inherit; font-size: 13.5px; text-align: left; white-space: nowrap; cursor: pointer; transition: background-color .14s ease, color .14s ease; }
@@ -15,7 +15,7 @@
 .set-inner { display: flex; flex-direction: column; gap: 20px; max-width: 760px; margin: 0 auto; padding: 34px 36px 64px; box-sizing: border-box; animation: cl-rise .38s cubic-bezier(.16, 1, .3, 1) backwards; }
 .set-head { display: flex; flex-direction: column; gap: 4px; }
 .set-crumb { font-size: 12px; color: var(--color-text-muted); }
-.set-title { margin: 0; font-family: var(--font-heading); font-size: 30px; font-weight: 400; line-height: 1.15; }
+.set-title { margin: 0; font-family: var(--font-heading); font-size: 30px; font-weight: var(--font-display-weight); line-height: 1.15; }
 .set-desc { font-size: 13.5px; color: var(--color-text-muted); text-wrap: pretty; }
 
 .set-banner { display: flex; gap: 10px; padding: 12px 14px; border: 1px solid var(--color-accent); border-radius: var(--radius-md); }
@@ -54,18 +54,21 @@
 .set-range { display: flex; align-items: center; gap: 8px; }
 .set-range .input { width: 120px; }
 .set-range-sep { color: var(--color-text-muted); }
+.set-roots { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 520px; }
+.set-root { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.set-root-icon { display: inline-flex; flex: none; width: 15px; height: 15px; color: var(--color-accent); }
+.set-root-path { flex: 1; min-width: 120px; font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.set-root .seg-opt { padding: 3px 10px; font-size: 12px; }
+.set-root-remove { width: 28px; height: 28px; color: inherit; opacity: .6; }
+.set-root-remove:hover { opacity: 1; }
+.set-root-add { display: flex; align-items: center; gap: 8px; }
+.set-root-add .input { flex: 1; min-width: 0; }
 .set-tags { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; max-width: 400px; }
 .set-tag { gap: 4px; padding: 2px 4px 2px 9px; font-family: var(--font-mono); }
 .set-tag button { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; opacity: .6; cursor: pointer; }
 .set-tag button:hover { opacity: 1; background: color-mix(in srgb, var(--color-text) 10%, transparent); }
 .set-tag-input { width: 130px; height: 28px; border: 0; border-bottom: 1px solid var(--color-divider); outline: none; background: transparent; color: inherit; font-family: var(--font-mono); font-size: 12px; }
 .set-tag-input:focus { border-bottom-color: var(--color-accent); }
-.set-usage { display: flex; flex-direction: column; gap: 6px; width: min(260px, 100%); }
-.set-usage .set-num-wrap { justify-content: flex-end; }
-.set-meter { height: 3px; border-radius: 2px; overflow: hidden; background: color-mix(in srgb, var(--color-text) 10%, transparent); }
-.set-meter div { height: 100%; background: color-mix(in srgb, var(--color-text) 38%, transparent); transition: width .4s cubic-bezier(.16, 1, .3, 1); }
-.set-meter div.high { background: var(--color-accent); }
-.set-usage-text { font-size: 11.5px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; text-align: right; }
 .set-color { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .set-color-swatch { width: 40px; height: 34px; padding: 2px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: transparent; cursor: pointer; }
 .set-hex { width: 110px; }
@@ -162,3 +165,30 @@
 .set-widen ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
 .set-widen-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .shell[data-mode="narrow"] .set-widen { margin: 0 14px 12px; }
+
+/* 設定のモーダル（画面全体に重ねる。狭い幅では下から出る全画面のシート。中身の幅は min(1080px, 92vw)） */
+@keyframes cl-set-in { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+@keyframes cl-set-out { to { opacity: 0; transform: translateY(10px) scale(.98); } }
+@keyframes cl-set-sheet-in { from { transform: translateY(100%); } }
+@keyframes cl-set-sheet-out { to { transform: translateY(100%); } }
+.set-backdrop { position: absolute; inset: 0; z-index: 40; background: color-mix(in srgb, var(--color-neutral-900) 42%, transparent); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); animation: cl-fade .24s ease; }
+.set-backdrop.leaving { animation: cl-fade-out .22s ease-in forwards; }
+.set-wrap { position: absolute; inset: 0; z-index: 41; display: grid; place-items: center; padding: 24px; pointer-events: none; }
+.set-modal { pointer-events: auto; position: relative; display: flex; flex-direction: column; width: min(1080px, 92vw); height: min(760px, 100%); overflow: hidden; box-sizing: border-box; border-radius: var(--radius-lg); background: var(--color-bg); box-shadow: var(--shadow-lg); animation: cl-set-in .34s cubic-bezier(.16, 1, .3, 1); }
+.set-modal:focus { outline: none; }
+.set-modal.leaving { pointer-events: none; animation: cl-set-out .22s cubic-bezier(.4, 0, 1, 1) forwards; }
+.set-modal > .set, .set-modal > .set-loading { flex: 1 1 0; min-height: 0; }
+.set-close { position: absolute; top: 10px; right: 10px; z-index: 2; width: 32px; height: 32px; color: inherit; }
+.set-modal .set-inner { padding-top: 44px; }
+.set-modal .set-nav { padding-top: 40px; }
+.shell[data-mode="narrow"] .set-wrap { place-items: end stretch; padding: 0; }
+.shell[data-mode="narrow"] .set-modal { width: 100%; height: 100%; border-radius: 0; animation-name: cl-set-sheet-in; }
+.shell[data-mode="narrow"] .set-modal.leaving { animation-name: cl-set-sheet-out; }
+.shell[data-mode="narrow"] .set-modal .set-nav { padding: 8px 52px 8px 10px; }
+.shell[data-mode="narrow"] .set-modal .set-inner { padding-top: 22px; }
+.shell[data-mode="narrow"] .set-modal .set-close { top: 6px; right: 6px; background: var(--color-bg); }
+
+/* 設定の「Clive について」: 名前・SOUL.md / USER.md の全文の編集 */
+.set-name-edit { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+textarea.input.set-persona { width: 100%; min-height: 220px; box-sizing: border-box; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.65; resize: vertical; }
+.set-persona-bar { display: flex; align-items: center; gap: 10px; }

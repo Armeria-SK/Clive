@@ -5,8 +5,11 @@ import { atomicWriteFile } from '../../config/store.ts';
 import { languageOf } from '../../shared/language.ts';
 import { guardText } from '../../shared/messages/guard.ts';
 import { toolText } from '../../shared/messages/tools.ts';
-import { expandPath, needsWriteApproval, placePath } from '../hooks/scope.ts';
+import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
+import { isToolConfigPath } from '../hooks/tool-config.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
+
+const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git' } as const;
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_WRITE_CHARS = 1_000_000;
@@ -25,9 +28,12 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   }
   if (need === 'write' && placement.mode === 'read') return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.readonly', { root: placement.root })] } };
   if (need === 'write' && existsSync(abs) && lstatSync(abs).isSymbolicLink()) return { abs, check: { decision: 'deny', reasons: [guardText(language, 'file.symlink')] } };
-  if (need === 'write' && needsWriteApproval(abs, ctx.policy)) {
-    return { abs, check: { decision: 'ask', reasons: [guardText(language, 'file.persona')] } };
-  }
+  const protectedKind = need === 'write' ? writeApprovalKind(abs, ctx.policy) : undefined;
+  // .git への書き込みはフックや設定というコードを書くことになるので、会話の許可を越えて毎回確かめる。人格・スキルは、中身が引数にあるので今までどおり
+  if (protectedKind === 'git') return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] } };
+  if (protectedKind) return { abs, check: { decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])] } };
+  // git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンドにコードを読み込ませられるので、毎回確かめる
+  if (need === 'write' && isToolConfigPath(abs)) return { abs, check: { decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'] } };
   return { abs, check: { decision: 'allow', reasons: [] } };
 }
 
@@ -112,10 +118,16 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
   },
 };
 
-export const fileList: ToolDef<{ path?: string; depth?: number }> = {
+// 中に何万ものファイルがあり、一覧に入れると 500 件の枠を使い切る（本当に見たいものが出てこない）フォルダ。下の階層を見るときは中に入らない
+const HEAVY_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', '.next', '.cache', '.turbo', '.parcel-cache']);
+
+export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }> = {
   name: 'file_list',
-  description: 'フォルダの中身を一覧する。path を省略すると作業フォルダ。depth で何階層下まで見るか（既定 1、最大 4）。',
-  input: Type.Object({ path: Type.Optional(PathArg), depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })) }, { additionalProperties: false }),
+  description: 'フォルダの中身を一覧する。path を省略すると作業フォルダ。depth で何階層下まで見るか（既定 1、最大 4）。node_modules・.git など大きなフォルダの中は、既定では一覧しない（all を true にするか、path にそのフォルダを指定したときだけ中に入る）。',
+  input: Type.Object({
+    path: Type.Optional(PathArg), depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+    all: Type.Optional(Type.Boolean({ description: 'node_modules・.git など大きなフォルダの中も一覧する' })),
+  }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task'],
   preCheck: (input, ctx) => checkFilePath(input.path ?? '.', 'read', ctx).check,
@@ -124,16 +136,24 @@ export const fileList: ToolDef<{ path?: string; depth?: number }> = {
     const language = languageOf(ctx.config);
     if (!statSync(abs, { throwIfNoEntry: false })?.isDirectory()) return { content: toolText(language, 'file.no_dir', { path: shown(abs, ctx) }), isError: true };
     const lines: string[] = [];
+    const skipped = new Set<string>();
     const walk = (dir: string, depth: number, indent: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
         if (lines.length >= 500) return;
         const full = resolve(dir, entry.name);
         if (placePath(full, ctx.policy).kind === 'deny') continue; // 秘密情報や保護対象は一覧にも出さない
-        lines.push(`${indent}${entry.name}${entry.isDirectory() ? '/' : ''}`);
-        if (entry.isDirectory() && depth > 1) walk(full, depth - 1, `${indent}  `);
+        const heavy = entry.isDirectory() && !input.all && HEAVY_DIRS.has(entry.name);
+        const mark = heavy && depth > 1 ? ` ${toolText(language, 'file.list_skipped_mark')}` : '';
+        lines.push(`${indent}${entry.name}${entry.isDirectory() ? '/' : ''}${mark}`);
+        if (mark) skipped.add(`${entry.name}/`);
+        if (entry.isDirectory() && depth > 1 && !heavy) walk(full, depth - 1, `${indent}  `);
       }
     };
     walk(abs, input.depth ?? 1, '');
-    return { content: lines.length ? `${shown(abs, ctx)}/\n${lines.join('\n')}${lines.length >= 500 ? `\n${toolText(language, 'file.list_cut')}` : ''}` : toolText(language, 'file.list_empty', { path: shown(abs, ctx) }) };
+    const notes = [
+      ...(lines.length >= 500 ? [toolText(language, 'file.list_cut')] : []),
+      ...(skipped.size ? [toolText(language, 'file.list_skipped_note', { names: [...skipped].join(', ') })] : []),
+    ];
+    return { content: lines.length ? `${shown(abs, ctx)}/\n${lines.join('\n')}${notes.map(n => `\n${n}`).join('')}` : toolText(language, 'file.list_empty', { path: shown(abs, ctx) }) };
   },
 };

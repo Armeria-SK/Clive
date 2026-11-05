@@ -3,23 +3,26 @@ import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
 import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
+import { candidateModelIds } from '../engine/chat.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
-import type { ApprovalView } from '../tools/approvals.ts';
+import { approvalPublic, type ApprovalView } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
-import { MemoryError } from '../memory/store.ts';
+import { MemoryError, planBooks } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
 import { httpText } from '../shared/messages/http.ts';
 import { domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
+import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { registerReviewRoutes } from './routes-review.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { LiveStreams } from './sse.ts';
 import { serveStatic } from './static.ts';
 
 const MAX_MESSAGE_CHARS = 100_000;
+const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export interface WebServer {
   server: Server;
@@ -46,7 +49,7 @@ function isLanguage(value: string): value is Language {
 }
 
 function approvalView(a: ApprovalView) {
-  return { id: a.id, runId: a.runId, conversationId: a.conversationId, tool: a.tool, title: a.title, body: a.body, cwd: a.cwd, reasons: a.reasons, details: a.details, expiresAt: a.expiresAt };
+  return { runId: a.runId, conversationId: a.conversationId, ...approvalPublic(a) };
 }
 
 function modelsView(app: App) {
@@ -134,12 +137,17 @@ export function createWebServer(app: App): WebServer {
     }
     if (images.length) {
       const config = app.config();
-      const vision = config.routing.chat.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
-      if (!vision) throw problem(409, 'no_vision', 'no_vision');
+      const candidates = candidateModelIds(config, 'chat');
+      // 候補が 1 つも無い（モデルが 0 個）ときは画像の話の前に、エンジンの「使えるモデルがない」案内に任せる
+      const vision = candidates.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
+      if (candidates.length && !vision) throw problem(409, 'no_vision', 'no_vision');
     }
     const attachments: AttachmentMeta[] = uploads.map(u => ({ id: u.id, name: u.name, kind: u.kind }));
     const content = [text || engineText(languageOf(app.config()), images.length ? 'attachment.image' : 'attachment.file'), ...blocks].join('\n\n');
-    if (!app.conversations.get(id)) app.conversations.create({ id });
+    // 画面が決めた id へ最初の発言を送ると、受け付けたときに会話ができる。作られる id は UUID の形だけ。タスク・振り返りの会話には、ここから送らせない
+    const existing = app.conversations.get(id);
+    if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
+    if (!existing && !CONVERSATION_ID.test(id)) throw problem(400, 'invalid_id', 'invalid_id');
     const outcome = app.engine.send(id, content, images, attachments);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     sendJson(res, 202, { runId: outcome.runId, messageId: outcome.messageId });
@@ -197,12 +205,16 @@ export function createWebServer(app: App): WebServer {
     return id;
   };
   router.add('GET', '/api/memories', ({ res }) => {
-    const usage = app.memory.usage();
     const items = app.memory.list();
-    sendJson(res, 200, { books: {
-      user: { ...usage.user, items: items.filter(m => m.book === 'user') },
-      notes: { ...usage.notes, items: items.filter(m => m.book === 'notes') },
-    } });
+    const budget = app.engine.memoryBudget();
+    const plan = planBooks(items, languageOf(app.config()), budget);
+    sendJson(res, 200, {
+      books: {
+        user: { used: app.memory.used('user'), items: items.filter(m => m.book === 'user') },
+        notes: { used: app.memory.used('notes'), items: items.filter(m => m.book === 'notes') },
+      },
+      context: { tokens: plan.tokens, budget: budget ?? null, omitted: plan.omitted.length },
+    });
   });
   router.add('POST', '/api/memories', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
@@ -233,6 +245,8 @@ export function createWebServer(app: App): WebServer {
   registerTaskRoutes(router, app);
   // ── スキル・レビュー・好奇心・振り返り ──
   registerReviewRoutes(router, app);
+  // ── はじめの設定・名前と話し方（SOUL.md / USER.md）・.env の読み直し ──
+  registerOnboardingRoutes(router, app);
 
   // ── 設定とモデル ──
   router.add('GET', '/api/settings', ({ res }) => sendJson(res, 200, settingsView(app)));

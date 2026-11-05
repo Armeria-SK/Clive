@@ -4,7 +4,7 @@ import { ActivityPanel } from './ActivityPanel.tsx';
 import { presenceOf } from './avatar.ts';
 import { Chat, type ConversationChange, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
-import { useEscapeLayer } from './hooks.ts';
+import { useEscapeLayer, useExit } from './hooks.ts';
 import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
@@ -18,10 +18,14 @@ import { notificationLink } from './notification-meta.ts';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { Palette } from './Palette.tsx';
 import { PAGE_META, pickChatModel } from './pages.ts';
-import { chatHash, parseRoute } from './routes.ts';
+import { chatHash, pageBehind, parseRoute, type Route } from './routes.ts';
 import { Runs } from './Runs.tsx';
 import { serverText, warningText } from './server-text.ts';
+import { InertContext } from './inert.ts';
+import { Onboarding } from './Onboarding.tsx';
+import { markSetupShown, OPEN_SETUP_EVENT, resumeStep, wasSetupShown, type OnboardingState, type StepId } from './onboarding.ts';
 import { Settings } from './Settings.tsx';
+import type { KeptEdits } from './settings/keep.ts';
 import { Sidebar } from './Sidebar.tsx';
 import { StatusBar } from './StatusBar.tsx';
 import { TabBar } from './TabBar.tsx';
@@ -71,6 +75,12 @@ export function App() {
   const rootRef = useRef<HTMLDivElement>(null);
   const taskStatus = useRef(new Map<string, string>());
   const lastChatHash = useRef('#/');
+  const behindSettings = useRef<Route | null>(null);
+  const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupStart, setSetupStart] = useState<StepId>('language');
+  const setupChecked = useRef(false);
+  const keptSettings = useRef<KeptEdits | null>(null);
   const taskConversations = useRef(new Map<string, string>());
 
   const refreshList = useCallback(() => {
@@ -133,8 +143,42 @@ export function App() {
     else if (mode === 'wide') setPanelOpen(loadPanelPreference());
   }, [mode]);
 
-  const current = route.page === 'chat' ? route.conversationId : null;
-  const tabState = useTabs(route, conversations, conversationsLoaded);
+  // 設定はモーダル。後ろには、設定を開く前に見ていたページを残して描く
+  if (route.page !== 'settings') behindSettings.current = route;
+  const shown = pageBehind(route, behindSettings.current);
+  const settingsOpen = route.page === 'settings';
+  const settingsExit = useExit(settingsOpen, 220);
+  const setupExit = useExit(setupOpen, 220);
+  const settingsCovers = settingsExit.mounted || setupExit.mounted;
+  const closeSettings = useCallback(() => {
+    if (behindSettings.current) history.back();
+    else location.replace('#/');
+  }, []);
+  // はじめの設定。まだ終わっていなければ、最初の 1 回だけ自動で開く（あとで → 左の一覧の上の帯から続けられる）。すでに使っているデータには出ない（サーバーが決める）
+  const refreshOnboarding = useCallback(() => { void api.onboarding().then(setOnboarding).catch(() => undefined); }, []);
+  const openSetupAt = useCallback((step: StepId) => { setSetupStart(step); setSetupOpen(true); markSetupShown(); }, []);
+  useEffect(() => { refreshOnboarding(); }, [refreshOnboarding]);
+  useEffect(() => {
+    if (!onboarding || setupChecked.current) return;
+    setupChecked.current = true;
+    if (!onboarding.done && !wasSetupShown()) openSetupAt(resumeStep(onboarding.steps));
+  }, [onboarding, openSetupAt]);
+  const onboardingRef = useRef(onboarding); onboardingRef.current = onboarding;
+  useEffect(() => {
+    // モデルが無いときの札のボタンなど、画面のどこからでも開ける。終わっている人には、モデルの手順から
+    const on = () => { const state = onboardingRef.current; openSetupAt(state && !state.done ? resumeStep(state.steps) : 'model'); };
+    addEventListener(OPEN_SETUP_EVENT, on);
+    return () => removeEventListener(OPEN_SETUP_EVENT, on);
+  }, [openSetupAt]);
+  const rerunSetup = useCallback(() => { closeSettings(); openSetupAt('language'); }, [closeSettings, openSetupAt]);
+  const finishSetup = useCallback((conversationId: string | null) => {
+    setSetupOpen(false);
+    refreshOnboarding(); refreshMeta(); refreshList();
+    if (conversationId) location.hash = chatHash(conversationId);
+  }, [refreshOnboarding, refreshMeta, refreshList]);
+  const laterSetup = useCallback(() => { setSetupOpen(false); refreshOnboarding(); refreshMeta(); }, [refreshOnboarding, refreshMeta]);
+  const current = shown.page === 'chat' ? shown.conversationId : null;
+  const tabState = useTabs(shown, conversations, conversationsLoaded);
   useEffect(() => { if (route.page === 'chat') lastChatHash.current = chatHash(route.conversationId); }, [route]);
 
   // 「いまの動き」は、広い画面では右のパネル。#/today（古い通知のリンクなど）は、パネルを開いて直前の会話に戻す
@@ -161,7 +205,6 @@ export function App() {
     else showPanel(true);
   }, [showPanel]);
 
-  const openPalette = useCallback(() => { setNotifOpen(false); setPaletteOpen(true); }, []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const openNewTask = useCallback(() => { setNotifOpen(false); setNewTaskOpen(true); }, []);
   const closeNewTask = useCallback(() => setNewTaskOpen(false), []);
@@ -390,9 +433,9 @@ export function App() {
     const running = worker?.running;
     if (running) location.hash = running.kind === 'task' && running.taskId ? `#/tasks/${encodeURIComponent(running.taskId)}` : '#/runs/reviews';
   };
-  const title = route.page === 'chat'
+  const title = shown.page === 'chat'
     ? (current ? conversations.find(c => c.id === current)?.title ?? t('conversation.untitled') : t('tab.newChat'))
-    : t(PAGE_META[route.page].label);
+    : t(PAGE_META[shown.page].label);
   const pane = (
     <ActivityPanel
       variant={narrow ? 'page' : 'side'} open={panelOpen} overlay={mode === 'mid'} profile={profile} presence={presence}
@@ -401,31 +444,33 @@ export function App() {
       onOpenApproval={openApproval} onClose={() => showPanel(false)}
     />
   );
-  const viewKey = route.page === 'chat' ? `chat:${current ?? 'new'}` : route.page;
+  const viewKey = shown.page === 'chat' ? `chat:${current ?? 'new'}` : shown.page;
 
   return (
     <div className="shell" ref={rootRef} data-mode={mode}>
-      <div className="shell-body">
+      <div className="shell-body" inert={settingsCovers}>
+        <InertContext.Provider value={settingsCovers}>
         <Sidebar
-          mode={mode} drawerOpen={drawerOpen} route={route} profile={profile} presence={presence}
+          mode={mode} drawerOpen={drawerOpen} route={shown} profile={profile} presence={presence}
           conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
           waitingCount={waiting.size} restartRequired={restartRequired}
-          onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onSearch={openPalette} onAvatar={openPanel}
+          setupPending={onboarding !== null && !onboarding.done && !setupOpen} onSetup={() => openSetupAt(onboarding ? resumeStep(onboarding.steps) : 'language')}
+          onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
         />
         {narrow && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
         <main className="main">
           {narrow
             ? <NarrowHeader title={title} phrase={presence.line} connected={connected} hasApproval={approvals.length > 0} unread={unread} onMenu={() => setDrawerOpen(true)} onApproval={openApproval}
-                onSearch={openPalette} onNotifications={toggleNotifications} notificationsOpen={notifOpen} />
+                onNotifications={toggleNotifications} notificationsOpen={notifOpen} />
             : (
               <TabBar
                 tabs={tabState.tabs} activeKey={tabState.activeKey} conversations={conversations} drafts={drafts} approvals={approvals} chatTitles={tabState.titles}
-                panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onSearch={openPalette} onTogglePanel={togglePanel}
+                panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onTogglePanel={togglePanel}
               />
             )}
-          <LanguagePrompt />
+          <LanguagePrompt suppressed={onboarding !== null && !onboarding.done} />
           <div className="content" key={viewKey}>
-            {route.page === 'chat' && (
+            {shown.page === 'chat' && (
               <Chat
                 key={current ?? 'new'}
                 conversationId={current}
@@ -442,29 +487,29 @@ export function App() {
                 onConversationChanged={onConversationChanged}
               />
             )}
-            {route.page === 'today' && narrow && pane}
-            {route.page === 'tasks' && (
+            {shown.page === 'today' && narrow && pane}
+            {shown.page === 'tasks' && (
               <TasksPage
-                taskId={route.taskId} section={route.section} revision={taskRevision + approvals.length} worker={worker}
+                taskId={shown.taskId} section={shown.section} revision={taskRevision + approvals.length} worker={worker}
                 runStartedAt={runningId ? runStarts[runningId] : undefined} onNewTask={openNewTask}
               />
             )}
-            {route.page === 'notifications' && (
+            {shown.page === 'notifications' && (
               <NotificationsPage items={notifications} failed={notificationsFailed} unread={unread} onReadAll={readAllNotifications} onOpenItem={openNotification} />
             )}
-            {route.page === 'settings' && <Settings onProfile={setProfile} />}
-            {route.page === 'runs' && <Runs tab={route.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
-            {route.page === 'memory' && <Memory revision={memoryRevision} />}
-            {route.page === 'skills' && <SkillsPage target={route.target} revision={notificationRevision} />}
+            {shown.page === 'runs' && <Runs tab={shown.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
+            {shown.page === 'memory' && <Memory revision={memoryRevision} />}
+            {shown.page === 'skills' && <SkillsPage target={shown.target} revision={notificationRevision} />}
           </div>
         </main>
         {!narrow && pane}
+        </InertContext.Provider>
       </div>
       {!narrow && (
         <StatusBar
           connected={connected} worker={worker} runStartedAt={runningId ? runStarts[runningId] : undefined} approvals={approvals.length}
           modelName={modelName} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
-          onOpenApproval={openApproval} onOpenNotifications={toggleNotifications}
+          onOpenApproval={openApproval} onOpenNotifications={toggleNotifications} inert={settingsCovers}
         />
       )}
       <NotificationBubble
@@ -475,7 +520,9 @@ export function App() {
         open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
         onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
-      <NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} />
+      {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} kept={keptSettings} onRerunSetup={rerunSetup} />}
+      {setupExit.mounted && <Onboarding leaving={setupExit.leaving} start={setupStart} profile={profile} onProfile={setProfile} onLater={laterSetup} onFinished={finishSetup} />}
+      <InertContext.Provider value={settingsCovers}><NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} /></InertContext.Provider>
       <ToastHost mode={mode} />
       <Tooltip disabled={narrow} />
     </div>

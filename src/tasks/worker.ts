@@ -6,8 +6,8 @@ import type { ChatEngine } from '../engine/chat.ts';
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
-import { bookPressureText, reviewPrompt, transcriptOf, TRIGGER_TEXT, type ReviewJob, type ReviewJobs } from '../memory/review.ts';
-import type { MemoryStore } from '../memory/store.ts';
+import { bookPressureText, isNoProposal, reviewPrompt, TIDY_FORBIDDEN_TOOLS, transcriptOf, TRIGGER_TEXT, type ReviewJob, type ReviewJobs } from '../memory/review.ts';
+import { planBooks, type MemoryStore } from '../memory/store.ts';
 import type { Notifications } from '../notify/notifications.ts';
 import { languageOf } from '../shared/language.ts';
 import { taskText } from '../shared/messages/tasks.ts';
@@ -36,6 +36,7 @@ export interface WorkerDeps {
   reviews?: ReviewJobs | undefined;
   memory?: MemoryStore | undefined;
   curiosity?: CuriosityStore | undefined;
+  memoryBudget?: (() => number | undefined) | undefined;
 }
 
 export interface WorkerRunning { kind: 'task' | 'review'; taskId: string | null; runId: string; title: string }
@@ -220,6 +221,8 @@ export class Worker {
         this.#schedule(Math.max(1000, Math.min(at ?? Infinity, now + IDLE_POLL_MS) - now));
       };
       if (!c.worker.enabled) { reschedule(); return 'disabled'; }
+      // モデルが 1 つも無いのは「まだ設定していない」だけ。何も選ばず（空の会話も通知も作らず）休む
+      if (!c.models.length) { reschedule(); return 'no_model'; }
 
       // 予定から実行用のタスクを作る・返事待ちを知らせ直す（どちらもモデルは呼ばない）
       tasks.spawnDueSchedules();
@@ -276,11 +279,10 @@ export class Worker {
     let since = Number(kv.get('review:since'));
     if (!Number.isFinite(since) || since <= 0) { since = now; kv.set('review:since', String(now)); }
     reviews.enqueueIdleConversations(c.memory.reviewIdleMinutes * 60_000, since);
-    if (memory) {
-      const day = Math.floor(now / 86_400_000);
-      for (const [book, u] of Object.entries(memory.usage())) {
-        if (u.max > 0 && u.used / u.max >= 0.9) reviews.enqueue('book_full', `book:${book}:${day}`);
-      }
+    // 記憶が会話に入れる量の予算を超えたら、整理の振り返りを 1 日 1 回積む（予算が決まらないとき・モデルが 0 個のときは積まない）
+    const budget = this.#d.memoryBudget?.();
+    if (memory && budget !== undefined && planBooks(memory.list(), languageOf(c), budget).omitted.length > 0) {
+      reviews.enqueue('book_full', `book:all:${Math.floor(now / 86_400_000)}`);
     }
   }
 
@@ -289,8 +291,9 @@ export class Worker {
     const language = languageOf(this.#d.config());
     const forgotten = (db.prepare("SELECT before FROM memory_events WHERE action = 'forget' AND actor = 'user' AND before IS NOT NULL ORDER BY id DESC LIMIT 20").all() as Array<{ before: string }>).map(r => r.before);
     if (job.trigger === 'book_full') {
-      const usage = memory?.usage();
-      const pressure = usage ? bookPressureText(usage, language) : undefined;
+      const budget = this.#d.memoryBudget?.();
+      const plan = memory && budget !== undefined ? planBooks(memory.list(), language, budget) : undefined;
+      const pressure = plan && budget !== undefined && plan.omitted.length > 0 ? bookPressureText({ tokens: plan.tokens, budget, outside: plan.omitted }, language) : undefined;
       return reviewPrompt({ trigger: job.trigger, forgotten, bookPressure: pressure, language });
     }
     if (job.trigger === 'task') {
@@ -314,7 +317,7 @@ export class Worker {
     if (!prompt) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
     const lastMessageId = job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
     const conversation = conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }) });
-    const started = engine.runReview(conversation.id, prompt);
+    const started = engine.runReview(conversation.id, prompt, job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {});
     if (!started.ok) {
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.review_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-review' });
       return 'no_model';
@@ -326,6 +329,7 @@ export class Worker {
       if (engine.wasPreempted(started.runId)) { reviews.requeue(job.id); return 'ran'; }
       if (result.ok) {
         reviews.finish(job.id, 'done', result.text.trim().slice(0, 1000) || taskText(language, 'review.no_reply'));
+        if (job.trigger === 'book_full') this.#proposeTidy(job, result.text, language);
         if (job.conversation_id && lastMessageId) kv.set(`review:upto:${job.conversation_id}`, String(lastMessageId));
       } else {
         // 振り返りは再試行しない（失敗が続いて費用が膨らむのを防ぐ）。次のきっかけでまた積まれる
@@ -333,6 +337,13 @@ export class Worker {
       }
     } finally { this.#running = undefined; }
     return 'ran';
+  }
+
+  // 整理の振り返りは記憶を消さない。返事に書かれた「消す・まとめる案」を、記憶のページへのリンクつきで知らせる
+  #proposeTidy(job: ReviewJob, reply: string, language: Language): void {
+    const text = reply.trim();
+    if (!text || isNoProposal(text)) return;
+    this.#d.notifications.notify({ kind: 'info', title: taskText(language, 'notify.memory_tidy'), body: text.slice(0, 1000), link: '#/memory', dedupKey: `memory-tidy:${job.dedup_key}` });
   }
 
   #spawnCuriosity(c: AppConfig, now: number): Task | undefined {

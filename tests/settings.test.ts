@@ -6,10 +6,12 @@ import { getLanguagePreference, setLanguagePreference } from '../web/src/i18n/in
 import { ja } from '../web/src/i18n/ja.ts';
 import { adoptLanguageInDraft, configWithLanguage, loadPromptAnswer, savePromptAnswer, saveLanguage, shouldAskLanguage, withAdoptedLanguage } from '../web/src/language.ts';
 import {
-  addModel, addProvider, addTag, addToRoute, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, providerInUse, pruned,
+  addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, providerInUse, pruned,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
+import { editsToKeep, restoreKept } from '../web/src/settings/keep.ts';
+import { applyEdits, diffConfig } from '../web/src/settings/merge.ts';
 import { differs, errorFor } from '../web/src/settings/types.ts';
 
 function sample(): Config {
@@ -33,9 +35,9 @@ function sample(): Config {
   };
 }
 
-test('設定の節: 9 つ・4 グループで、名前と説明が ja にも en にもある', () => {
+test('設定の節: 10 つ・4 グループで、名前と説明が ja にも en にもある', () => {
   assert.equal(SECTION_GROUPS.length, 4);
-  assert.deepEqual([...SECTION_IDS], ['models', 'providers', 'keys', 'tools', 'worker', 'memory', 'look', 'server', 'file']);
+  assert.deepEqual([...SECTION_IDS], ['models', 'providers', 'keys', 'tools', 'worker', 'memory', 'about', 'look', 'server', 'file']);
   assert.equal(new Set(SECTION_IDS).size, SECTION_IDS.length);
   for (const group of SECTION_GROUPS) {
     for (const key of [group.label, ...group.items.flatMap(i => [i.label, i.desc])]) {
@@ -356,4 +358,84 @@ test('saveLanguage: 保存に失敗したら画面の言語は変えない', asy
   }) as typeof fetch;
   await assert.rejects(saveLanguage('en'));
   assert.equal(getLanguagePreference(), 'ja');
+});
+
+test('closeAction: 設定のモーダルを閉じるとき、保存していない変更があれば確かめ、保存している最中は待つ', () => {
+  assert.equal(closeAction({ dirty: 0, busy: false }), 'close', '変更が無ければそのまま閉じる');
+  assert.equal(closeAction({ dirty: 3, busy: false }), 'confirm', '変更があれば、捨てる前に確かめる');
+  assert.equal(closeAction({ dirty: 0, busy: true }), 'wait', '保存している最中は閉じない');
+  assert.equal(closeAction({ dirty: 2, busy: true }), 'wait');
+});
+
+test('設定のモーダルの辞書: 閉じる確かめの文は ja にも en にもあり、件数が入る', () => {
+  assert.match(ja['settings.discard.body'](3), /3/u);
+  assert.match(en['settings.discard.body'](1), /1 unsaved change /u);
+  assert.match(en['settings.discard.body'](2), /2 unsaved changes /u);
+  for (const key of ['settings.close', 'settings.discard.title', 'settings.discard.keep', 'settings.discard.do'] as const) {
+    assert.ok(ja[key] && en[key], key);
+    assert.notEqual(ja[key], en[key], `${key} は訳してある`);
+  }
+});
+
+test('editsToKeep: 保存していない編集があるときだけ、残すものを返す', () => {
+  const saved = sample();
+  const draft = { ...sample(), timezone: 'UTC' };
+  assert.equal(editsToKeep(saved, sample()), null, '変更が無ければ残さない');
+  assert.equal(editsToKeep(null, draft), null, 'まだ読み込めていないときは残さない');
+  assert.equal(editsToKeep(saved, null), null);
+  assert.deepEqual(editsToKeep(saved, draft), { saved, draft });
+});
+
+test('restoreKept: 残していた編集を最新の設定へ当て直し、ほかの場所が先に変えた別の値は最新のまま見せる', () => {
+  const saved = sample();
+  const draft = { ...sample(), timezone: 'UTC' };
+  const kept = { saved, draft };
+  const latest = { ...sample(), worker: { enabled: true, autonomy: false } };
+  const restored = restoreKept(kept, latest);
+  assert.equal(restored.restored, true);
+  assert.equal(restored.draft.timezone, 'UTC', '自分の編集は戻る');
+  assert.equal((restored.draft.worker as { enabled: boolean }).enabled, true, 'ほかの場所が変えた値は最新のまま');
+  assert.equal(restored.saved, latest, '比べる元は最新の設定');
+  assert.equal(countChanges(restored.saved, restored.draft), 1, '保存していない変更は自分の 1 件だけ');
+});
+
+test('restoreKept: 同じ値をほかの場所も先に変えていたら編集は残さず、ぶつかるときは残していた画面のまま返して保存の合流に衝突を知らせさせる', () => {
+  const saved = sample();
+  const kept = { saved, draft: { ...sample(), timezone: 'UTC' } };
+  const same = restoreKept(kept, { ...sample(), timezone: 'UTC' });
+  assert.equal(same.restored, false, '最新がすでに同じ値なら、残す編集は無い');
+  assert.equal(countChanges(same.saved, same.draft), 0);
+  const conflicting = restoreKept(kept, { ...sample(), timezone: 'Europe/London' });
+  assert.equal(conflicting.restored, true);
+  assert.equal(conflicting.saved, saved, '衝突のときは元の比べる元を残す');
+  assert.equal(conflicting.draft, kept.draft);
+  assert.equal(diffConfig(conflicting.saved, conflicting.draft).length, 1);
+  assert.equal(applyEdits({ ...sample(), timezone: 'Europe/London' }, diffConfig(conflicting.saved, conflicting.draft)).conflicts.length, 1, '保存すれば衝突として知らされる');
+  const latest = sample();
+  const none = restoreKept(null, latest);
+  assert.deepEqual({ restored: none.restored, same: none.draft === latest && none.saved === latest }, { restored: false, same: true });
+  assert.equal(restoreKept({ saved, draft: sample() }, latest).restored, false, '変更の無い残りは使わない');
+});
+
+test('設定を残した旨の辞書: ja にも en にもある', () => {
+  assert.ok(ja['settings.kept'].length > 0 && en['settings.kept'].length > 0);
+  assert.notEqual(ja['settings.kept'], en['settings.kept']);
+});
+
+test('モデルを足したとき、チャットも裏方も空の順番には、今の候補（設定のモデル全部）に新しいモデルを足して入れる', () => {
+  const empty = { ...sample(), models: [], routing: { chat: [], background: [], retriesPerModel: 1 } };
+  const first = addModel(empty);
+  assert.deepEqual(first.config.routing, { chat: ['new-model'], background: ['new-model'], retriesPerModel: 1 }, '最初のモデルは、チャットにも裏方にも入る');
+  const second = addModel(first.config);
+  assert.deepEqual(second.config.routing.chat, ['new-model'], '順番がもうあれば、2 つ目からは自分で入れる');
+  assert.deepEqual(second.config.routing.background, ['new-model']);
+
+  const hollow = { ...sample(), routing: { chat: [], background: [], retriesPerModel: 1 } };
+  const added = addModel(hollow);
+  assert.deepEqual(added.config.routing.chat, ['big', 'sonnet', 'new-model'], '今まで候補だったモデルを外さない');
+  assert.deepEqual(added.config.routing.background, ['big', 'sonnet', 'new-model']);
+
+  const oneEmpty = { ...sample(), routing: { chat: ['big'], background: [], retriesPerModel: 1 } };
+  assert.deepEqual(addModel(oneEmpty).config.routing, oneEmpty.routing, '片方でも順番があるときは触らない（裏方が空ならチャットの順番を使う）');
+  assert.deepEqual(addModel(sample()).config.routing, sample().routing, '順番があるときは触らない');
 });

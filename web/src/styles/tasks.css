@@ -9,16 +9,16 @@
 
 .tk-page { position: relative; display: flex; flex-direction: column; overflow: hidden; container-type: inline-size; }
 .tk-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
-.tk-inner { max-width: 1040px; margin: 0 auto; padding: 34px 40px 64px; display: flex; flex-direction: column; box-sizing: border-box; }
+.tk-inner { width: 100%; max-width: var(--content-max); margin: 0 auto; padding: 34px var(--content-gutter) 64px; display: flex; flex-direction: column; box-sizing: border-box; }
 .shell[data-mode="narrow"] .tk-inner { padding: 22px 16px 48px; }
 .tk-expand { animation: cl-tk-expand .32s cubic-bezier(.16, 1, .3, 1); }
 
 .tk-head { display: flex; align-items: flex-end; gap: 14px 20px; flex-wrap: wrap; padding-bottom: 10px; }
 .tk-titles { display: flex; flex-direction: column; gap: 6px; }
-.tk-title { margin: 0; font-family: var(--font-heading); font-size: 32px; font-weight: 400; line-height: 1.1; }
+.tk-title { margin: 0; font-family: var(--font-heading); font-size: 32px; font-weight: var(--font-display-weight); line-height: 1.1; }
 .tk-summary { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--color-text-muted); }
 .tk-summary > span { display: inline-flex; align-items: baseline; gap: 5px; }
-.tk-summary b { font-family: var(--font-heading); font-size: 21px; font-weight: 400; line-height: 1; color: var(--color-text); font-variant-numeric: tabular-nums; }
+.tk-summary b { font-family: var(--font-heading); font-size: 21px; font-weight: var(--font-display-weight); line-height: 1; color: var(--color-text); font-variant-numeric: tabular-nums; }
 .tk-summary b.attention { color: var(--color-accent-text); }
 .tk-tools { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .shell[data-mode="narrow"] .tk-tools { width: 100%; margin-left: 0; }
@@ -121,7 +121,7 @@
 .tk-sheet-body { padding: 22px 24px 44px; display: flex; flex-direction: column; gap: 22px; animation: cl-rise .38s cubic-bezier(.16, 1, .3, 1) backwards; }
 .shell[data-mode="narrow"] .tk-sheet-body { padding: 22px 16px 44px; }
 .tk-title-row { display: flex; align-items: flex-start; gap: 6px; }
-.tk-sheet-title { flex: 1; min-width: 0; margin: 0; font-family: var(--font-heading); font-size: 28px; font-weight: 400; line-height: 1.2; text-wrap: balance; overflow-wrap: anywhere; }
+.tk-sheet-title { flex: 1; min-width: 0; margin: 0; font-family: var(--font-heading); font-size: 28px; font-weight: var(--font-display-weight); line-height: 1.2; text-wrap: balance; overflow-wrap: anywhere; }
 .tk-title-btn { flex: none; width: 28px; height: 28px; margin-top: 2px; color: inherit; opacity: .55; }
 .tk-title-btn:hover { opacity: 1; }
 .tk-title-edit { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -201,7 +201,7 @@
 .dialog.tk-dialog.leaving { opacity: 0; transition: opacity .18s ease; }
 .tk-modal-wrap.narrow .dialog.tk-dialog { width: 100%; max-height: 90%; border-radius: var(--radius-lg) var(--radius-lg) 0 0; animation-name: cl-modal-up; }
 .tk-dialog-head { display: flex; align-items: center; gap: 12px; }
-.tk-dialog-head .dialog-title { flex: 1; font-size: 26px; font-weight: 400; }
+.tk-dialog-head .dialog-title { flex: 1; font-size: 26px; font-weight: var(--font-display-weight); }
 .tk-dialog-head .btn { width: 32px; height: 32px; color: inherit; }
 .tk-dialog .field { display: flex; flex-direction: column; }
 .tk-dialog textarea.tk-body { min-height: 72px; }

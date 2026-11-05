@@ -3,8 +3,8 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels,
-  restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
+  restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -67,21 +67,6 @@ test('runOverflowOf: 途中で収まらなくなった失敗だけ、来た 2 �
   assert.equal(runOverflowOf({ errorKind: 'context_overflow', measured: 18488 }), null, '片方しか無いときは数字の札にしない');
   assert.equal(runOverflowOf({ errorKind: 'provider_error', measured: 1, required: 2 }), null);
   assert.equal(runOverflowOf({}), null);
-});
-
-test('modelNameOf / resolveRunModels: 返事ごとのモデル名は、実行の記録の model を優先し、なければ設定の id から引く', () => {
-  const models = [model('a'), model('b')];
-  assert.equal(modelNameOf(models, 'a'), 'a-name');
-  assert.equal(modelNameOf(models, 'removed'), 'removed', '設定から消えたモデルは id のまま');
-  assert.equal(modelNameOf(models, null), null);
-  const rows = [
-    { id: 'r1', model_id: 'a', model: 'served-name', started_at: 1 },
-    { id: 'r2', model_id: 'b', started_at: 2 },
-    { id: 'r3', model_id: null, model: null, started_at: 3 },
-  ];
-  const { found, missing } = resolveRunModels(rows, ['r1', 'r2', 'r3', 'r-old'], models);
-  assert.deepEqual([...found], [['r1', 'served-name'], ['r2', 'b-name']]);
-  assert.deepEqual(missing, ['r-old'], '記録に無い（500 件より古い）ものだけが missing。終わっていない実行は missing にしない');
 });
 
 test('slashMatches: 先頭の / のあとの 1 語を前方一致で候補にする。rename と archive も入っている', () => {
@@ -208,6 +193,49 @@ test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引
   assert.equal(en['approval.position'](1, 2), '1 / 2');
 });
 
+test('liveRenderDelay: 短い返事は届くたびに描き、長い返事は長さに比例して間引く（上限 1 秒）', () => {
+  assert.equal(liveRenderDelay(0), 0);
+  assert.equal(liveRenderDelay(2999), 0, '3,000 文字までは、これまでどおり届くたびに描く');
+  assert.equal(liveRenderDelay(3000), 30);
+  assert.equal(liveRenderDelay(10_000), 100);
+  assert.equal(liveRenderDelay(50_000), 500);
+  assert.equal(liveRenderDelay(1_000_000), 1000, '上限は 1 秒');
+  const lengths = [3000, 6000, 12_000, 25_000, 50_000, 100_000];
+  const delays = lengths.map(liveRenderDelay);
+  assert.ok(delays.every((d, i) => i === 0 || d >= delays[i - 1]!), '長いほど間隔は広い（縮まない）');
+});
+
+test('replyTurns: 1 回の返事（同じ runId）は見出し 1 つ。中間の文は見出しなしで続き、コピーは最後の文に 1 つ（その回の文を全部まとめる）', () => {
+  const m = (id: number, role: string, runId: string | null, text = '') => ({ id, role, runId, text });
+  const one = [
+    m(1, 'user', null, '調べて'), m(2, 'assistant', 'r1', '調べます。'), m(3, 'tool', 'r1'), m(4, 'assistant', 'r1', '原因がほぼ確定しました。'), m(5, 'tool', 'r1'), m(6, 'assistant', 'r1', '以上です。'),
+  ];
+  const turns = replyTurns(one);
+  assert.deepEqual([2, 4, 6].map(id => turns.get(id)?.head), [true, false, false], '見出しは最初の文だけ');
+  assert.deepEqual([2, 4, 6].map(id => turns.get(id)?.copyText), [null, null, '調べます。\n\n原因がほぼ確定しました。\n\n以上です。'], 'コピーは最後に 1 つ');
+  assert.equal(turns.has(1) || turns.has(3), false, '発言と道具の行は対象外');
+
+  const live = replyTurns(one, 'r1');
+  assert.deepEqual([2, 4, 6].map(id => live.get(id)?.head), [true, false, false]);
+  assert.equal(live.get(6)?.copyText, null, 'まだ続いている最中の返事には、コピーを付けない');
+  assert.equal(replyTurns(one, 'other').get(6)?.copyText !== null, true, '別の実行が動いていても関係ない');
+
+  const two = replyTurns([...one, m(7, 'user', null, 'ありがとう'), m(8, 'assistant', 'r2', 'どういたしまして')]);
+  assert.equal(two.get(8)?.head, true, '次の発言のあとは、新しい返事');
+  assert.equal(two.get(8)?.copyText, 'どういたしまして');
+  assert.equal(two.get(2)?.head, true);
+
+  const mixed = replyTurns([m(1, 'assistant', 'r1', 'a'), m(2, 'assistant', 'r2', 'b'), m(3, 'assistant', null, 'c'), m(4, 'assistant', null, 'd')]);
+  assert.deepEqual([1, 2, 3, 4].map(id => mixed.get(id)?.head), [true, true, true, true], '別の runId・runId の無い文は、それぞれが 1 回の返事');
+  assert.deepEqual([1, 2, 3, 4].map(id => mixed.get(id)?.copyText), ['a', 'b', 'c', 'd']);
+});
+
+test('enterApprovalId: Enter で許可できるのは先頭の札だけ。コードを動かす確かめ（onceOnly）は、ボタンを押すまで許可しない', () => {
+  assert.equal(enterApprovalId([]), null);
+  assert.equal(enterApprovalId([{ id: 'a', onceOnly: false }, { id: 'b', onceOnly: true }]), 'a');
+  assert.equal(enterApprovalId([{ id: 'b', onceOnly: true }, { id: 'a', onceOnly: false }]), null, '先頭がコードの確かめなら、後ろの札も Enter で許可しない');
+});
+
 test('approvalEnterAllowed: 空の Enter での承認は、表示している札の id が合い、出てから 1 秒たったあとだけ', () => {
   let gate = advanceApprovalGate({ id: null, since: 0 }, 'a', 10_000);
   assert.equal(approvalEnterAllowed(gate, 'a', 10_000 + APPROVAL_ENTER_GRACE_MS - 1), false, '出たばかりの札は、連打の Enter で承認されない');
@@ -303,4 +331,102 @@ test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の
   assert.equal(sendFailureOf(new ApiError(409, otherWithProblems), 'x', models).message, engineText('en', 'send.busy'), 'problems があっても、「使えるモデルがない」以外のコードは組み立て直さない');
   const unknown = { ...body, problems: [{ nope: true }] };
   assert.equal(sendFailureOf(new ApiError(409, unknown), 'x', models).message, new ApiError(409, unknown).message);
+});
+
+test('joinsToolRun: 続けて並ぶ道具の行（実行中の道具を含む）は前の行とくっつく。間に返事・発言・注記が入れば分かれる', () => {
+  assert.deepEqual(joinsToolRun(['user', 'tool', 'tool', 'run', 'assistant', 'tool']), [false, false, true, true, false, false]);
+  assert.deepEqual(joinsToolRun(['tool', 'tool', 'tool']), [false, true, true], '先頭の行は何ともくっつかない');
+  assert.deepEqual(joinsToolRun(['tool', 'note', 'tool']), [false, false, false], '注記を挟めば別のまとまり');
+  assert.deepEqual(joinsToolRun(['assistant', 'think', 'fail']), [false, false, false], '道具の行でないものはくっつかない');
+  assert.deepEqual(joinsToolRun([]), []);
+});
+
+test('sendFailureOf: モデルが 1 つも無い 409（problems が空）だけ noModels になり、「モデルを設定する」案内を出せる', () => {
+  const none = { error: 'provider_error', errorKind: 'provider_error', errorCode: 'engine.no_usable', errorMessage: '使えるモデルがないため送信しませんでした', problems: [] };
+  assert.equal(sendFailureOf(new ApiError(409, none), 'x', []).noModels, true);
+  const broken = { ...none, problems: [{ modelId: 'local', status: 'unreachable', message: '接続できません' }] };
+  assert.equal(sendFailureOf(new ApiError(409, broken), 'x', []).noModels, false, 'モデルがあるけれど使えないときは、設定を開くだけ');
+  assert.equal(sendFailureOf(new ApiError(409, { error: 'busy', errorCode: 'engine.send.busy', problems: [] }), 'x', []).noModels, false);
+  assert.equal(sendFailureOf(new Error('x'), 'x', []).noModels, false);
+});
+
+test('newConversationId / sendTarget: 最初の発言は画面が決めた id へ送り（会話を先に作らない）、断られたあとのやり直しは同じ id を使う', () => {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  assert.match(newConversationId(), uuid, 'ふつうの環境（randomUUID がある）');
+  const insecure = { getRandomValues: (bytes: Uint8Array) => { bytes.fill(255); return bytes; } };
+  assert.match(newConversationId(insecure), uuid, 'http の画面（randomUUID が無い）でも UUID v4 の形になる');
+  assert.equal(newConversationId(insecure), 'ffffffff-ffff-4fff-bfff-ffffffffffff');
+
+  let generated = 0;
+  const generate = () => `new-${++generated}`;
+  const existing = sendTarget('c1', null, generate);
+  assert.deepEqual(existing, { id: 'c1', created: null }, 'もう会話があれば、その id へ送り、id を作らない');
+  assert.equal(generated, 0);
+  const first = sendTarget(null, null, generate);
+  assert.deepEqual(first, { id: 'new-1', created: 'new-1' }, '最初の発言は新しい id へ');
+  const retry = sendTarget(null, first.created, generate);
+  assert.deepEqual(retry, { id: 'new-1', created: 'new-1' }, '断られたあとのやり直しは同じ id');
+  assert.equal(generated, 1, 'やり直しでは作り直さない');
+  assert.deepEqual(sendTarget('c2', 'new-1', generate), { id: 'c2', created: 'new-1' }, '会話に移ったあとは、その会話へ');
+});
+
+// 時計と待ちを差し替えて、画面の部品（useThrottledText）と同じ流れを動かす: 描く → 待ちを置く → 鳴ったら描き直す
+function drive(initial: string) {
+  const state = { clock: 0, redraws: 0, pending: undefined as { fn: () => void; at: number } | undefined, cancelled: 0 };
+  const throttle = new TextThrottle(initial);
+  const timers = {
+    now: () => state.clock,
+    redraw: () => { state.redraws++; },
+    setTimer: (fn: () => void, ms: number) => { state.pending = { fn, at: state.clock + ms }; const mine = state.pending; return () => { if (state.pending === mine) { state.pending = undefined; state.cancelled++; } }; },
+  };
+  let cancel: (() => void) | undefined;
+  let lastText: string | undefined;
+  // 描く（届いた文で描き直す）→ 前の待ちを止めて、必要なら新しい待ちを置く
+  const render = (text: string, at: number): string => {
+    state.clock = at;
+    const drawn = throttle.next(text, at);
+    // useEffect(…, [text]) と同じ: 文が変わったときだけ、前の待ちを止めて置き直す
+    if (text !== lastText) { cancel?.(); cancel = throttle.arm(text, timers); lastText = text; }
+    return drawn;
+  };
+  // 待ちが鳴る（鳴る時刻を ms 早める・遅らせるを指定できる）
+  const ring = (offset: number): void => {
+    const pending = state.pending;
+    assert.ok(pending, '待ちが置かれていない');
+    state.pending = undefined;
+    state.clock = pending.at + offset;
+    pending.fn();
+  };
+  return { state, throttle, render, ring };
+}
+
+test('流れている文の間引き: 時計が少し早く鳴っても、届いた残りは必ず描かれる（描き残さない）', () => {
+  const T1 = 'あ'.repeat(5000);
+  const T2 = `${T1}${'い'.repeat(300)}`;
+  for (const offset of [0, -0.4, -1, -30, 5]) {
+    const d = drive('');
+    assert.equal(d.render(T1, 1000), T1, '間隔が過ぎていれば、すぐ描く');
+    assert.equal(d.render(T2, 1010), T1, '間隔の内に届いた分は、まだ描かない');
+    assert.ok(d.state.pending, '残りを描く待ちが置かれている');
+    d.ring(offset);
+    assert.equal(d.state.redraws, 1, `鳴ったら描き直しを頼む（${offset} ms）`);
+    // 描き直しで描く文（時計が早かった場合も、残りは描いてある）
+    assert.equal(d.render(T2, d.state.clock), T2, `鳴る時刻が ${offset} ms ずれても、残りを描く`);
+    assert.equal(d.state.pending, undefined, '描き終えたら、もう待ちは要らない');
+  }
+});
+
+test('流れている文の間引き: 短い返事は届くたびに描き、続きが無いときは待ちを置かない。前の待ちは止める', () => {
+  const d = drive('');
+  assert.equal(d.render('こんにちは', 10), 'こんにちは');
+  assert.equal(d.render('こんにちは、世界', 11), 'こんにちは、世界');
+  assert.equal(d.state.pending, undefined);
+  const long = drive('');
+  const base = 'a'.repeat(4000);
+  long.render(base, 1000);
+  long.render(`${base}b`, 1001);
+  assert.ok(long.state.pending);
+  long.render(`${base}bc`, 1002);
+  assert.equal(long.state.cancelled, 1, '届くたびに前の待ちを止めて置き直す');
+  assert.notEqual(long.render('別の文'.repeat(2000), 1003), base, '文が前の続きでなければ、すぐ描き直す');
 });

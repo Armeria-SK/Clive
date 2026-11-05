@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import { transaction } from '../db/database.ts';
+import { estimateTextTokens } from '../engine/tokens.ts';
 import { LocalizedError, type MessageParams } from '../shared/messages/define.ts';
 import { storeText, type StoreMessageKey } from '../shared/messages/stores.ts';
 import { sanitizeModelInputText } from '../shared/redaction.ts';
@@ -45,14 +46,15 @@ export const BOOK_LABEL = BOOK_LABELS.ja;
 const MEMORY_HEADING: Record<Language, string> = { ja: '# 覚えていること（記憶）', en: '# What you remember (memory)' };
 
 const MAX_ITEM_CHARS = 600;
+// 1 回の実行（モデルが道具で記憶する）で作れる記憶の数。外から読んだ内容に誘われて、記憶を際限なく作らせないため
+export const MAX_SAVES_PER_RUN = 5;
 
 export class MemoryStore {
   readonly #db: DatabaseSync;
-  readonly #caps: () => Record<Book, number>;
   readonly #now: () => number;
   readonly #language: () => Language;
-  constructor(db: DatabaseSync, caps: () => Record<Book, number>, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE) {
-    this.#db = db; this.#caps = caps; this.#now = now; this.#language = language;
+  constructor(db: DatabaseSync, now: () => number = Date.now, language: () => Language = () => DEFAULT_LANGUAGE) {
+    this.#db = db; this.#now = now; this.#language = language;
   }
 
   get(id: number): Memory | undefined {
@@ -70,22 +72,16 @@ export class MemoryStore {
     return row.n;
   }
 
-  usage(): Record<Book, { used: number; max: number }> {
-    const caps = this.#caps();
-    return { user: { used: this.used('user'), max: caps.user }, notes: { used: this.used('notes'), max: caps.notes } };
-  }
-
-  #check(book: Book, content: string, replacingLength = 0): string {
+  #check(content: string): string {
     const text = content.replace(/\s+/gu, ' ').trim();
     if (!text) throw new MemoryError('memory.empty');
     if (text.length > MAX_ITEM_CHARS) throw new MemoryError('memory.too_long', { length: text.length, max: MAX_ITEM_CHARS });
     if (sanitizeModelInputText(text).redaction_count > 0) throw new MemoryError('memory.secret');
-    const cap = this.#caps()[book];
-    const next = this.used(book) - replacingLength + text.length;
-    if (next > cap) {
-      throw new MemoryError(book === 'user' ? 'memory.over_cap.user' : 'memory.over_cap.notes', { cap: cap.toLocaleString('en-US'), used: this.used(book).toLocaleString('en-US') });
-    }
     return text;
+  }
+
+  #createdInRun(runId: string): number {
+    return (this.#db.prepare("SELECT COUNT(*) AS n FROM memory_events WHERE run_id = ? AND action = 'create'").get(runId) as { n: number }).n;
   }
 
   #event(memoryId: number, action: MemoryEvent['action'], before: string | null, after: string | null, actor: Actor, runId?: string, reason?: string): number {
@@ -96,9 +92,10 @@ export class MemoryStore {
 
   save(input: { book: Book; content: string; actor: Actor; origin?: Memory['origin']; conversationId?: string; messageId?: number; runId?: string }): { memory: Memory; eventId: number } {
     return transaction(this.#db, () => {
-      const text = this.#check(input.book, input.content);
+      const text = this.#check(input.content);
       const duplicate = this.#db.prepare("SELECT id FROM memories WHERE book = ? AND status = 'active' AND content = ?").get(input.book, text) as { id: number } | undefined;
       if (duplicate) throw new MemoryError('memory.duplicate', { ref: `${prefix(input.book)}${duplicate.id}` });
+      if (input.runId && input.actor !== 'user' && this.#createdInRun(input.runId) >= MAX_SAVES_PER_RUN) throw new MemoryError('memory.run_limit', { max: MAX_SAVES_PER_RUN });
       const now = this.#now();
       const result = this.#db.prepare(`INSERT INTO memories (book, content, origin, source_conversation_id, source_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(input.book, text, input.origin ?? (input.actor === 'user' ? 'user' : input.actor === 'review' ? 'review' : 'chat'), input.conversationId ?? null, input.messageId ?? null, now, now);
@@ -112,7 +109,7 @@ export class MemoryStore {
     return transaction(this.#db, () => {
       const current = this.get(id);
       if (!current || current.status !== 'active') throw new MemoryError('memory.not_found', { id });
-      const text = this.#check(current.book, content, current.content.length);
+      const text = this.#check(content);
       if (text === current.content) throw new MemoryError('memory.unchanged');
       this.#db.prepare('UPDATE memories SET content = ?, updated_at = ? WHERE id = ?').run(text, this.#now(), id);
       const eventId = this.#event(id, 'update', current.content, text, actor, runId);
@@ -145,7 +142,6 @@ export class MemoryStore {
         this.#db.prepare("UPDATE memories SET content = ?, status = 'active', updated_at = ? WHERE id = ?").run(event.before, now, current.id);
         this.#event(current.id, 'update', current.content, event.before, 'user', undefined, storeText(this.#language(), 'memory.undo_note'));
       } else if (event.action === 'forget') {
-        this.#check(current.book, current.content);
         this.#db.prepare("UPDATE memories SET status = 'active', updated_at = ? WHERE id = ?").run(now, current.id);
         this.#event(current.id, 'restore', null, current.content, 'user', undefined, storeText(this.#language(), 'memory.undo_note'));
       } else throw new MemoryError('memory.cannot_undo');
@@ -174,14 +170,54 @@ export class MemoryStore {
 
 export function prefix(book: Book): string { return book === 'user' ? 'u' : 'n'; }
 
-export function renderBooks(memories: readonly Memory[], language: Language = DEFAULT_LANGUAGE): string {
+const memoryLine = (m: Memory): string => `- [${prefix(m.book)}${m.id}] ${m.content}`;
+
+function composeBooks(memories: readonly Memory[], language: Language, omitted: number): string {
   const sections: string[] = [];
   for (const book of ['user', 'notes'] as const) {
-    const items = memories.filter(m => m.book === book && m.status === 'active');
+    const items = memories.filter(m => m.book === book);
     if (!items.length) continue;
-    sections.push(`## ${BOOK_LABELS[language][book]}\n${items.map(m => `- [${prefix(book)}${m.id}] ${m.content}`).join('\n')}`);
+    sections.push(`## ${BOOK_LABELS[language][book]}\n${items.map(memoryLine).join('\n')}`);
   }
+  if (omitted > 0) sections.push(storeText(language, 'memory.more', { n: omitted }));
   return sections.length ? `${MEMORY_HEADING[language]}\n\n${sections.join('\n\n')}` : '';
+}
+
+export interface BookPlan {
+  // 会話の最初に固定する system に入れる文（予算に収まらなかった分は「ほか N 件」の 1 行）
+  text: string;
+  shown: Memory[];
+  // 入らなかった記憶。古い順
+  omitted: Memory[];
+  // 予算とは関係なく、全部を入れたときの見積もり（トークン）
+  tokens: number;
+}
+
+// 予算（トークン）まで、新しく直した順（updated_at。同じなら id の大きい方）に入れる。入らない 1 件で止める（新しい順の先頭から数えるので、入らなかった分はいちばん古い側になる）。
+// 本の中の並びは今までどおり（渡された順）。予算が無ければ全部入れる。
+export function planBooks(memories: readonly Memory[], language: Language = DEFAULT_LANGUAGE, budget?: number): BookPlan {
+  const active = memories.filter(m => m.status === 'active');
+  const tokens = estimateTextTokens(composeBooks(active, language, 0));
+  if (budget === undefined) return { text: composeBooks(active, language, 0), shown: active, omitted: [], tokens };
+  const newestFirst = [...active].sort((a, b) => b.updated_at - a.updated_at || b.id - a.id);
+  let used = estimateTextTokens(MEMORY_HEADING[language]);
+  const headed = new Set<Book>();
+  const shownIds = new Set<number>();
+  for (const m of newestFirst) {
+    const heading = headed.has(m.book) ? 0 : estimateTextTokens(`## ${BOOK_LABELS[language][m.book]}`) + 2;
+    const cost = heading + estimateTextTokens(memoryLine(m)) + 1;
+    if (used + cost > budget) break;
+    used += cost;
+    headed.add(m.book);
+    shownIds.add(m.id);
+  }
+  const shown = active.filter(m => shownIds.has(m.id));
+  const omitted = newestFirst.filter(m => !shownIds.has(m.id)).reverse();
+  return { text: composeBooks(shown, language, omitted.length), shown, omitted, tokens };
+}
+
+export function renderBooks(memories: readonly Memory[], language: Language = DEFAULT_LANGUAGE, budget?: number): string {
+  return planBooks(memories, language, budget).text;
 }
 
 export function searchTerms(q: string): string[] {

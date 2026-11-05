@@ -4,7 +4,7 @@ import type { PlainKey } from '../i18n/index.ts';
 
 export type Config = Record<string, any>;
 
-export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'worker' | 'memory' | 'look' | 'server' | 'file';
+export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'worker' | 'memory' | 'about' | 'look' | 'server' | 'file';
 
 export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArray<{ id: SettingsSection; label: PlainKey; desc: PlainKey }> }> = [
   { label: 'settings.group.model', items: [
@@ -18,6 +18,7 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArr
     { id: 'memory', label: 'settings.section.memory', desc: 'settings.desc.memory' },
   ] },
   { label: 'settings.group.clive', items: [
+    { id: 'about', label: 'settings.section.about', desc: 'settings.desc.about' },
     { id: 'look', label: 'settings.section.look', desc: 'settings.desc.look' },
   ] },
   { label: 'settings.group.system', items: [
@@ -30,6 +31,15 @@ export const SECTION_IDS: readonly SettingsSection[] = SECTION_GROUPS.flatMap(g 
 
 export function isSection(value: unknown): value is SettingsSection {
   return typeof value === 'string' && (SECTION_IDS as readonly string[]).includes(value);
+}
+
+// 開いている節の覚え（セッションの間だけ）。設定の小窓は、開くときにこれを読む
+export const SECTION_KEY = 'clive.settingsSection';
+
+// 設定の小窓を、指定の節で開く
+export function openSettingsSection(section: SettingsSection): void {
+  try { sessionStorage.setItem(SECTION_KEY, section); } catch { }
+  location.hash = '#/settings';
 }
 
 // 節ごとの、設定のうちその節が持つ部分（変更の印と、元に戻すかどうかの判定に使う）。
@@ -136,7 +146,11 @@ export function addModel(config: Config): { config: Config; id: string } {
   const providers = config.providers as Array<{ id: string }>;
   const id = uniqueId('new-model', (config.models as Array<{ id: string }>).map(m => m.id));
   const model = { id, label: '', provider: providers[0]?.id ?? '', model: '', contextLength: 32768, minContext: 8192, maxOutputTokens: 4096, toolMode: 'native', vision: false };
-  return { config: { ...config, models: [...config.models, model] }, id };
+  const ids = (config.models as Array<{ id: string }>).map(m => m.id);
+  const routing = config.routing as { chat: string[]; background: string[] };
+  // チャットも裏方も順番が空のときは、サーバーが設定のモデル全部を候補にする。足したモデルが他のモデルを押しのけないよう、今の候補に足した順番にする
+  const filled = routing.chat.length === 0 && routing.background.length === 0 ? { ...routing, chat: [...ids, id], background: [...ids, id] } : routing;
+  return { config: { ...config, models: [...config.models, model], routing: filled }, id };
 }
 
 export function removeModel(config: Config, id: string): Config {
@@ -177,6 +191,12 @@ export function addToRoute(config: Config, route: Route, id: string): Config {
 
 export function removeFromRoute(config: Config, route: Route, id: string): Config {
   return { ...config, routing: { ...config.routing, [route]: (config.routing[route] as string[]).filter(m => m !== id) } };
+}
+
+// 設定のモーダルを閉じようとしたとき（× ・Esc・背景）にどうするか。保存している最中は待つ。保存していない変更があれば、捨てる前に確かめる。
+export function closeAction(state: { dirty: number; busy: boolean }): 'close' | 'confirm' | 'wait' {
+  if (state.busy) return 'wait';
+  return state.dirty > 0 ? 'confirm' : 'close';
 }
 
 // 保存していない編集があるまま、ページを閉じる・読み直すときに、ブラウザの確認を出させる（beforeunload）。

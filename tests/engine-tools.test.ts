@@ -4,10 +4,9 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function toolCall(name: string, args: unknown): Script {
   return async function* () {
@@ -24,7 +23,7 @@ function textOnly(text: string): Script {
 async function setup(t: { after: (fn: () => void) => void }, model: Partial<ModelConfig> = {}, maxIterations = 16) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false, ...model }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
@@ -75,6 +74,89 @@ test('承認を待ってから続ける', async t => {
   const result = await done;
   assert.ok(result.ok);
   assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool')!.text, /secret-ish/u);
+});
+
+// security-self-api.md の V1: 報告された筋道そのもの。Clive が put.js を書いて動かし、API・設定ファイルに手を出そうとする
+test('V1: スクリプトを書いて node で動かす筋道は、中身つきの今回だけの確かめで止まる。拒否すれば何も起きない', async t => {
+  const s = await setup(t);
+  const configBefore = readFileSync(s.paths.config, 'utf8');
+  const marker = join(s.paths.workspace, 'ran.txt');
+  const attack = [
+    "const fs = require('node:fs');",
+    "fs.writeFileSync('ran.txt', 'ran');",
+    `fs.writeFileSync(${JSON.stringify(s.paths.config)}, '{}');`,
+    "fetch('http://127.0.0.1:1/api/settings', { method: 'PUT', headers: { Origin: 'http://127.0.0.1:1', 'Content-Type': 'application/json' }, body: '{}' }).catch(() => undefined);",
+    '',
+  ].join('\n');
+  s.adapter().scripts.push(toolCall('file_write', { path: 'put.js', content: attack }), toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
+  const { done } = await s.send('設定を直して');
+  for (let i = 0; i < 300 && !s.events.some(e => e.type === 'approval.requested'); i++) await new Promise(r => setTimeout(r, 10));
+  const requests = s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>;
+  assert.equal(requests.length, 1, 'put.js を書くのは作業フォルダの中なので確かめなし。確かめが出るのは動かす node だけ');
+  const request = requests[0]!.approval;
+  assert.equal(request.tool, 'shell_run');
+  assert.equal(request.onceOnly, true);
+  assert.equal(request.preview.length, 1);
+  assert.match(request.preview[0]!.path, /put\.js$/u);
+  assert.match(request.preview[0]!.text, /api\/settings/u, '動かすコードの中身が札に出る');
+  assert.match(request.reasons[0]!, /Clive 自身の設定・人格・承認・記憶に触れる文字/u, '理由の先頭に目印');
+  assert.match(request.reasons[0]!, /config\.json/u);
+  assert.ok(request.reasons.some(r => /ファイルに書かれたコードを動かします/u.test(r)));
+  assert.equal(existsSync(marker), false, '承認の前には動いていない');
+
+  s.app.approvals.decide(request.id, 'deny');
+  const result = await done;
+  assert.ok(result.ok);
+  assert.equal(existsSync(marker), false, '拒否したのに動いた');
+  assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore, '設定ファイルが書き換わった');
+  assert.match(s.app.conversations.messages('c1').find(m => m.role === 'tool' && /拒否/u.test(m.text))?.text ?? '', /ユーザーが実行を拒否しました/u);
+
+  // 同じ文字のコマンドを、中身を変えてもう一度出しても、また確かめになる（拒否のあとも、許可のあとも）
+  writeFileSync(join(s.paths.workspace, 'put.js'), "require('node:fs').writeFileSync('ran.txt', 'harmless');\n");
+  s.adapter().scripts.push(toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
+  const again = await s.send('もう一度');
+  for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 2; i++) await new Promise(r => setTimeout(r, 10));
+  const second = (s.events.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>)[1]!;
+  assert.ok(second, '2 回目も確かめが出る');
+  assert.doesNotMatch(second.approval.reasons[0]!, /Clive 自身/u, '無害な中身には目印が付かない');
+  s.app.approvals.decide(second.approval.id, 'conversation');
+  assert.ok((await again.done).ok);
+  assert.equal(readFileSync(marker, 'utf8'), 'harmless', '許可すれば動く（拒否の確認が空振りでないことの対照）');
+  assert.equal(readFileSync(s.paths.config, 'utf8'), configBefore);
+
+  s.adapter().scripts.push(toolCall('shell_run', { command: 'node put.js' }), reply('動かしました'));
+  const third = await s.send('もう一度');
+  for (let i = 0; i < 300 && s.events.filter(e => e.type === 'approval.requested').length < 3; i++) await new Promise(r => setTimeout(r, 10));
+  const last = s.events.filter(e => e.type === 'approval.requested');
+  assert.equal(last.length, 3, '「この会話では許可」を送っても、3 回目もまた確かめになる');
+  s.app.approvals.decide((last[2] as Extract<RunEvent, { type: 'approval.requested' }>).approval.id, 'deny');
+  await third.done;
+});
+
+test('道具の結果は、モデルのコンテキストに合わせて切る（小さなコンテキストで、大きな一覧 1 つが入りきらなくならない）', async t => {
+  const small = await setup(t, { contextLength: 16384, minContext: 4096, maxOutputTokens: 1024 });
+  const lines = Array.from({ length: 600 }, (_, i) => `remotion-app/node_modules/@remotion/renderer/dist/esm/file${i}.js`).join('\n');
+  writeFileSync(join(small.paths.workspace, 'listing.txt'), lines);
+  small.adapter().scripts.push(...[1, 2, 3].map(() => toolCall('file_read', { path: 'listing.txt' })), reply('読みました'));
+  const run = await small.send('一覧を読んで');
+  const result = await run.done;
+  assert.ok(result.ok, JSON.stringify(result));
+  const results = small.app.conversations.messages('c1').filter(m => m.role === 'tool').map(m => m.text);
+  assert.equal(results.length, 3);
+  for (const text of results) {
+    assert.ok(text.length < 9100, `16k のモデルでは、1 つの結果を約 8,700 文字までにする: ${text.length}`);
+    assert.match(text, /文字中 8,\d{3} 文字だけを返しました/u);
+  }
+  const last = small.adapter().calls.at(-1)!;
+  assert.ok(last.messages.length >= 7, '3 回分の結果が入っている');
+  assert.equal(small.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), false, '古い発言を削らずに収まる');
+
+  const large = await setup(t, { contextLength: 200_000, minContext: 4096, maxOutputTokens: 4096 });
+  writeFileSync(join(large.paths.workspace, 'listing.txt'), lines.repeat(2));
+  large.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
+  assert.ok((await (await large.send('一覧を読んで')).done).ok);
+  const big = large.app.conversations.messages('c1').find(m => m.role === 'tool')!.text;
+  assert.match(big, /文字中 16,000 文字だけを返しました/u, '大きなコンテキストでは、今までどおり 16,000 文字');
 });
 
 test('本文に書かれたツール呼び出し（<tool_call>）も拾って実行する', async t => {

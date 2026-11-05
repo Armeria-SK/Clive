@@ -11,7 +11,7 @@ import { inputHash, type ApprovalBroker } from './approvals.ts';
 import { runCommandHook } from './hooks/command-hook.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import type { ToolRegistry } from './registry.ts';
-import type { ToolContext, ToolDef, ToolOutput } from './types.ts';
+import type { PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
 
 export const REVIEW_FORBIDDEN: ReadonlySet<ToolDef['effect']> = new Set(['write', 'exec', 'network']);
 
@@ -31,11 +31,11 @@ export interface ToolCallOutcome {
   invalidArguments: boolean;
 }
 
-function capOutput(output: ToolOutput, language: Language): ToolOutput {
+function capOutput(output: ToolOutput, language: Language, limit: number): ToolOutput {
   const content = redactSecrets(output.content);
-  if (content.length <= TOOL_OUTPUT_LIMIT) return { ...output, content };
+  if (content.length <= limit) return { ...output, content };
   const note = output.fullRef ? toolText(language, 'pipeline.note_full', { ref: output.fullRef }) : toolText(language, 'pipeline.note_none');
-  return { ...output, content: `${content.slice(0, TOOL_OUTPUT_LIMIT)}\n\n${toolText(language, 'pipeline.truncated', { total: content.length.toLocaleString('en-US'), shown: TOOL_OUTPUT_LIMIT.toLocaleString('en-US'), note })}` };
+  return { ...output, content: `${content.slice(0, limit)}\n\n${toolText(language, 'pipeline.truncated', { total: content.length.toLocaleString('en-US'), shown: limit.toLocaleString('en-US'), note })}` };
 }
 
 const matches = (matcher: string, name: string) => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
@@ -49,7 +49,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   deps.emit({ type: 'tool.call', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, input: shownInput });
 
   const finish = (outcome: ToolCallOutcome, approvalId?: string): ToolCallOutcome => {
-    const output = capOutput(outcome.output, language);
+    const output = capOutput(outcome.output, language, ctx.outputLimit ?? TOOL_OUTPUT_LIMIT);
     deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, ctx.runId, ctx.conversationId, call.name, shownInput, outcome.decision, outcome.decidedBy, approvalId ?? null,
@@ -62,7 +62,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     finish({ output: { content: message, isError: true }, decision, decidedBy, invalidArguments: invalid });
 
   if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: deps.registry.forRun(ctx.kind).map(t => t.name).join(', ') }), true);
-  if (!tool.allowedIn.includes(ctx.kind)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
+  if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   // 振り返りでは、登録の設定にかかわらず、外に影響する道具（書き込み・実行・送信）を使わせない（二重の禁止）
   if (ctx.kind === 'review' && REVIEW_FORBIDDEN.has(tool.effect)) return refuse('deny', 'registry', toolText(language, 'pipeline.review_forbidden', { name: call.name }));
   if (call.arguments === undefined) return refuse('deny', 'validation', toolText(language, 'pipeline.bad_json', { raw: (call.raw ?? '').slice(0, 300) }), true);
@@ -77,15 +77,17 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   let decidedBy = 'builtin';
   const reasons: string[] = [];
   let details: string[] = [];
+  let first: PreCheck | undefined;
   if (tool.preCheck) {
     try {
       const pre = await tool.preCheck(args, ctx);
+      first = pre;
       decision = pre.decision; reasons.push(...pre.reasons); details = pre.details ?? [];
     } catch (error) {
       decision = 'deny'; reasons.push(guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message }));
     }
   }
-  if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write') && decision === 'allow') {
+  if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint) && decision === 'allow') {
     decision = 'ask';
     reasons.push(guardText(language, 'pipeline.taint', { sources: ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep')) }));
   }
@@ -100,15 +102,18 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   }
 
   const hash = inputHash(tool.name, args);
-  if (decision === 'ask' && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
+  // コードを動かす確かめは中身が変わりうるので、前に同じ文字のコマンドを「この会話では許可」にしていても、また確かめる
+  const onceOnly = first?.onceOnly === true;
+  if (decision === 'ask' && !onceOnly && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
   if (decision === 'deny') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
 
   let approvalId: string | undefined;
+  let approvedOnce = false;
   if (decision === 'ask') {
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
-      cwd: summary.cwd, reasons, details,
+      cwd: summary.cwd, reasons, details, onceOnly, preview: first?.preview,
     }, ctx.config.tools.shell.approvalTimeoutSec * 1000, ctx.signal);
     approvalId = deps.approvals.pending().find(p => p.inputHash === hash && p.runId === ctx.runId)?.id;
     const outcome = await pending;
@@ -119,11 +124,21 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       return finish({ output: { content: message, isError: true }, decision: 'ask', decidedBy: 'user', invalidArguments: false }, approvalId);
     }
     decidedBy = 'user';
+
+    // 見せたあとで中身が変わっていたら（ほかの会話やタスクが書き換えた場合など）、許可されたものとは別のコードなので動かさない
+    if (onceOnly && tool.preCheck) {
+      let again: PreCheck;
+      try { again = await tool.preCheck(args, ctx); }
+      catch (error) { again = { decision: 'deny', reasons: [guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message })] }; }
+      if (again.decision === 'deny') return finish({ output: { content: toolText(language, 'pipeline.denied', { reasons: again.reasons.join('\n- ') }), isError: true }, decision: 'deny', decidedBy: 'recheck', invalidArguments: false }, approvalId);
+      if (again.bind !== first?.bind) return finish({ output: { content: toolText(language, 'pipeline.changed'), isError: true }, decision: 'deny', decidedBy: 'recheck', invalidArguments: false }, approvalId);
+    }
+    approvedOnce = onceOnly;
   }
 
   // ── 実行 ──
   let output: ToolOutput;
-  try { output = await tool.execute(args, ctx); }
+  try { output = await tool.execute(args, ctx, { approvedOnce, ...(approvedOnce && first ? { check: first } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
   if (tool.effect === 'network') { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 

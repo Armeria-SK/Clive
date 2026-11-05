@@ -24,6 +24,7 @@ export interface SendFailure {
   message: string;
   hint: string | null;
   context: boolean;
+  noModels: boolean;
   body: unknown;
 }
 
@@ -60,9 +61,10 @@ export function noUsableText(body: unknown, models: readonly ModelView[], langua
 }
 
 export function sendFailureOf(error: unknown, fallback: string, models: readonly ModelView[] = []): SendFailure {
-  if (!(error instanceof ApiError)) return { message: fallback, hint: null, context: false, body: null };
+  if (!(error instanceof ApiError)) return { message: fallback, hint: null, context: false, noModels: false, body: null };
   const body = asRecord(error.body);
   return {
+    noModels: body?.errorCode === 'engine.no_usable' && Array.isArray(body.problems) && body.problems.length === 0,
     message: noUsableText(error.body, models, getLanguage()) ?? error.message,
     hint: text(asRecord(body?.detail)?.hint),
     context: (body?.errorKind ?? body?.error) === 'context_overflow',
@@ -96,22 +98,103 @@ export function runOverflowOf(notice: { errorKind?: string | undefined; measured
 
 export interface ChatRunRow { id: string; model_id: string | null; model?: string | null; started_at: number }
 
-export function modelNameOf(models: readonly ModelView[], modelId: string | null | undefined): string | null {
-  if (!modelId) return null;
-  return models.find(m => m.id === modelId)?.model ?? modelId;
+type IdSource = { randomUUID?: () => string; getRandomValues: (bytes: Uint8Array) => Uint8Array };
+
+// 新しい会話の id。randomUUID は https か localhost でしか使えないので、http の画面では getRandomValues から UUID（v4）を作る。
+export function newConversationId(source: IdSource = globalThis.crypto): string {
+  if (typeof source.randomUUID === 'function') return source.randomUUID();
+  const bytes = source.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function resolveRunModels(rows: readonly ChatRunRow[], runIds: readonly string[], models: readonly ModelView[]): { found: Map<string, string>; missing: string[] } {
-  const byId = new Map(rows.map(row => [row.id, row] as const));
-  const found = new Map<string, string>();
-  const missing: string[] = [];
-  for (const id of runIds) {
-    const row = byId.get(id);
-    if (!row) { missing.push(id); continue; }
-    const name = text(row.model) ?? modelNameOf(models, row.model_id);
-    if (name) found.set(id, name);
+// 送る先の会話。まだ無い会話（最初の発言）は、画面が id を決めてそこへ送る（サーバーは受け付けたときだけ会話を作る）。
+// 断られたあとのやり直しは、同じ id をもう一度使う。
+export function sendTarget(conversationId: string | null, created: string | null, generate: () => string = newConversationId): { id: string; created: string | null } {
+  if (conversationId) return { id: conversationId, created };
+  const id = created ?? generate();
+  return { id, created: id };
+}
+
+export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
+
+const TOOL_KINDS: ReadonlySet<ChatItemKind> = new Set<ChatItemKind>(['tool', 'run']);
+
+// 流れている返事を描き直す間隔（ミリ秒）。描き直しは文の長さに比例して重く（1000 文字で約 1 ms、5 万文字で約 60 ms）、
+// 断片が届くたびに全文を描き直すと、長い返事の終わりごろには画面がほぼ描き直しだけで埋まる。短い返事は今までどおり届くたびに描く
+export function liveRenderDelay(length: number): number {
+  return length < 3000 ? 0 : Math.min(1000, Math.round(length / 100));
+}
+
+export interface ThrottleTimers {
+  // fn を ms 後に呼ぶ。止める関数を返す
+  setTimer: (fn: () => void, ms: number) => () => void;
+  now: () => number;
+  redraw: () => void;
+}
+
+// 流れている文を、長さに応じた間隔でしか描き直さない。間隔が過ぎていれば、届いた分をすぐ描く。届かなくなったら、残りを間隔の終わりに描く。
+// 画面の部品（useThrottledText）はこれを呼ぶだけにして、時計と待ちを差し替えて試せるようにしてある
+export class TextThrottle {
+  shown: string;
+  drawnAt = 0;
+  constructor(initial: string) { this.shown = initial; }
+
+  // 描くたびに呼ぶ。今描く文を返す
+  next(text: string, now: number): string {
+    const delay = liveRenderDelay(text.length);
+    if (delay === 0 || now - this.drawnAt >= delay || !text.startsWith(this.shown)) { this.shown = text; this.drawnAt = now; }
+    return this.shown;
   }
-  return { found, missing };
+
+  // 描いていない残りがあるとき、間隔の終わりに描き直す待ちを置く。置いたものを止める関数を返す（残りが無ければ undefined）
+  arm(text: string, timers: ThrottleTimers): (() => void) | undefined {
+    if (this.shown === text) return undefined;
+    // 待ちが鳴った時点で残りを描いたことにする。時計が少し早く鳴ると、次の描き直しで「間隔がまだ過ぎていない」と見て、
+    // 残りが描かれないまま、文が変わるまで待ちも置き直されない（描き残し）ため
+    return timers.setTimer(() => { this.shown = text; this.drawnAt = timers.now(); timers.redraw(); }, Math.max(0, liveRenderDelay(text.length) - (timers.now() - this.drawnAt)));
+  }
+}
+
+export interface ReplyTurn {
+  // この返事の文に、見出し（姿・名前・時刻）を付ける。1 回の返事（同じ runId）の最初の文だけ
+  head: boolean;
+  // コピーのボタンを付ける。1 回の返事の最後の文だけ（まだ続いている最中は付けない）。押すと、その回の文を全部まとめてコピーする
+  copyText: string | null;
+}
+
+// 1 回の返事（同じ runId）の中で、道具を使うたびに文が分かれて保存される。画面では見出しを 1 つにして、
+// 中間の文と道具の行を、見出しの下に順に並べる。発言（user）が入ったら、そこで次の返事になる。runId の無い文は、それぞれが 1 回の返事
+export function replyTurns(
+  messages: ReadonlyArray<{ id: number; role: string; runId: string | null; text: string }>,
+  liveRunId: string | null = null,
+): Map<number, ReplyTurn> {
+  const out = new Map<number, ReplyTurn>();
+  let group: Array<{ id: number; text: string }> = [];
+  let groupRun: string | null = null;
+  const close = (): void => {
+    const last = group.at(-1);
+    if (!last) return;
+    const copyText = groupRun !== null && groupRun === liveRunId ? null : group.map(g => g.text).join('\n\n');
+    group.forEach((g, i) => out.set(g.id, { head: i === 0, copyText: g === last ? copyText : null }));
+    group = [];
+    groupRun = null;
+  };
+  for (const m of messages) {
+    if (m.role === 'user') { close(); continue; }
+    if (m.role !== 'assistant') continue;
+    if (m.runId === null || m.runId !== groupRun) close();
+    groupRun = m.runId;
+    group.push({ id: m.id, text: m.text });
+  }
+  close();
+  return out;
+}
+
+export function joinsToolRun(kinds: readonly ChatItemKind[]): boolean[] {
+  return kinds.map((kind, i) => i > 0 && TOOL_KINDS.has(kind) && TOOL_KINDS.has(kinds[i - 1]!));
 }
 
 export const SLASH_COMMANDS = [
@@ -201,6 +284,12 @@ export function chatTime(ms: number, language = getLanguage(), zone = getTimezon
 }
 
 export const APPROVAL_ENTER_GRACE_MS = 1000;
+
+// Enter で「今回だけ許可」できる先頭の承認。コードを動かす確かめ（onceOnly）は、中身を見てボタンで許可するので Enter では許可しない
+export function enterApprovalId(approvals: ReadonlyArray<{ id: string; onceOnly?: boolean }>): string | null {
+  const front = approvals[0];
+  return front && !front.onceOnly ? front.id : null;
+}
 
 export interface ApprovalGate { id: string | null; since: number }
 

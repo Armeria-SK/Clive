@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Value } from '@sinclair/typebox/value';
+import { parseAllowEntry } from '../tools/hooks/allow-entry.ts';
 import { checkBaseUrl } from '../shared/url.ts';
 import { AppConfig, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
@@ -25,16 +26,12 @@ export function defaultConfig(): AppConfig {
       { id: 'anthropic', kind: 'anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', maxParallel: 2, timeoutMs: 600_000 },
       { id: 'ollama', kind: 'ollama', baseUrl: OLLAMA_DEFAULT_URL, maxParallel: 1, timeoutMs: 600_000 },
     ],
-    models: [
-      { id: 'claude-sonnet', label: 'Claude Sonnet 5.5', provider: 'anthropic', model: 'claude-sonnet-5-5', minContext: 65536, maxOutputTokens: 8192, toolMode: 'native', vision: true },
-      { id: 'claude-haiku', label: 'Claude Haiku 5.5', provider: 'anthropic', model: 'claude-haiku-5-5', minContext: 65536, maxOutputTokens: 8192, toolMode: 'native', vision: true },
-      { id: 'local', label: 'ローカル（Ollama）', provider: 'ollama', model: 'qwen3:32b', contextLength: 65536, minContext: 65536, maxOutputTokens: 8192, toolMode: 'native', vision: false },
-    ],
-    routing: { chat: ['claude-sonnet'], background: ['claude-haiku'], retriesPerModel: 2 },
+    models: [],
+    routing: { chat: [], background: [], retriesPerModel: 2 },
     tools: defaultTools(),
     profile: { name: 'Clive', shape: 'pebble', color: '#61B8A5', motion: 'auto' },
     worker: { enabled: true, autonomy: false, maxRunsPerHour: 6, idleMinutes: 5, quietStart: '', quietEnd: '', selfTasksNeedApproval: false, remindAfterHours: 12, curiosityPerDay: 2 },
-    memory: { userMaxChars: 2000, notesMaxChars: 3000, review: true, reviewIdleMinutes: 30, reviewAfterToolCalls: 8 },
+    memory: { review: true, reviewIdleMinutes: 30, reviewAfterToolCalls: 8 },
   };
 }
 
@@ -72,6 +69,9 @@ export function semanticProblems(config: AppConfig): string[] {
   for (const route of ['chat', 'background'] as const) {
     for (const id of config.routing[route]) if (!modelIds.has(id)) problems.push(`routing.${route}: モデル「${id}」がありません`);
   }
+  config.tools.shell.allow.forEach((entry, i) => {
+    if (!parseAllowEntry(entry)) problems.push(`tools.shell.allow: ${i + 1} 番目の「${entry}」は書けない形です。決まったコマンドだけ（引用符・変数・ワイルドカード・置換・リダイレクト・区切りを含まない、1 つの文）を書いてください`);
+  });
   for (const origin of config.server.origins) {
     try { if (new URL(origin).origin !== origin) problems.push(`server.origins: 「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
     catch { problems.push(`server.origins: 「${origin}」が URL として読めません`); }

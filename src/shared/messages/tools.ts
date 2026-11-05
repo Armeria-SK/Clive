@@ -10,6 +10,7 @@ const ja = {
   'pipeline.bad_args': '引数の形が正しくありません。直して呼び直してください:\n- {errors}',
   'pipeline.denied': '実行しませんでした（拒否）:\n- {reasons}\n別の方法を考えるか、ユーザーに相談してください',
   'pipeline.user_denied': 'ユーザーが実行を拒否しました。別の方法を考えるか、理由を尋ねてください',
+  'pipeline.changed': '承認のあとで、確かめてもらったコードのファイルの中身が変わったので、実行しませんでした。もう一度実行して、改めて確かめてもらってください',
   'pipeline.expired': '承認の待ち時間が過ぎたため実行しませんでした',
   'pipeline.cancelled': '中止しました',
   'pipeline.exec_error': 'ツールの実行中にエラーが起きました: {detail}',
@@ -18,6 +19,7 @@ const ja = {
   'pipeline.note_none': '続きは表示していません',
 
   'summary.file_write': 'ファイルに書き込む: {path}',
+  'summary.memory_save': '記憶する（{label}）',
   'summary.file_edit': 'ファイルを編集する: {path}',
   'summary.shell': 'コマンドを実行する',
   'summary.web_fetch': 'Web ページを読む',
@@ -40,6 +42,8 @@ const ja = {
   'file.replaced': '{count} か所を置き換えました: {path}',
   'file.no_dir': 'フォルダがありません: {path}',
   'file.list_cut': '[500 件で打ち切りました]',
+  'file.list_skipped_mark': '（中は省略）',
+  'file.list_skipped_note': '[{names} の中は一覧していません（大きいため）。中も見るときは all を true にするか、path にそのフォルダを指定してください]',
   'file.list_empty': '{path}/ は空です',
 
   'shell.spawn_failed': 'シェル（{shell}）を起動できません: {detail}',
@@ -81,7 +85,7 @@ const ja = {
   'search.searx_bad': 'SearXNG の返事が読めませんでした',
   'search.limit': '検索は 1 時間に {max} 回までです（tools.web.maxSearchesPerHour）',
 
-  'memory.saved': '記憶しました [{id}]（{label}: {used}/{max} 文字）。次の会話から使われます',
+  'memory.saved': '記憶しました [{id}]（{label}: 計 {used} 文字）。次の会話から使われます',
   'memory.updated': '書き直しました [{id}]',
   'memory.forgotten': '消しました [{id}]',
   'memory.no_hit': '「{query}」に当たる記憶はありません',
@@ -146,6 +150,7 @@ const en: Record<keyof typeof ja, string> = {
   'pipeline.bad_args': 'The shape of the arguments is not valid. Fix them and call again:\n- {errors}',
   'pipeline.denied': 'Not run (denied):\n- {reasons}\nThink of another way, or ask the user',
   'pipeline.user_denied': 'The user refused to run it. Think of another way, or ask why',
+  'pipeline.changed': 'It was not run because the contents of the code file the user checked changed after the approval. Run it again so it is checked again',
   'pipeline.expired': 'It was not run because the wait for approval ran out',
   'pipeline.cancelled': 'Stopped',
   'pipeline.exec_error': 'An error occurred while running the tool: {detail}',
@@ -154,6 +159,7 @@ const en: Record<keyof typeof ja, string> = {
   'pipeline.note_none': 'The rest is not shown',
 
   'summary.file_write': 'Write to a file: {path}',
+  'summary.memory_save': 'Save to memory ({label})',
   'summary.file_edit': 'Edit a file: {path}',
   'summary.shell': 'Run a command',
   'summary.web_fetch': 'Read a web page',
@@ -176,6 +182,8 @@ const en: Record<keyof typeof ja, string> = {
   'file.replaced': 'Replaced {count} occurrence(s): {path}',
   'file.no_dir': 'The folder does not exist: {path}',
   'file.list_cut': '[Cut off at 500 entries]',
+  'file.list_skipped_mark': '(contents skipped)',
+  'file.list_skipped_note': '[The contents of {names} were not listed (they are large). To look inside, set all to true or give that folder as path]',
   'file.list_empty': '{path}/ is empty',
 
   'shell.spawn_failed': 'Cannot start the shell ({shell}): {detail}',
@@ -217,7 +225,7 @@ const en: Record<keyof typeof ja, string> = {
   'search.searx_bad': 'The reply from SearXNG could not be read',
   'search.limit': 'Searches are limited to {max} per hour (tools.web.maxSearchesPerHour)',
 
-  'memory.saved': 'Saved to memory [{id}] ({label}: {used}/{max} characters). It will be used from the next conversation',
+  'memory.saved': 'Saved to memory [{id}] ({label}: {used} characters in total). It will be used from the next conversation',
   'memory.updated': 'Rewritten [{id}]',
   'memory.forgotten': 'Deleted [{id}]',
   'memory.no_hit': 'No memory matches "{query}"',

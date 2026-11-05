@@ -2,11 +2,10 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { fail, FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
+import { fail, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -19,10 +18,10 @@ function toolCall(name: string, args: unknown): Script {
   };
 }
 
-async function setup(t: { after: (fn: () => void) => void }, edit: (c: ReturnType<typeof defaultConfig>) => void = () => undefined) {
+async function setup(t: { after: (fn: () => void) => void }, edit: (c: ReturnType<typeof testConfig>) => void = () => undefined) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
@@ -105,10 +104,10 @@ for (const language of ['ja', 'en'] as const) {
 
     const links = [...all(), ...limited.app.notifications.list().map(n => n.link), ...noModel.app.notifications.list().map(n => n.link)];
 
-    // 最終的に出てくるリンクは、今ある画面だけ（#/review・#/today・#/curiosity・#/notifications・#/memory は使わない）
+    // 最終的に出てくるリンクは、今ある画面だけ（#/review・#/today・#/curiosity・#/notifications は使わない。#/memory は整理の案の通知だけで、tests/memory-budget.test.ts で見る）
     const allowed = /^#\/(tasks(\/[0-9a-f-]{36})?|settings|skills\/draft\/[^/]+)$/u;
     for (const link of links) assert.match(link ?? '', allowed);
-    assert.ok(!links.some(link => /#\/(review|today|curiosity|notifications|memory)/u.test(link ?? '')));
+    assert.ok(!links.some(link => /#\/(review|today|curiosity|notifications)/u.test(link ?? '')));
     assert.deepEqual([...new Set(links.map(link => link!.replace(/[0-9a-f-]{36}/u, '<id>').replace(/skills\/draft\/.*/u, 'skills/draft/<name>')))].sort(), ['#/settings', '#/skills/draft/<name>', '#/tasks', '#/tasks/<id>']);
   });
 }

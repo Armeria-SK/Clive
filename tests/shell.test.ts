@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { ModelView, WorkerStatus } from '../web/src/api.ts';
 import { presenceOf } from '../web/src/avatar.ts';
@@ -6,12 +7,13 @@ import { approvalTargetHash, CONVERSATION_LIST_LIMIT, conversationCountLabel, cl
 import { en } from '../web/src/i18n/en.ts';
 import { formatElapsed, formatRelativeCompact, setLanguagePreference, setTimezone } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
+import { hideWhenInert, registerEscapeUnlessInert, saveKeyHandler } from '../web/src/inert.ts';
 import { closeTopLayer, ESC_ORDER, isComposing, modLabel, registerEscape, shortcutOf } from '../web/src/keys.ts';
 import { layoutModeFor, loadPanelPreference, savePanelPreference } from '../web/src/layout.ts';
 import { notificationIcon, notificationKindLabel, notificationLink } from '../web/src/notification-meta.ts';
 import { filterPalette, flattenPalette, moveIndex, type PaletteGroup, type PaletteGroupKey, type PaletteItem } from '../web/src/palette.ts';
 import { PAGE_META, pickChatModel, workerState } from '../web/src/pages.ts';
-import { chatHash, parseRoute, routeHash } from '../web/src/routes.ts';
+import { chatHash, HOME_ROUTE, pageBehind, parseRoute, routeHash } from '../web/src/routes.ts';
 import { closeTab, dropChats, findGoneChats, loadTabs, MAX_TABS, openTab, sanitizeTabs, saveTabs, toTab, unlistedChatIds, type ChatProbe, type Tab } from '../web/src/tabs.ts';
 
 const reset = () => { setLanguagePreference('ja'); setTimezone('Asia/Tokyo'); };
@@ -43,31 +45,35 @@ test('routeHash / chatHash: 経路から正規のハッシュに戻せる', () =
   assert.equal(routeHash(parseRoute('#/settings/extra')), '#/settings', '正規の形にそろう');
 });
 
-test('toTab: 経路ごとに 1 つのタブ。きょう（右のパネル）はタブにしない', () => {
+test('toTab: タブになるのは会話だけ。タスク・スキル・実行ログ・記憶・通知・設定・きょうなどのページはタブにしない', () => {
   assert.deepEqual(toTab('#/c/a'), { key: 'chat:a', hash: '#/c/a' });
   assert.deepEqual(toTab('#/'), { key: 'chat:new', hash: '#/' });
-  assert.deepEqual(toTab('#/tasks/t9'), { key: 'tasks', hash: '#/tasks/t9' });
-  assert.equal(toTab('#/today'), null);
   assert.deepEqual(toTab('#/xx'), { key: 'chat:new', hash: '#/' });
+  for (const hash of ['#/tasks', '#/tasks/t9', '#/skills', '#/skills/draft/x', '#/runs', '#/runs/tools', '#/memory', '#/notifications', '#/settings', '#/today', '#/review', '#/curiosity']) {
+    assert.equal(toTab(hash), null, hash);
+  }
 });
 
-test('openTab: 会話から会話へは今のタブを置き換え、ページは並べて足し、すでにあるタブは行き先だけ更新する', () => {
+
+test('openTab: 会話から会話へは今のタブを置き換え、ページは何もしない。ページを見たあとに会話を開くと、直前に選んだ会話のタブを置き換える', () => {
   const start = [tab('#/c/a')];
   const second = openTab(start, '#/c/b', { activeKey: 'chat:a' });
   assert.deepEqual(keys(second), ['chat:b'], '会話のタブは置き換わる');
   const appended = openTab(start, '#/c/b', { activeKey: 'chat:a', append: true });
   assert.deepEqual(keys(appended), ['chat:a', 'chat:b'], '新しい会話は並べて足す');
-  const page = openTab(second, '#/tasks', { activeKey: 'chat:b' });
-  assert.deepEqual(keys(page), ['chat:b', 'tasks'], 'ページは並べて足す');
-  const fromPage = openTab(page, '#/c/z', { activeKey: 'tasks' });
-  assert.deepEqual(keys(fromPage), ['chat:b', 'tasks', 'chat:z'], 'ページからは置き換えない');
-  const detail = openTab(page, '#/tasks/t1', { activeKey: 'tasks' });
-  assert.deepEqual(detail.map(x => x.hash), ['#/c/b', '#/tasks/t1'], 'タスクのタブは詳細の行き先を覚える');
-  assert.equal(openTab(detail, '#/tasks/t1', { activeKey: 'tasks' }), detail, '変わらなければ同じ配列を返す');
-  assert.equal(openTab(page, '#/today', { activeKey: 'tasks' }), page, 'きょうは何もしない');
+  for (const page of ['#/tasks', '#/tasks/t1', '#/settings', '#/skills', '#/runs', '#/memory', '#/notifications', '#/today']) {
+    assert.equal(openTab(appended, page, { activeKey: 'chat:b' }), appended, `${page} はタブを作らず、同じ配列を返す`);
+  }
+  const fromPage = openTab(appended, '#/c/z', { activeKey: 'chat:b' });
+  assert.deepEqual(keys(fromPage), ['chat:a', 'chat:z'], 'ページを見たあとでも、直前に選んだ会話のタブ（b）が置き換わる');
+  const closedBefore = openTab([tab('#/c/a')], '#/c/z', { activeKey: 'chat:b' });
+  assert.deepEqual(keys(closedBefore), ['chat:a', 'chat:z'], '覚えていたタブがもう無ければ、置き換えずに足す');
+  const same = openTab(appended, '#/c/a', { activeKey: 'chat:b' });
+  assert.deepEqual(keys(same), ['chat:a', 'chat:b'], 'すでにあるタブはそのまま');
   const replacedNew = openTab([tab('#/')], '#/c/q', { activeKey: 'chat:new' });
   assert.deepEqual(keys(replacedNew), ['chat:q'], '空の新しい会話は、作った会話に置き換わる');
 });
+
 
 test('openTab: 上限を超えたら、今開いたもの以外の古いタブから落とす', () => {
   let tabs: Tab[] = [];
@@ -77,27 +83,35 @@ test('openTab: 上限を超えたら、今開いたもの以外の古いタブ�
   assert.equal(tabs[0]!.key, 'chat:c3');
 });
 
-test('closeTab: 開いているタブを閉じたら隣へ移り、全部閉じたら新しい会話に戻る', () => {
-  const tabs = [tab('#/c/a'), tab('#/tasks'), tab('#/settings')];
-  assert.equal(closeTab(tabs, 'tasks', 'tasks').go, '#/settings', '右隣へ');
-  assert.equal(closeTab(tabs, 'settings', 'settings').go, '#/tasks', '右が無ければ左隣へ');
-  const other = closeTab(tabs, 'tasks', 'chat:a');
+test('closeTab: 開いているタブを閉じたら隣へ移り、全部閉じたら新しい会話に戻る。会話以外のページを見ているときは、タブを閉じてもそのページに居続ける', () => {
+  const tabs = [tab('#/c/a'), tab('#/c/b'), tab('#/c/c')];
+  assert.equal(closeTab(tabs, 'chat:b', 'chat:b').go, '#/c/c', '右隣へ');
+  assert.equal(closeTab(tabs, 'chat:c', 'chat:c').go, '#/c/b', '右が無ければ左隣へ');
+  const other = closeTab(tabs, 'chat:b', 'chat:a');
   assert.equal(other.go, null, '今開いていないタブを閉じても移らない');
-  assert.deepEqual(keys(other.tabs), ['chat:a', 'settings']);
-  const last = closeTab([tab('#/tasks')], 'tasks', 'tasks');
+  assert.deepEqual(keys(other.tabs), ['chat:a', 'chat:c']);
+  const onPage = closeTab(tabs, 'chat:b', null);
+  assert.equal(onPage.go, null, 'タスクなどのページを見ているときは、どのタブを閉じても移らない');
+  assert.deepEqual(keys(onPage.tabs), ['chat:a', 'chat:c']);
+  const last = closeTab([tab('#/c/a')], 'chat:a', 'chat:a');
   assert.equal(last.go, '#/');
   assert.deepEqual(keys(last.tabs), ['chat:new']);
-  assert.equal(closeTab(tabs, 'nope', 'tasks').tabs, tabs);
+  const lastOnPage = closeTab([tab('#/c/a')], 'chat:a', null);
+  assert.equal(lastOnPage.go, null, 'ページを見ているときに最後のタブを閉じても、そのページに居続ける');
+  assert.deepEqual(keys(lastOnPage.tabs), ['chat:new'], '会話のタブが 0 になったら、新しい会話のタブを 1 つ置く');
+  assert.equal(closeTab(tabs, 'nope', 'chat:a').tabs, tabs);
 });
 
+
 test('unlistedChatIds / dropChats: 一覧に無い会話のタブは確かめる対象にするだけで、消えた会話のタブだけを閉じる', () => {
-  const tabs = [tab('#/c/a'), tab('#/c/old'), tab('#/c/gone'), tab('#/'), tab('#/tasks')];
-  assert.deepEqual(unlistedChatIds(tabs, new Set(['a']), null), ['old', 'gone'], '新しい会話・ページは対象にしない');
+  const tabs = [tab('#/c/a'), tab('#/c/old'), tab('#/c/gone'), tab('#/')];
+  assert.deepEqual(unlistedChatIds(tabs, new Set(['a']), null), ['old', 'gone'], '新しい会話は対象にしない');
   assert.deepEqual(unlistedChatIds(tabs, new Set(['a']), 'chat:gone'), ['old'], '今開いているタブは対象にしない');
-  assert.deepEqual(keys(dropChats(tabs, new Set(['gone']), null)), ['chat:a', 'chat:old', 'chat:new', 'tasks'], '404 だった会話だけ閉じる（一覧に無いだけの会話は残る）');
+  assert.deepEqual(keys(dropChats(tabs, new Set(['gone']), null)), ['chat:a', 'chat:old', 'chat:new'], '404 だった会話だけ閉じる（一覧に無いだけの会話は残る）');
   assert.deepEqual(keys(dropChats(tabs, new Set(['gone']), 'chat:gone')), keys(tabs), '今開いているタブは閉じない');
   assert.equal(dropChats(tabs, new Set(), null), tabs);
 });
+
 
 test('findGoneChats: サーバーが無いと答えた（404）会話だけを返し、読めなかったときは消えたと見なさない', async () => {
   const verdicts: Record<string, ChatProbe> = { a: 'exists', b: 'gone', c: 'unknown' };
@@ -106,11 +120,13 @@ test('findGoneChats: サーバーが無いと答えた（404）会話だけを�
   assert.deepEqual([...(await findGoneChats([], async () => 'gone'))], []);
 });
 
-test('sanitizeTabs: 壊れた保存値を落とす', () => {
-  assert.deepEqual(sanitizeTabs(['#/tasks', '#/tasks/x', 5, null, '#/today', '#/c/a']).map(x => x.hash), ['#/tasks', '#/c/a'], '重複・文字列でないもの・きょうは捨てる');
+test('sanitizeTabs: 壊れた保存値を落とす。前の版が保存した、会話以外のページのタブも落とす', () => {
+  assert.deepEqual(sanitizeTabs(['#/tasks', '#/tasks/x', '#/settings', 5, null, '#/today', '#/c/a', '#/c/a', '#/skills', '#/c/b']).map(x => x.hash), ['#/c/a', '#/c/b'], '重複・文字列でないもの・会話以外のページは捨てる');
   assert.deepEqual(sanitizeTabs('nope'), []);
   assert.equal(sanitizeTabs(Array.from({ length: 30 }, (_, i) => `#/c/${i}`)).length, MAX_TABS);
 });
+
+
 
 test('convMark: 承認の待ちは返事を作っている最中に起きるので、承認を優先する', () => {
   const draft = { conversationId: 'c1' };
@@ -143,18 +159,21 @@ test('conversationCountLabel: 一覧は 100 件までなので、100 件に届�
   assert.equal(conversationCountLabel(100), '100+');
 });
 
-test('loadTabs / saveTabs: ハッシュの一覧として保存し、読めない保存先や壊れた値でも落ちない', () => {
+test('loadTabs / saveTabs: ハッシュの一覧として保存し、読めない保存先や壊れた値でも落ちない。前の版が保存したページのタブは読み込みで落ちる', () => {
   const store = new Map<string, string>();
   const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } };
-  saveTabs([tab('#/c/a'), tab('#/tasks/t1')], storage);
-  assert.equal(store.get('clive.tabs'), '["#/c/a","#/tasks/t1"]');
-  assert.deepEqual(loadTabs(storage).map(x => x.hash), ['#/c/a', '#/tasks/t1']);
+  saveTabs([tab('#/c/a'), tab('#/c/b')], storage);
+  assert.equal(store.get('clive.tabs'), '["#/c/a","#/c/b"]');
+  assert.deepEqual(loadTabs(storage).map(x => x.hash), ['#/c/a', '#/c/b']);
+  store.set('clive.tabs', '["#/c/a","#/tasks/t1","#/settings"]');
+  assert.deepEqual(loadTabs(storage).map(x => x.hash), ['#/c/a'], '古い保存値のタスク・設定のタブは落とす');
   store.set('clive.tabs', '{not json');
   assert.deepEqual(loadTabs(storage), []);
   const blocked = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
   assert.deepEqual(loadTabs(blocked), []);
   saveTabs([tab('#/')], blocked);
 });
+
 
 test('layoutModeFor: 760px 未満は狭い、1180px 未満は中くらい', () => {
   assert.equal(layoutModeFor(375), 'narrow');
@@ -178,8 +197,8 @@ test('右のパネルの開き方は保存され、読めなくても閉じた�
   savePanelPreference(true, blocked);
 });
 
-test('Esc: 開いている重なりを、パレット → ダイアログ → 通知 → モデル → シート → 引き出しの順に 1 つずつ閉じる', () => {
-  assert.deepEqual([...ESC_ORDER], ['palette', 'dialog', 'notification', 'model', 'sheet', 'drawer']);
+test('Esc: 開いている重なりを、パレット → ダイアログ → 通知 → 設定 → モデル → シート → 引き出しの順に 1 つずつ閉じる', () => {
+  assert.deepEqual([...ESC_ORDER], ['palette', 'dialog', 'notification', 'settings', 'model', 'sheet', 'drawer']);
   assert.equal(closeTopLayer(), false, '何も開いていなければ false（返事を止める側に回す）');
   const closed: string[] = [];
   const offs = [
@@ -390,4 +409,88 @@ test('isChatGenerating: 承認待ちの会話は「返事を作っている」�
   reset();
   const line = (generating: boolean) => presenceOf({ ...base, generating, approvals: 1 }).line;
   assert.equal(line(isChatGenerating(drafts, [{ conversationId: 'c1' }], undefined)), '承認を待っています（1 件）', '姿と一言も、承認待ちが勝つ');
+});
+
+const styleOf = (name: string): string => readFileSync(new URL(`../web/src/styles/${name}`, import.meta.url), 'utf8').replace(/\r/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+const ruleOf = (css: string, selector: string): string => {
+  const line = css.split('\n').find(l => l.startsWith(`${selector} {`));
+  assert.ok(line, `${selector} の規則が見つからない`);
+  return line;
+};
+
+test('幅の決まり: 会話の列・入力欄・ページ・タスク・実行ログの幅は tokens.css の --content-max と --content-gutter の 1 か所で決まる', () => {
+  const tokens = styleOf('tokens.css');
+  assert.match(tokens, /--content-max: \d+px;/, '最大の幅の変数');
+  assert.match(tokens, /--content-gutter: clamp\(/, '左右の余白の変数');
+  const targets: Array<[string, string]> = [
+    ['chat.css', '.chat-col'], ['chat.css', '.chat-dock-inner'], ['shell.css', '.view-inner'], ['tasks.css', '.tk-inner'],
+  ];
+  for (const [file, selector] of targets) {
+    const rule = ruleOf(styleOf(file), selector);
+    assert.match(rule, /max-width: var\(--content-max\)/, `${selector} は最大の幅を変数で持つ`);
+    assert.match(rule, /(padding-inline|padding): [^;]*var\(--content-gutter\)/, `${selector} は左右の余白を変数で持つ`);
+    assert.doesNotMatch(rule, /max-width: \d+px/, `${selector} に数字の幅を書き戻さない`);
+  }
+  assert.doesNotMatch(styleOf('logs.css'), /lg-inner \{[^}]*max-width/, '実行ログだけ別の幅にしない（.view-inner と同じ）');
+});
+
+test('Esc: 設定のモーダルは、確かめのダイアログの下で、後ろのページのシートや引き出しの上。ダイアログ → 設定 → シートの順に 1 つずつ閉じる', () => {
+  const closed: string[] = [];
+  const offs = [
+    registerEscape('sheet', () => closed.push('sheet')),
+    registerEscape('settings', () => closed.push('settings')),
+    registerEscape('dialog', () => closed.push('dialog')),
+  ];
+  assert.equal(closeTopLayer(), true);
+  assert.deepEqual(closed, ['dialog']);
+  offs[2]!();
+  assert.equal(closeTopLayer(), true);
+  assert.deepEqual(closed, ['dialog', 'settings']);
+  offs[1]!();
+  assert.equal(closeTopLayer(), true);
+  assert.deepEqual(closed, ['dialog', 'settings', 'sheet']);
+  offs[0]!();
+  assert.equal(closeTopLayer(), false);
+  assert.deepEqual(closed, ['dialog', 'settings', 'sheet']);
+});
+
+test('pageBehind: 設定はモーダルなので、後ろには直前に見ていたページを描く。直前が無ければ新しい会話', () => {
+  const tasks = parseRoute('#/tasks/t1');
+  assert.deepEqual(pageBehind(parseRoute('#/settings'), tasks), tasks, '設定の後ろは直前のページ（タスクの詳細まで）');
+  assert.deepEqual(pageBehind(parseRoute('#/settings'), parseRoute('#/c/a')), { page: 'chat', conversationId: 'a' });
+  assert.deepEqual(pageBehind(parseRoute('#/settings'), null), HOME_ROUTE, '設定を直接開いたときは新しい会話');
+  assert.deepEqual(HOME_ROUTE, { page: 'chat', conversationId: null });
+  assert.deepEqual(pageBehind(parseRoute('#/skills'), tasks), parseRoute('#/skills'), '設定でなければ、そのページ自身');
+  assert.deepEqual(parseRoute('#/settings/models'), { page: 'settings' }, '#/settings は今までどおり読める（通知のリンクも同じ）');
+});
+
+test('inert: 設定のモーダルが開いている間、後ろのページの Esc の重なりと ⌘/Ctrl+S は受け付けない', () => {
+  const closed: string[] = [];
+  assert.equal(registerEscapeUnlessInert('dialog', () => closed.push('background-dialog'), true), undefined, '後ろのページの確かめは登録されない');
+  const off = registerEscapeUnlessInert('settings', () => closed.push('settings'), false)!;
+  assert.equal(closeTopLayer(), true);
+  assert.deepEqual(closed, ['settings'], 'Esc は設定だけに届く（後ろの確かめがダイアログの順番で先に閉じない）');
+  off();
+  assert.equal(closeTopLayer(), false);
+
+  let saved = 0;
+  let prevented = 0;
+  const press = (key: string, ctrl = true) => ({ key, metaKey: false, ctrlKey: ctrl, preventDefault: () => { prevented += 1; } });
+  saveKeyHandler(() => true, () => { saved += 1; })(press('s'));
+  assert.deepEqual({ saved, prevented }, { saved: 0, prevented: 0 }, '後ろのページの ⌘/Ctrl+S は何もしない');
+  const live = saveKeyHandler(() => false, () => { saved += 1; });
+  live(press('s'));
+  assert.deepEqual({ saved, prevented }, { saved: 1, prevented: 1 }, '開いている側の ⌘/Ctrl+S は保存し、ブラウザの「ページを保存」を止める');
+  live(press('s', false));
+  live(press('k'));
+  assert.deepEqual({ saved, prevented }, { saved: 1, prevented: 1 }, '別のキーは何もしない');
+});
+
+test('hideWhenInert: 設定が開いているあいだ、後ろの窓（確かめ・スキルの窓・新しいタスク）は背景も本体も隠す', () => {
+  assert.deepEqual(hideWhenInert(true), { display: 'none' });
+  assert.equal(hideWhenInert(false), undefined, '設定が開いていなければ、そのまま出す');
+  for (const file of ['ChatDialog.tsx', 'SkillDialog.tsx', 'NewTaskDialog.tsx']) {
+    const source = readFileSync(new URL(`../web/src/${file}`, import.meta.url), 'utf8');
+    assert.equal(source.match(/style=\{(hidden|hideWhenInert\(inert\))\}/g)?.length, 2, `${file}: 背景と本体の 2 つに隠す指定を付ける`);
+  }
 });

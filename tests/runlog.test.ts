@@ -126,7 +126,7 @@ test('コードの網羅: サーバーが作る種類は、すべて辞書に訳
   }
 });
 
-test('経路: #/runs[/tools|/reviews] と、振り返りの実行中のリンク。#/review はタブにしない', () => {
+test('経路: #/runs[/tools|/reviews] と、振り返りの実行中のリンク。実行ログも #/review もタブにしない', () => {
   assert.deepEqual(parseRoute('#/runs'), { page: 'runs' });
   assert.deepEqual(parseRoute('#/runs/tools'), { page: 'runs', tab: 'tools' });
   assert.deepEqual(parseRoute('#/runs/reviews'), { page: 'runs', tab: 'reviews' });
@@ -137,7 +137,7 @@ test('経路: #/runs[/tools|/reviews] と、振り返りの実行中のリンク
   assert.equal(logHash('runs'), '#/runs');
   assert.equal(logHash('tools'), '#/runs/tools');
   assert.equal(logHash('reviews'), '#/runs/reviews');
-  assert.deepEqual(toTab('#/runs/reviews'), { key: 'runs', hash: '#/runs/reviews' }, '実行ログのタブは 1 つで、開いている表を覚える');
+  assert.equal(toTab('#/runs/reviews'), null, '実行ログのページはタブにしない（タブは会話だけ）');
   assert.equal(toTab('#/review'), null, '#/review は転送だけで、タブにしない');
   assert.deepEqual(parseRoute('#/review'), { page: 'review' });
 });

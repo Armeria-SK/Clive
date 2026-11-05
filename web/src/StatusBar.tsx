@@ -19,6 +19,7 @@ interface Props {
   onOpenRunning: () => void;
   onOpenApproval: () => void;
   onOpenNotifications: () => void;
+  inert?: boolean;
 }
 
 function Item({ icon, iconClass, tip, onClick, children, accent, expanded }: { icon: IconName; iconClass?: string; tip: string; onClick?: () => void; children?: ReactNode; accent?: boolean; expanded?: boolean }) {
@@ -43,7 +44,7 @@ export function StatusBar(props: Props) {
   const title = running ? [...running.title].slice(0, 16).join('') + ([...running.title].length > 16 ? '…' : '') : '';
   const elapsed = running && runStartedAt !== undefined ? ` · ${formatElapsed(now - runStartedAt)}` : '';
   return (
-    <footer className="statusbar" aria-label={t('status.bar')}>
+    <footer className="statusbar" aria-label={t('status.bar')} inert={props.inert}>
       <div className="sb-group">
         <Item icon="wifi" iconClass={connected ? 'on' : 'off'} tip={t('status.connectionTip')} onClick={props.onReconnect}>
           <span key={String(connected)} className="swap">{connected ? t('status.connected') : t('status.reconnecting')}</span>

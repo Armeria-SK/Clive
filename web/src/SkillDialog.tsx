@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { createPortal } from 'react-dom';
 import { api, ApiError, type SkillDraft, type SkillSummary } from './api.ts';
 import { useEscapeLayer, useExit } from './hooks.ts';
+import { hideWhenInert, useInert } from './inert.ts';
 import { Icon } from './icons.tsx';
 import { formatDateTime, useT } from './i18n/index.ts';
 import { skillFileText } from './skills-meta.ts';
@@ -19,6 +20,7 @@ function DialogFrame({ open, label, dirty, wide, onClose, children }: { open: bo
   const t = useT();
   const { mounted, leaving } = useExit(open, EXIT_MS);
   const box = useRef<HTMLDivElement>(null);
+  const inert = useInert();
   const [asking, setAsking] = useState(false);
   // 編集中の Esc は、捨てる前に確かめる（もう一度 Esc で編集に戻る）。編集していなければ、そのまま閉じる
   useEscapeLayer('dialog', open, () => { if (dirty) setAsking(a => !a); else onClose(); });
@@ -31,7 +33,7 @@ function DialogFrame({ open, label, dirty, wide, onClose, children }: { open: bo
   }, [open]);
   useEffect(() => {
     const el = box.current;
-    if (open && el && !el.contains(document.activeElement)) el.focus();
+    if (open && !inert && el && !el.contains(document.activeElement)) el.focus();
   });
 
   if (!mounted) return null;
@@ -47,8 +49,8 @@ function DialogFrame({ open, label, dirty, wide, onClose, children }: { open: bo
   const host = document.querySelector('.shell') ?? document.body;
   return createPortal(
     <>
-      <div className={`sk-backdrop${leaving ? ' leaving' : ''}`} onClick={() => { if (!dirty) onClose(); }} />
-      <div className="sk-wrap">
+      <div className={`sk-backdrop${leaving ? ' leaving' : ''}`} style={hideWhenInert(inert)} onClick={() => { if (!dirty) onClose(); }} />
+      <div className="sk-wrap" style={hideWhenInert(inert)}>
         <div ref={box} className={`dialog sk-dialog${wide ? ' wide' : ''}${leaving ? ' leaving' : ''}`} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} onKeyDown={trap}>
           {children}
           {asking && (

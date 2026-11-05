@@ -31,6 +31,10 @@ const ja = {
   'bad_book': 'book は user か notes にしてください',
   'memory_deleted_note': '画面から削除',
   'unknown_language': '言語「{language}」の初期値はありません（{values}）',
+  'bad_hash_start': '{field} は # で始めないでください',
+  'not_chat_conversation': 'この会話にはここから送れません（タスクや振り返りの会話です）',
+  'persona_unsafe': 'このファイルはリンクなどで、通常のファイルではないので書き換えません（{file}）',
+  'persona_empty': '書き込む項目がありません（userName・callMe・botName・style・styleNote のどれかを送ってください）',
   'internal': '内部エラーが発生しました（ログを確認してください）',
 } as const;
 
@@ -65,6 +69,10 @@ const en: Record<keyof typeof ja, string> = {
   'bad_book': 'book must be user or notes',
   'memory_deleted_note': 'Deleted from the screen',
   'unknown_language': 'There are no defaults for the language "{language}" ({values})',
+  'bad_hash_start': '{field} must not start with #',
+  'not_chat_conversation': 'You cannot send to this conversation from here (it belongs to a task or a review)',
+  'persona_unsafe': 'This file is a link or not a regular file, so it was not changed ({file})',
+  'persona_empty': 'Nothing to write (send at least one of userName, callMe, botName, style and styleNote)',
   'internal': 'An internal error occurred (check the log)',
 };
 

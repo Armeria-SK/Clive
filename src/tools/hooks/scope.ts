@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText } from '../../shared/messages/guard.ts';
+import { insideGitDir } from './git-repo.ts';
 
 export type RootMode = 'read' | 'write';
 export interface ResolvedRoot { path: string; mode: RootMode }
@@ -15,7 +16,7 @@ const SECRET_PATTERNS = [
   /(?:^|\/)\.env(?:\.[^/]*)?$/iu,
   /\.(?:pem|key|p12|pfx|keystore|jks)$/iu,
   /(?:^|\/)id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/iu,
-  /(?:^|\/)secrets?\//iu,
+  /(?:^|\/)secrets?(?:\/|$)/iu,
   /(?:^|\/)\.(?:ssh|aws|gnupg|docker|kube)(?:\/|$)/iu,
   /(?:^|\/)\.(?:netrc|npmrc|pypirc|git-credentials)$/iu,
 ];
@@ -24,8 +25,18 @@ const DEVICE_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 
 export type Expanded = { path: string } | { unresolved: string };
 
+// ネットワークのパス（UNC: \\サーバー\共有）か、デバイスのパス（\\?\ \\.\ \??\）か。Windows は / を \ と同じに読む。
+// ネットワークの先は、このPCの中で確かめられず（管理共有 \\localhost\C$ は同じ PC のファイルを指す）、デバイスのパスは * や ? などの書き方の決まりを避けられるので、どれも扱わない
+export function isRemotePath(p: string): boolean {
+  if (!WINDOWS) return false;
+  const normalized = p.replaceAll('/', '\\');
+  return normalized.startsWith('\\\\') || normalized.startsWith('\\??\\');
+}
+
 export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = process.env, language: Language = DEFAULT_LANGUAGE): Expanded {
   let p = input.replace(/^["']|["']$/gu, '');
+  // 展開や解決をする前に決める（* ? のワイルドカードの読み取りや resolve で、別の場所に化けないように）。調べる側 (placePath) が止める
+  if (isRemotePath(p)) return { path: p.replaceAll('/', '\\') };
   if (/\$\(|`|<\(|>\(/u.test(p)) return { unresolved: guardText(language, 'scope.cmd_subst') };
   if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) p = join(homedir(), p.slice(2));
   else if (/^~[A-Za-z]/u.test(p)) return { unresolved: guardText(language, 'scope.other_home') };
@@ -43,6 +54,7 @@ export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = 
     .replace(/\$([A-Za-z_][A-Za-z0-9_]*)/gu, (_, n: string) => lookup(n))
     .replace(/%([A-Za-z_][A-Za-z0-9_]*)%/gu, (_, n: string) => lookup(n));
   if (unknown !== undefined) return { unresolved: guardText(language, 'scope.unknown_env', { name: unknown }) };
+  if (isRemotePath(p)) return { path: p.replaceAll('/', '\\') };
   if (/[*?[\]{}]/u.test(p)) {
     const parts = p.split(/[\\/]/u);
     const first = parts.findIndex(part => /[*?[\]{}]/u.test(part));
@@ -53,6 +65,7 @@ export function expandPath(input: string, cwd: string, env: NodeJS.ProcessEnv = 
 }
 
 export function realish(abs: string): string {
+  if (isRemotePath(abs)) return abs;
   let current = abs;
   const rest: string[] = [];
   for (;;) {
@@ -74,7 +87,7 @@ export function isInside(root: string, target: string): boolean {
 }
 
 export function windowsHazard(p: string, language: Language = DEFAULT_LANGUAGE): string | undefined {
-  if (/^\\\\[?.]\\/u.test(p)) return guardText(language, 'scope.hazard_prefix');
+  if (/^\\\\[?.]\\/u.test(p) || isRemotePath(p)) return guardText(language, 'scope.hazard_prefix');
   const withoutDrive = p.replace(/^[A-Za-z]:/u, '');
   if (withoutDrive.includes(':')) return guardText(language, 'scope.hazard_stream');
   if (p.split(/[\\/]/u).some(part => DEVICE_NAMES.test(part))) return guardText(language, 'scope.hazard_device');
@@ -89,13 +102,28 @@ export function isSecretPath(abs: string): boolean {
 export interface ScopePolicy {
   roots: ResolvedRoot[];
   deny: string[];
+  // 書き込む前に承認を求める場所（人格・プロフィール・スキルのフォルダ）。.git の段があるパスは、ここに無くても同じに扱う
   askOnWrite?: string[];
+  // askOnWrite のうち、スキルのフォルダ（理由の文を分けるため）
+  skillsDir?: string;
   language?: Language;
 }
 
-export function needsWriteApproval(abs: string, policy: ScopePolicy): boolean {
+// 書き込む前に承認を求める場所の種類。persona: SOUL.md・USER.md、skill: workspace/skills/、git: .git の段があるパス（フックや設定でコマンドを動かせる）
+export type ProtectedKind = 'persona' | 'skill' | 'git';
+
+const hasGitSegment = (p: string): boolean => p.split(/[\\/]/u).some(part => fold(part) === '.git');
+
+export function writeApprovalKind(abs: string, policy: ScopePolicy): ProtectedKind | undefined {
+  if (isRemotePath(abs)) return 'git';
   const real = realish(abs);
-  return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs));
+  if (hasGitSegment(abs) || hasGitSegment(real) || insideGitDir(abs) || (real !== abs && insideGitDir(real))) return 'git';
+  if (policy.skillsDir && (isInside(policy.skillsDir, real) || isInside(policy.skillsDir, abs))) return 'skill';
+  return (policy.askOnWrite ?? []).some(p => isInside(p, real) || isInside(p, abs)) ? 'persona' : undefined;
+}
+
+export function needsWriteApproval(abs: string, policy: ScopePolicy): boolean {
+  return writeApprovalKind(abs, policy) !== undefined;
 }
 
 export type Placement =

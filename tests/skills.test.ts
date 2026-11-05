@@ -8,11 +8,18 @@ import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
 import { parseRoute, routeHash } from '../web/src/routes.ts';
 import {
-  addDeny, addRoot, applyFolders, broadKind, cloneFolders, DEFAULT_DENY, EFFECT_LABEL, findDraft, foldersEqual, foldersFromConfig, removeDeny, removeRoot, setRootMode,
-  skillDraftLink, skillFileText, skillRows, TOOL_CATALOG, wideningChanges,
+  addRoot, broadKind, DEFAULT_DENY, EFFECT_LABEL, findDraft, foldersFromConfig, removeRoot, setRootMode,
+  skillDraftLink, skillFileText, skillRows, TOOL_CATALOG, wideningChanges, type FolderDraft,
 } from '../web/src/skills-meta.ts';
 import { toTab } from '../web/src/tabs.ts';
 import { startScreenServer } from './screen-server.ts';
+
+// 触れないパスは、設定の画面のタグの欄が直接直す。ここは、フォルダの変更を数える試験のための小さな補助
+const addDeny = (f: FolderDraft, path: string): FolderDraft => (!path.trim() || f.deny.includes(path.trim()) ? f : { ...f, deny: [...f.deny, path.trim()] });
+const removeDeny = (f: FolderDraft, path: string): FolderDraft => ({ ...f, deny: f.deny.filter(p => p !== path) });
+const cloneFolders = (f: FolderDraft): FolderDraft => ({ roots: f.roots.map(r => ({ ...r })), deny: [...f.deny] });
+const foldersEqual = (a: FolderDraft, b: FolderDraft): boolean => JSON.stringify(a) === JSON.stringify(b);
+const applyFolders = (config: Record<string, any>, folders: FolderDraft): Record<string, any> => ({ ...config, tools: { ...config.tools, roots: folders.roots, deny: folders.deny } });
 
 const draft = (over: Partial<SkillDraft>): SkillDraft => ({
   id: 1, name: 'a', description: 'd', body: 'b', reason: null, status: 'pending', created_at: 100, current: null, ...over,
@@ -28,7 +35,7 @@ test('経路: スキルの深いリンク（#/skills/<名前>、#/skills/draft/<
   assert.deepEqual(parseRoute('#/skills/%E0%A4%A'), { page: 'skills', target: { kind: 'skill', name: '%E0%A4%A' } }, '壊れたエンコードでも落ちない');
   for (const hash of ['#/skills', '#/skills/x', '#/skills/draft/x', '#/skills/draft']) assert.equal(routeHash(parseRoute(hash)), hash);
   assert.deepEqual(parseRoute('#/review'), { page: 'review' }, '古い経路は変えない');
-  assert.deepEqual(toTab('#/skills/draft/x'), { key: 'skills', hash: '#/skills/draft/x' }, 'スキルのタブは 1 つ。開いている窓の行き先を覚える');
+  assert.equal(toTab('#/skills/draft/x'), null, 'スキルのページはタブにしない（タブは会話だけ）');
 });
 
 test('スキルの一覧: レビュー待ちの下書きを先頭に（新しい順）、そのあとにスキルを名前順で並べる', () => {
@@ -149,12 +156,7 @@ test('既定の触れないパス: 画面の DEFAULT_DENY は、サーバーの�
   assert.deepEqual([...DEFAULT_DENY], defaultConfig().tools.deny);
 });
 
-test('applyFolders: 設定の tools.roots / tools.deny だけを差し替え、ほかの項目はそのまま', () => {
-  const config = { timezone: 'UTC', language: 'en', tools: { roots: [{ path: 'workspace', mode: 'write' }], deny: ['a'], outsideRoots: 'deny', shell: { enabled: true } } };
-  const next = applyFolders(config, { roots: [{ path: 'x', mode: 'read' }], deny: ['b', 'c'] });
-  assert.deepEqual(next.tools, { roots: [{ path: 'x', mode: 'read' }], deny: ['b', 'c'], outsideRoots: 'deny', shell: { enabled: true } });
-  assert.equal(next.timezone, 'UTC');
-  assert.deepEqual(config.tools.roots, [{ path: 'workspace', mode: 'write' }], '元の設定は変えない');
+test('foldersFromConfig: 設定から、読める形のフォルダだけを取り出す', () => {
   assert.deepEqual(foldersFromConfig({}), { roots: [], deny: [] });
   assert.deepEqual(foldersFromConfig({ tools: { roots: [{ path: 'a', mode: 'read' }, { path: 1, mode: 'read' }, { path: 'b', mode: 'bad' }], deny: ['x', 2] } }), { roots: [{ path: 'a', mode: 'read' }], deny: ['x'] });
 });

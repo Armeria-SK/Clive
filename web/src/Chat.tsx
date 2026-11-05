@@ -3,8 +3,8 @@ import { api, ApiError, type Approval, type Message, type ModelView, type Profil
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, modelNameOf, renameTitleOf, resolveRunModels, restartApprovalGate, runOverflowOf, sendFailureOf, toolInputSummary,
-  type ApprovalGate, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, sendTarget, toolInputSummary,
+  type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import {
@@ -81,8 +81,6 @@ function noteIcon(notice: RunNotice): IconName {
   return notice.code === 'retrying' ? 'clock' : 'alert';
 }
 
-type ItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
-
 export function Chat({ conversationId, profile, modelName, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
   const t = useT();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -94,7 +92,6 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const [attached, setAttached] = useState<UploadView[]>([]);
   const [uploading, setUploading] = useState(false);
   const [models, setModels] = useState<ModelView[]>([]);
-  const [runModels, setRunModels] = useState<ReadonlyMap<string, string>>(new Map());
   const [confirmArchive, setConfirmArchive] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -102,7 +99,6 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   const stick = useRef(true);
   const created = useRef<string | null>(null);
   const frontGate = useRef<ApprovalGate>({ id: null, since: 0 });
-  const unresolved = useRef(new Set<string>());
   const seen = useRef(new Set<string>());
   const primed = useRef(false);
   const draft = drafts.find(d => d.conversationId === conversationId);
@@ -124,25 +120,11 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   useEffect(() => { void load(); }, [load, revision]);
   useEffect(() => { void api.models().then(r => setModels(r.models)).catch(() => undefined); }, []);
 
-  const liveRunId = draft?.runId;
-  useEffect(() => {
-    const wanted = [...new Set(messages.flatMap(m => (m.role === 'assistant' && m.runId && m.runId !== liveRunId && !runModels.has(m.runId) && !unresolved.current.has(m.runId) ? [m.runId] : [])))];
-    if (!wanted.length) return undefined;
-    let live = true;
-    void fetchRecentRuns().then(rows => {
-      if (!live) return;
-      const { found, missing } = resolveRunModels(rows, wanted, models);
-      for (const id of missing) unresolved.current.add(id);
-      if (found.size) setRunModels(current => new Map([...current, ...found]));
-    }).catch(() => undefined);
-    return () => { live = false; };
-  }, [messages, liveRunId, models, runModels]);
-
   const lastIsUser = messages.at(-1)?.role === 'user';
   const errorNotice = notices.find(n => n.kind === 'error');
   const visible = messages.filter(m => !(m.role === 'assistant' && !m.text.trim() && m.toolCalls?.length));
   const assistantName = profile?.name ?? 'Clive';
-  const frontApprovalId = approvals[0]?.id ?? null;
+  const frontApprovalId = enterApprovalId(approvals);
   useLayoutEffect(() => { frontGate.current = advanceApprovalGate(frontGate.current, frontApprovalId, Date.now()); }, [frontApprovalId]);
   useEffect(() => {
     const restart = () => { frontGate.current = restartApprovalGate(frontGate.current, Date.now()); };
@@ -223,8 +205,9 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
     stick.current = true;
     setSending(true); setFailure(null);
     try {
-      let id = conversationId ?? created.current;
-      if (!id) { id = (await api.createConversation()).conversation.id; created.current = id; }
+      const target = sendTarget(conversationId, created.current);
+      const id = target.id;
+      created.current = target.created;
       onClearNotices(id);
       await api.send(id, text, attached.map(a => a.id));
       if (preset === undefined) setInput('');
@@ -269,26 +252,24 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
     });
   }
 
-  const replyModel = (runId: string | null): string | null => {
-    if (!runId) return null;
-    if (runId === liveRunId) return models.length ? modelNameOf(models, draft?.modelId) : null;
-    return runModels.get(runId) ?? null;
-  };
   const keys: string[] = [];
-  const items: Array<{ key: string; kind: ItemKind; node: ReactNode }> = [];
-  const push = (key: string, kind: ItemKind, node: ReactNode): void => { keys.push(key); items.push({ key, kind, node }); };
+  const items: Array<{ key: string; kind: ChatItemKind; node: ReactNode }> = [];
+  const push = (key: string, kind: ChatItemKind, node: ReactNode): void => { keys.push(key); items.push({ key, kind, node }); };
 
+  const turns = replyTurns(visible, draft?.runId ?? null);
   for (const m of visible) {
+    const turn = turns.get(m.id);
     if (m.role === 'tool') push(`m-${m.id}`, 'tool', <ToolMessage message={m} />);
     else if (m.role === 'user') push(`m-${m.id}`, 'user', <UserMessage message={m} />);
     else push(`m-${m.id}`, 'assistant', (
-      <AssistantMessage profile={profile} text={m.text} time={m.createdAt} model={replyModel(m.runId)} />
+      <AssistantMessage profile={profile} text={m.text} time={m.createdAt} head={turn?.head ?? true} copyText={turn ? turn.copyText : m.text} />
     ));
   }
   if (draft) {
-    if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} />);
+    const liveHead = !visible.some(m => m.role === 'assistant' && m.runId === draft.runId);
+    if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} head={liveHead} />);
     else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} />);
-    else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} model={models.length ? modelNameOf(models, draft.modelId) : null} startedAt={startedAt} />);
+    else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} startedAt={startedAt} />);
   }
   notices.filter(n => n.kind !== 'error').forEach((n, i) => {
     const key = `n-${n.runId}-${i}`;
@@ -303,7 +284,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   if (failure) {
     push('send-failure', 'fail', failure.context
       ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} />
-      : <SendErrorCard message={failure.message} hint={failure.hint} />);
+      : <SendErrorCard message={failure.message} hint={failure.hint} setup={failure.noModels} />);
   }
 
   useEffect(() => {
@@ -312,7 +293,8 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   });
 
   const empty = loaded && items.length === 0;
-  let previous: ItemKind | null = null;
+  const joined = joinsToolRun(items.map(item => item.kind));
+  let previous: ChatItemKind | null = null;
   return (
     <section className="chat">
       <div
@@ -321,12 +303,12 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
       >
         <div className="chat-col">
           {empty && <EmptyChat profile={profile} onPick={text => void send(text)} />}
-          {items.map(item => {
+          {items.map((item, index) => {
             const indent = item.kind === 'tool' || item.kind === 'run' || item.kind === 'note' || item.kind === 'fail';
             const gap = item.kind === 'user' && previous !== null && previous !== 'user';
             const enter = primed.current && !seen.current.has(item.key);
             previous = item.kind;
-            return <div key={item.key} className={`chat-item${indent ? ' indent' : ''}${gap ? ' gap' : ''}${enter ? ' enter' : ''}`}>{item.node}</div>;
+            return <div key={item.key} className={`chat-item${indent ? ' indent' : ''}${gap ? ' gap' : ''}${joined[index] ? ' joined' : ''}${enter ? ' enter' : ''}`}>{item.node}</div>;
           })}
         </div>
       </div>

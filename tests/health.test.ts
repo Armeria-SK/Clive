@@ -2,16 +2,15 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import { COOLDOWN_MS, FAILURE_THRESHOLD } from '../src/engine/health.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
-import { fail, FakeAdapter, reply, tempDir } from './helpers.ts';
+import { fail, FakeAdapter, reply, tempDir, testConfig } from './helpers.ts';
 
 async function setup(t: { after: (fn: () => void) => void }) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [
     { id: 'local', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 },
     { id: 'backup', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:2/v1', maxParallel: 1, timeoutMs: 10_000 },

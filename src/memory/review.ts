@@ -2,6 +2,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { StoredMessage } from '../db/conversations.ts';
 import type { Task, TaskEvent } from '../tasks/store.ts';
+import { estimateTextTokens } from '../engine/tokens.ts';
+import { prefix, type Memory } from './store.ts';
 
 export type ReviewTrigger = 'task' | 'idle' | 'heavy_run' | 'book_full' | 'manual';
 
@@ -20,11 +22,17 @@ export interface ReviewJob {
 }
 
 export const TRIGGER_TEXT: Record<Language, Record<ReviewTrigger, string>> = {
-  ja: { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が上限に近い', manual: '手動' },
-  en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory is nearly full', manual: 'Manual' },
+  ja: { task: 'タスクが終わった', idle: '会話が途切れた', heavy_run: '道具を多く使った', book_full: '記憶が大きくなった', manual: '手動' },
+  en: { task: 'A task finished', idle: 'The conversation went quiet', heavy_run: 'Many tools were used', book_full: 'Memory has grown large', manual: 'Manual' },
 };
 
 export const TRIGGER_LABEL = TRIGGER_TEXT.ja;
+
+// 整理の振り返り（book_full）では、記憶を消さず・新しく覚えず、案を知らせる。この実行には渡さず、呼ばれても拒否する道具
+export const TIDY_FORBIDDEN_TOOLS: readonly string[] = ['memory_forget', 'memory_save'];
+
+// 整理の案の返事が「案なし」のとき（通知しない）
+export const isNoProposal = (reply: string): boolean => /^(?:変更なし|No changes?)[。.!！]?$/iu.test(reply.trim());
 
 export class ReviewJobs {
   readonly #db: DatabaseSync;
@@ -86,9 +94,12 @@ interface ReviewText {
   intro: (trigger: string) => string;
   policyHeading: string;
   policy: readonly string[];
+  tidyPolicy: readonly string[];
   forgottenHeading: string;
   pressureHeading: string;
-  pressureTail: string;
+  pressureSummary: (tokens: number, budget: number, count: number) => string;
+  pressureListHeading: string;
+  pressureMore: (count: number) => string;
   taskHeading: string;
   taskTitle: string;
   taskResult: string;
@@ -99,10 +110,6 @@ interface ReviewText {
   user: string;
   tool: (name: string) => string;
   line: (label: string, body: string) => string;
-  bookUser: string;
-  bookNotes: string;
-  chars: string;
-  separator: string;
 }
 
 const REVIEW_TEXT: Record<Language, ReviewText> = {
@@ -120,9 +127,18 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
       '- することがなければ、道具を使わずに「変更なし」とだけ返す',
       '- 最後に、何をしたかを1〜2文で返す',
     ],
+    tidyPolicy: [
+      '- 今回の目的は、記憶を整理する案を出すこと。新しく覚えることはしない（memory_save は使えない）',
+      '- 下に挙げた「会話に入りきらない記憶」のうち、重なりがはっきりしているものだけ、memory_update で 1 つにまとめてよい。memory_forget は使えない（消すかどうかはユーザーが決める）',
+      '- 消したほうがよい・まとめたほうがよいと思う記憶は、最後の返事に 1 件 1 行で書く。書き方は「[n3] 消す: 理由（短く）」「[u1] [u4] まとめる: 理由（短く）」。多くても 10 行',
+      '- 古くなったもの・ほかの記憶と重なるもの・一時的な出来事のものを優先して挙げる。ユーザーの大事な事実は挙げない',
+      '- 提案が無ければ、道具を使わずに「変更なし」とだけ返す',
+    ],
     forgottenHeading: '# ユーザーが消した記憶（同じ内容を覚え直さない）',
     pressureHeading: '# 記憶の量',
-    pressureTail: '。重なりをまとめて減らすことを優先する',
+    pressureSummary: (tokens, budget, count) => `記憶の合計は約 ${tokens} トークンで、会話に入れる量の目安（約 ${budget} トークン）を超えています。会話に入りきらない記憶が ${count} 件あります。重なりをまとめる・古いものを減らす案を出す`,
+    pressureListHeading: '会話に入りきらない記憶（古い順）:',
+    pressureMore: count => `…（ほか ${count} 件）`,
     taskHeading: '# 終わったタスク',
     taskTitle: 'タイトル',
     taskResult: '結果',
@@ -133,10 +149,6 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     user: 'ユーザー',
     tool: name => `道具 ${name}`,
     line: (label, body) => `【${label}】${body}`,
-    bookUser: 'ユーザーについて',
-    bookNotes: 'メモと教訓',
-    chars: '文字',
-    separator: '、',
   },
   en: {
     intro: trigger => `[Review] Trigger: ${trigger}. Read the record below and tidy up your memory (this is not a conversation with the user; your reply is only saved to the record).`,
@@ -152,9 +164,18 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
       '- If there is nothing to do, use no tools and reply only "No changes"',
       '- At the end, report what you did in one or two sentences',
     ],
+    tidyPolicy: [
+      '- The purpose this time is to propose how to tidy up memory. Do not learn anything new (memory_save is not available)',
+      '- Of the memories listed below that do not fit in a conversation, you may merge only the clearly overlapping ones into one with memory_update. memory_forget is not available (the user decides what to delete)',
+      '- Write the memories you think should be deleted or merged in your final reply, one per line, like "[n3] Delete: reason (short)" or "[u1] [u4] Merge: reason (short)". At most 10 lines',
+      '- Prefer outdated memories, ones that overlap with others, and ones about temporary events. Do not list important facts about the user',
+      '- If there is nothing to propose, use no tools and reply only "No changes"',
+    ],
     forgottenHeading: '# Memories the user deleted (do not learn the same thing again)',
     pressureHeading: '# Memory usage',
-    pressureTail: '. Prioritize merging overlapping memories to reduce it',
+    pressureSummary: (tokens, budget, count) => `Memory totals about ${tokens} tokens, over the guideline for what goes into a conversation (about ${budget} tokens). ${count} ${count === 1 ? 'memory does' : 'memories do'} not fit in a conversation. Propose merging overlapping memories and trimming old ones`,
+    pressureListHeading: 'Memories that do not fit (oldest first):',
+    pressureMore: count => `… (${count} more)`,
     taskHeading: '# Finished task',
     taskTitle: 'Title',
     taskResult: 'Result',
@@ -165,10 +186,6 @@ const REVIEW_TEXT: Record<Language, ReviewText> = {
     user: 'User',
     tool: name => `Tool ${name}`,
     line: (label, body) => `[${label}] ${body}`,
-    bookUser: 'About the user',
-    bookNotes: 'Notes and lessons',
-    chars: 'characters',
-    separator: ', ',
   },
 };
 
@@ -193,9 +210,25 @@ export function transcriptOf(messages: readonly StoredMessage[], maxChars = 15_0
   return kept.join('\n');
 }
 
-export function bookPressureText(usage: Record<string, { used: number; max: number }>, language: Language = DEFAULT_LANGUAGE): string {
+// 記憶が会話に入りきらないときの、振り返りへの知らせ。入りきらない記憶を古い順に挙げる（挙げる量も、会話に入れる量と同じ予算まで。最初の 1 件は必ず挙げる）。
+export function bookPressureText(input: { tokens: number; budget: number; outside: readonly Pick<Memory, 'id' | 'book' | 'content'>[] }, language: Language = DEFAULT_LANGUAGE): string {
   const text = REVIEW_TEXT[language];
-  return Object.entries(usage).map(([book, u]) => `${book === 'user' ? text.bookUser : text.bookNotes}: ${u.used}/${u.max} ${text.chars}`).join(text.separator);
+  const lines: string[] = [];
+  let used = 0;
+  for (const m of input.outside) {
+    const line = `- [${prefix(m.book)}${m.id}] ${clip(m.content, 600, language)}`;
+    const cost = estimateTextTokens(line) + 1;
+    if (lines.length > 0 && used + cost > input.budget) break;
+    used += cost;
+    lines.push(line);
+  }
+  const rest = input.outside.length - lines.length;
+  return [
+    text.pressureSummary(input.tokens, input.budget, input.outside.length),
+    text.pressureListHeading,
+    ...lines,
+    ...(rest > 0 ? [text.pressureMore(rest)] : []),
+  ].join('\n');
 }
 
 export function reviewPrompt(input: {
@@ -213,12 +246,12 @@ export function reviewPrompt(input: {
     text.intro(TRIGGER_TEXT[language][input.trigger]),
     '',
     text.policyHeading,
-    ...text.policy,
+    ...(input.trigger === 'book_full' ? text.tidyPolicy : text.policy),
   ];
   if (input.forgotten.length) {
     parts.push('', text.forgottenHeading, ...input.forgotten.map(f => `- ${clip(f, 200, language)}`));
   }
-  if (input.bookPressure) parts.push('', `${text.pressureHeading}\n${input.bookPressure}${text.pressureTail}`);
+  if (input.bookPressure) parts.push('', `${text.pressureHeading}\n${input.bookPressure}`);
   if (input.task) {
     parts.push('', text.taskHeading, `${text.taskTitle}: ${input.task.title}`, `${text.taskResult}: ${input.task.status}${input.task.result_summary ? ` — ${clip(input.task.result_summary, 2000, language)}` : ''}`);
     if (input.task.body) parts.push(`${text.taskNotes}:\n${clip(input.task.body, 3000, language)}`);

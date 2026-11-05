@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyEdits, deepEqual, diffConfig, editPath, profilePatch } from '../web/src/settings/merge.ts';
-import { blockUnload, type Config } from '../web/src/settings/model.ts';
+import { accessWidening } from '../web/src/settings/access.ts';
+import { blockUnload, countChanges, sectionChanged, type Config } from '../web/src/settings/model.ts';
 
 function sample(): Config {
   return {
@@ -239,4 +240,30 @@ test('ページを閉じる前の確認: 既定の動きを止め、returnValue 
   blockUnload(event);
   assert.equal(event.prevented, true);
   assert.equal(event.returnValue, '');
+});
+
+// 触れてよいフォルダ（tools.roots）は、設定の「道具」の節で編集する。保存・広がる変更の確かめ・ほかの場所とのぶつかりは、設定の保存の流れ 1 つだけ
+test('フォルダ（tools.roots）の編集: 保存の流れで差になり、広がる確かめが出て、ほかの場所の変更とぶつかれば止まる', () => {
+  const saved = sample();
+  const draft = sample();
+  (draft.tools as { roots: unknown[] }).roots = [{ path: 'workspace', mode: 'write' }, { path: '~/Documents/notes', mode: 'read' }];
+
+  assert.deepEqual(diffConfig(saved, draft).map(e => e.path.join('.')), ['tools.roots']);
+  assert.equal(sectionChanged(saved, draft, 'tools'), true, '「道具」の節に変更の印が付く');
+  assert.equal(countChanges(saved, draft), 1);
+
+  const clean = merge(saved, draft, sample());
+  assert.deepEqual(clean.conflicts, []);
+  assert.deepEqual((clean.config.tools as { roots: unknown[] }).roots, [{ path: 'workspace', mode: 'write' }, { path: '~/Documents/notes', mode: 'read' }]);
+  assert.deepEqual(accessWidening(sample(), clean.config), [{ kind: 'root-added', path: '~/Documents/notes', mode: 'read', broad: null }], 'フォルダを足すのは、広がる変更として確かめる');
+
+  const narrowing = sample();
+  (narrowing.tools as { roots: unknown[] }).roots = [];
+  assert.deepEqual(accessWidening(sample(), merge(saved, narrowing, sample()).config), [], '狭くなる変更は確かめない');
+
+  const latest = sample();
+  (latest.tools as { roots: unknown[] }).roots = [{ path: 'workspace', mode: 'read' }];
+  const clash = merge(saved, draft, latest);
+  assert.deepEqual(clash.conflicts.map(c => c.path), ['tools.roots'], 'ほかの場所が先に同じフォルダの設定を変えていたら、何も書かずに止める');
+  assert.deepEqual((clash.config.tools as { roots: unknown[] }).roots, [{ path: 'workspace', mode: 'read' }], '最新の値を巻き戻さない');
 });

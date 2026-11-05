@@ -78,7 +78,7 @@ test('広がりの検出（シェル）: 有効にする・承認なしに足す
   after.tools.shell.deny = [];
   after.tools.shell.envAllow.push('OPENAI_API_KEY');
   assert.deepEqual(accessWidening(base(), after), [
-    { kind: 'shell-allow-added', command: 'curl *' },
+    { kind: 'shell-allow-added', command: 'curl *', runsCode: true },
     { kind: 'shell-ask-removed', command: 'npm *' },
     { kind: 'shell-deny-removed', command: 'rm *' },
     { kind: 'shell-env-added', name: 'OPENAI_API_KEY' },
@@ -184,7 +184,7 @@ test('保存の流れ: 最新の設定と、自分の編集を当てた結果を
   const draft2 = structuredClone(saved);
   draft2.tools.shell.allow.push('wget *');
   const merged2 = applyEdits(latest, diffConfig(saved, draft2));
-  assert.deepEqual(accessWidening(latest, merged2.config), [{ kind: 'shell-allow-added', command: 'wget *' }]);
+  assert.deepEqual(accessWidening(latest, merged2.config), [{ kind: 'shell-allow-added', command: 'wget *', runsCode: true }]);
 });
 
 test('確認の印: 同じ広がりなら同じ、違えば違う', () => {

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { api } from '../api.ts';
+import { parseAllowEntry } from '../../../src/tools/hooks/allow-entry.ts';
 import { Icon } from '../icons.tsx';
 import { useT } from '../i18n/index.ts';
-import { FieldRow, NumberField, RangeField, SegField, SubTitle, TagsField, TextField, UsageField } from './fields.tsx';
+import { foldersFromConfig } from '../skills-meta.ts';
+import { FieldRow, NumberField, RangeField, SegField, SubTitle, TagsField, TextField } from './fields.tsx';
 import { updateAt, type Config } from './model.ts';
+import { RootsField } from './RootsField.tsx';
 import { differs, errorFor, type SectionProps } from './types.ts';
 
 type Hook = { matcher: string; command: string[]; timeoutMs: number; onError: 'deny' | 'ask' };
@@ -22,18 +23,27 @@ export function ToolsSection({ draft, saved, update, problems }: SectionProps) {
     const path = `tools.hooks.${stage}.${i}.${key}`;
     return { path, error: errorFor(problems, path), changed: changed(c => c.tools?.hooks?.[stage]?.[i]?.[key]) };
   };
+  const badAllow = ((shell.allow ?? []) as string[]).find(entry => parseAllowEntry(entry) === null);
+  const allowError = errorFor(problems, 'tools.shell.allow') ?? (badAllow !== undefined ? t('settings.tools.allowInvalid', badAllow) : undefined);
   const setHooks = (stage: (typeof HOOK_STAGES)[number], hooks: Hook[]) => update(c => updateAt(c, 'tools', { hooks: { ...(c.tools as Config).hooks, [stage]: hooks } }));
 
   return (
     <div className="set-stack">
       <div className="set-rows">
-        <SubTitle>{t('settings.tools.shellTitle')}</SubTitle>
+        <SubTitle>{t('settings.tools.foldersTitle')}</SubTitle>
+        <FieldRow label={t('settings.tools.roots')} desc={t('folders.relativeHint')} changed={changed(c => c.tools.roots)} path="tools.roots" error={errorFor(problems, 'tools.roots')}>
+          <RootsField roots={foldersFromConfig(draft).roots} onChange={roots => setTools({ roots })} />
+        </FieldRow>
         <FieldRow label={t('settings.tools.deny')} desc={t('settings.tools.denyDesc')} changed={changed(c => c.tools.deny)} path="tools.deny" error={errorFor(problems, 'tools.deny')}>
           <TagsField tags={tools.deny} label={t('settings.tools.deny')} placeholder="~/.ssh" onChange={v => setTools({ deny: v })} />
         </FieldRow>
         <FieldRow label={t('settings.tools.outside')} desc={t('settings.tools.outsideDesc')} changed={changed(c => c.tools.outsideRoots)} path="tools.outsideRoots">
           <SegField value={tools.outsideRoots as string} label={t('settings.tools.outside')} options={[{ value: 'ask', label: t('settings.tools.ask') }, { value: 'deny', label: t('settings.tools.block') }]} onChange={v => setTools({ outsideRoots: v })} />
         </FieldRow>
+      </div>
+
+      <div className="set-rows">
+        <SubTitle>{t('settings.tools.shellTitle')}</SubTitle>
         <FieldRow label={t('settings.tools.shellEnabled')} changed={changed(c => c.tools.shell.enabled)} path="tools.shell.enabled">
           <SegField value={Boolean(shell.enabled)} label={t('settings.tools.shellEnabled')} options={[{ value: true, label: t('settings.tools.use') }, { value: false, label: t('settings.tools.noUse') }]} onChange={v => setShell({ enabled: v })} />
         </FieldRow>
@@ -43,7 +53,7 @@ export function ToolsSection({ draft, saved, update, problems }: SectionProps) {
         <FieldRow label={t('settings.tools.shellTimeout')} changed={changed(c => c.tools.shell.timeoutSec)} path="tools.shell.timeoutSec" error={errorFor(problems, 'tools.shell.timeoutSec')}>
           <NumberField value={shell.timeoutSec as number} label={t('settings.tools.shellTimeout')} unit={t('settings.unit.seconds')} min={1} max={3600} onChange={v => v !== undefined && setShell({ timeoutSec: v })} />
         </FieldRow>
-        <FieldRow label={t('settings.tools.allowCmds')} changed={changed(c => c.tools.shell.allow)} path="tools.shell.allow">
+        <FieldRow label={t('settings.tools.allowCmds')} changed={changed(c => c.tools.shell.allow)} path="tools.shell.allow" error={allowError}>
           <TagsField tags={shell.allow} label={t('settings.tools.allowCmds')} onChange={v => setShell({ allow: v })} />
         </FieldRow>
         <FieldRow label={t('settings.tools.askCmds')} changed={changed(c => c.tools.shell.ask)} path="tools.shell.ask">
@@ -129,22 +139,11 @@ export function WorkerSection({ draft, saved, update, problems }: SectionProps) 
   );
 }
 
-export function MemorySection({ draft, saved, update, problems }: SectionProps) {
+export function MemorySection() {
   const t = useT();
-  const memory = draft.memory as Record<string, any>;
-  const [used, setUsed] = useState<{ user?: number; notes?: number }>({});
-  useEffect(() => { void api.memories().then(r => setUsed({ user: r.books.user.used, notes: r.books.notes.used })).catch(() => undefined); }, []);
-  const set = (patch: Record<string, unknown>) => update(c => updateAt(c, 'memory', patch));
   return (
     <div className="set-stack">
-      <div className="set-rows">
-        <FieldRow label={t('settings.memory.user')} desc={t('settings.memory.userDesc')} changed={differs(saved, draft, c => c.memory.userMaxChars)} path="memory.userMaxChars" error={errorFor(problems, 'memory.userMaxChars')}>
-          <UsageField value={memory.userMaxChars as number} used={used.user} label={t('settings.memory.user')} min={200} max={50000} onChange={v => set({ userMaxChars: v })} />
-        </FieldRow>
-        <FieldRow label={t('settings.memory.notes')} desc={t('settings.memory.notesDesc')} changed={differs(saved, draft, c => c.memory.notesMaxChars)} path="memory.notesMaxChars" error={errorFor(problems, 'memory.notesMaxChars')}>
-          <UsageField value={memory.notesMaxChars as number} used={used.notes} label={t('settings.memory.notes')} min={200} max={50000} onChange={v => set({ notesMaxChars: v })} />
-        </FieldRow>
-      </div>
+      <p className="set-note">{t('settings.memory.note')}</p>
       <a className="set-link-out" href="#/memory"><Icon name="bookmark" size={14} />{t('settings.memory.open')}</a>
     </div>
   );

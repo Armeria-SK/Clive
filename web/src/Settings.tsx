@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type ModelView, type Profile, type SettingsView } from './api.ts';
+import { ChatDialog } from './ChatDialog.tsx';
 import { useEscapeLayer, useSaveShortcut } from './hooks.ts';
 import { Icon } from './icons.tsx';
 import { applyServerSettings, formatDateTimeSmart, getLanguagePreference, useT } from './i18n/index.ts';
@@ -9,13 +10,13 @@ import { AccessConfirm } from './settings/AccessConfirm.tsx';
 import { accessKey, accessWidening, type Access } from './settings/access.ts';
 import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merge.ts';
 import {
-  blockUnload, countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
+  blockUnload, closeAction, countChanges, isSection, parseProblem, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
+import { editsToKeep, restoreKept, type KeptEdits } from './settings/keep.ts';
 import { SectionView } from './settings/SectionView.tsx';
+import { SettingsFrame } from './settings/SettingsFrame.tsx';
 import { toast } from './toast.tsx';
 import './styles/settings.css';
-
-const SECTION_KEY = 'clive.settingsSection';
 
 function loadSection(): SettingsSection {
   try { const saved = sessionStorage.getItem(SECTION_KEY); if (isSection(saved)) return saved; } catch { }
@@ -23,7 +24,10 @@ function loadSection(): SettingsSection {
 }
 
 
-export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
+interface Props { onProfile: (p: Profile) => void; open: boolean; leaving: boolean; onClose: () => void; kept: { current: KeptEdits | null }; onRerunSetup: () => void }
+
+// 設定は、今の画面の上に重ねるモーダル。open が false になったあとも、閉じる動きが終わる（leaving）まで描かれる。
+export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup }: Props) {
   const t = useT();
   const [view, setView] = useState<SettingsView | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -41,6 +45,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   const [reverts, setReverts] = useState(0);
   const [conflicted, setConflicted] = useState(false);
   const [confirm, setConfirm] = useState<{ items: Access[]; key: string } | null>(null);
+  const [askDiscard, setAskDiscard] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const pendingField = useRef<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
@@ -51,15 +56,20 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
     scroller.current?.scrollTo({ top: 0 });
   }, []);
 
-  const load = useCallback(async () => {
+  const keptToast = useRef(false);
+  const tRef = useRef(t);
+  tRef.current = t;
+  const load = useCallback(async (restore = false) => {
     setLoadFailed(false);
     try {
       const [s, m] = await Promise.all([api.settings(), api.models()]);
-      setView(s); setModels(m.models); setSaved(s.config); setDraft(s.config); setRestartRequired(s.restartRequired); setProblems([]);
+      const next = restore ? restoreKept(kept.current, s.config) : { saved: s.config, draft: s.config, restored: false };
+      setView(s); setModels(m.models); setSaved(next.saved); setDraft(next.draft); setRestartRequired(s.restartRequired); setProblems([]);
       applyServerSettings(s);
+      if (next.restored && !keptToast.current) { keptToast.current = true; toast({ kind: 'info', icon: 'info', title: tRef.current('settings.kept') }); }
     } catch { setLoadFailed(true); }
-  }, []);
-  useEffect(() => { void load(); }, [load]);
+  }, [kept]);
+  useEffect(() => { void load(true); }, [load]);
 
   // 設定を開いたまま、ほかの場所で言語が保存されたら、保存済みと編集中の language を合わせる
   const preference = getLanguagePreference();
@@ -71,6 +81,8 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   }, [preference]);
 
   const dirty = saved && draft ? countChanges(saved, draft) : 0;
+  // 保存していない編集は、設定が閉じられても（戻る・トーストの操作など）次に開いたとき戻せるよう、いつも App の持ち物に写しておく
+  useEffect(() => { if (saved && draft) kept.current = editsToKeep(saved, draft); }, [saved, draft, kept]);
   // 保存していない編集があるまま、ページを閉じる・読み直すときは、ブラウザに確かめさせる
   useEffect(() => {
     if (dirty === 0) return undefined;
@@ -132,9 +144,21 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   }
   useSaveShortcut(() => { if (!confirm) void save(); });
   useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
+  // × ・Esc・背景で閉じるとき、保存していない変更があれば、捨てる前に確かめる
+  const requestClose = () => {
+    const action = closeAction({ dirty, busy });
+    if (action === 'close') onClose();
+    else if (action === 'confirm') setAskDiscard(true);
+  };
+  useEscapeLayer('settings', open && !askDiscard, requestClose);
 
   // 元に戻したら、画面の中だけに残っている入力（JSON の欄に書きかけの文字など）も捨てる
   const revert = () => { if (saved) { setDraft(saved); setProblems([]); setConflicted(false); setConfirm(null); setReverts(n => n + 1); } };
+  // 名前は画面に出る名前と SOUL.md の名乗りの両方をサーバーが書く。保存済みと編集中の名前も合わせる（合わせないと、次の保存で元に戻る）
+  const renamed = (profile: Profile) => {
+    const rename = (config: Config | null) => (config ? { ...config, profile: { ...config.profile, name: profile.name } } : config);
+    setSaved(rename); setDraft(rename); onProfile(profile);
+  };
   const goProblem = (problem: Problem) => {
     if (problem.section) setSection(problem.section);
     if (problem.modelId) setSelectedModel(problem.modelId);
@@ -155,18 +179,37 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
 
   const meta = useMemo(() => SECTION_GROUPS.flatMap(g => g.items).find(i => i.id === section)!, [section]);
 
+  const frame = (children: ReactNode) => (
+    <SettingsFrame leaving={leaving} label={t('nav.settings')} closeLabel={t('settings.close')} onClose={requestClose}>
+      {children}
+      {askDiscard && (
+        <ChatDialog
+          title={t('settings.discard.title')} onClose={() => setAskDiscard(false)}
+          actions={(
+            <>
+              <button type="button" className="btn btn-ghost chat-plain" onClick={() => setAskDiscard(false)}>{t('settings.discard.keep')}</button>
+              <button type="button" className="btn btn-primary" onClick={() => { revert(); setAskDiscard(false); onClose(); }}>{t('settings.discard.do')}</button>
+            </>
+          )}
+        >
+          <p className="chat-dialog-text">{t('settings.discard.body', dirty)}</p>
+        </ChatDialog>
+      )}
+    </SettingsFrame>
+  );
+
   if (!saved || !draft || !view) {
-    return (
+    return frame(
       <section className="set-loading">
         <p className="muted">{loadFailed ? t('settings.loadFailed') : t('settings.loading')}</p>
         {loadFailed && <button className="btn btn-secondary" onClick={() => void load()}>{t('settings.retry')}</button>}
-      </section>
+      </section>,
     );
   }
 
   const dot = (id: SettingsSection) => sectionChanged(saved, draft, id) || problems.some(p => p.section === id) || (id === 'server' && restartRequired);
 
-  return (
+  return frame(
     <section className="set">
       <nav className="set-nav" ref={navRef} aria-label={t('nav.settings')}>
         <h1 className="set-nav-title">{t('nav.settings')}</h1>
@@ -225,6 +268,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
               models={models} probing={probing} onProbe={() => void probe()}
               selectedModel={selectedModel} onSelectModel={setSelectedModel} selectedProvider={selectedProvider} onSelectProvider={setSelectedProvider}
               apiKeys={view.apiKeys} configPath={view.configPath} hasConfigError={Boolean(view.configError)} lastSavedAt={lastSavedAt}
+              onNameSaved={renamed} onRerunSetup={onRerunSetup}
             />
           </div>
         </div>
@@ -240,6 +284,6 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
           </div>
         )}
       </div>
-    </section>
+    </section>,
   );
 }

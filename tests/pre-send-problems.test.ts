@@ -3,12 +3,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { Language } from '../src/config/schema.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import { errorProbeText, evaluateContext } from '../src/providers/context.ts';
 import { providerError } from '../src/providers/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { noUsableText } from '../web/src/chat-logic.ts';
-import { FakeAdapter, tempDir } from './helpers.ts';
+import { FakeAdapter, tempDir, testConfig } from './helpers.ts';
 
 // 送る前の 409（使えるモデルが無い）の problems。モデルごとに、今までの文（message / hint）のほかに、
 // モデルの確認と同じ messageCode / messageParams を添える（画面が、サーバーの言語にかかわらず自分の言語で組み立てられるように）。
@@ -17,7 +16,7 @@ import { FakeAdapter, tempDir } from './helpers.ts';
 async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, language: Language, options: { probe: boolean }) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };

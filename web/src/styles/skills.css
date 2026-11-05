@@ -31,30 +31,7 @@
 .sk-tool-name { font-family: var(--font-mono); font-size: 13px; }
 .sk-tool-desc { font-size: 12.5px; color: var(--color-text-muted); }
 
-/* 触れてよいフォルダ */
-.sk-folders { display: flex; flex-direction: column; gap: 22px; }
-.sk-group { display: flex; flex-direction: column; gap: 8px; }
-.sk-folder { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--color-divider); flex-wrap: wrap; }
-.sk-folder-icon { display: inline-flex; flex: none; width: 15px; height: 15px; color: var(--color-accent); }
-.sk-folder-path { flex: 1; min-width: 120px; font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
-.sk-seg-small .seg-opt { padding: 3px 10px; font-size: 12px; }
-.sk-remove { width: 28px; height: 28px; color: inherit; opacity: .6; }
-.sk-remove:hover { opacity: 1; }
-.sk-add { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-.sk-add .input { flex: 1; min-width: 0; }
-.sk-deny { gap: 6px; font-family: var(--font-mono); }
-.sk-deny-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; opacity: .6; cursor: pointer; }
-.sk-deny-x:hover { opacity: 1; background: color-mix(in srgb, var(--color-accent) 16%, transparent); }
-.sk-hint { font-size: 12.5px; color: var(--color-text-muted); }
-.sk-problems { padding: 10px 14px; border: 1px solid var(--bad); border-radius: var(--radius-md); color: var(--bad); font-size: 13px; }
-.sk-problems ul { margin: 0; padding-left: 18px; }
-.sk-savebar { position: sticky; bottom: 0; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: var(--color-surface); }
-.sk-savebar > span { margin-right: auto; font-size: 13px; }
-.sk-widen { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--color-accent); border-radius: var(--radius-md); background: var(--color-surface); }
-.sk-widen ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
-.sk-widen-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .sk-warn { display: block; font-size: 12px; color: var(--color-accent-text); }
-.sk-kbd { margin-left: 4px; font-family: var(--font-body); font-size: 12px; opacity: .6; }
 
 /* スキルの窓（画面全体に重ねる。狭い幅では下から出るシート） */
 @keyframes cl-sk-dialog-in { from { opacity: 0; transform: translateY(14px) scale(.97); } }
@@ -74,7 +51,7 @@
 .sk-head { display: flex; align-items: flex-start; gap: 12px; }
 .sk-head-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .sk-path { font-family: var(--font-mono); font-size: 12px; color: var(--color-accent-text); overflow-wrap: anywhere; }
-.sk-title { margin: 0; font-size: 26px; font-weight: 400; overflow-wrap: anywhere; }
+.sk-title { margin: 0; font-size: 26px; font-weight: var(--font-display-weight); overflow-wrap: anywhere; }
 .sk-meta { font-size: 12.5px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 .sk-close { flex: none; width: 32px; height: 32px; color: inherit; }
 .sk-pre { margin: 0; padding: 14px 16px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: var(--radius-md); background: var(--color-surface); max-height: 360px; overflow: auto; }

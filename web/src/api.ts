@@ -9,9 +9,12 @@ export interface Message {
   attachments?: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>;
 }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
+export interface ApprovalPreview { path: string; text: string; truncated: boolean }
 export interface Approval {
   id: string; runId: string; conversationId: string; tool: string; title: string; body: string; cwd?: string;
   reasons: string[]; details: string[]; expiresAt: number;
+  // コードを動かす確かめ: 毎回確かめる（「この会話では許可」と Enter での許可は無い）。preview は動かすファイルの中身
+  onceOnly: boolean; preview: ApprovalPreview[];
 }
 export interface ContextDetail { reason: string; measured?: number; required?: number; hint?: string }
 
@@ -45,7 +48,8 @@ export interface ToolCallRow {
 export type Book = 'user' | 'notes';
 export interface MemoryItem { id: number; book: Book; content: string; origin: string; source_conversation_id: string | null; source_message_id: number | null; created_at: number; updated_at: number }
 export interface MemoryEvent { id: number; memory_id: number; action: string; before: string | null; after: string | null; actor: string; reason: string | null; undone_at: number | null; created_at: number }
-export interface BookView { used: number; max: number; items: MemoryItem[] }
+export interface BookView { used: number; items: MemoryItem[] }
+export interface MemoryContext { tokens: number; budget: number | null; omitted: number }
 export interface HistoryHit { conversationId: string; title: string | null; messageId: number; role: string; createdAt: number; snippet: string }
 
 export type TaskStatus = 'inbox' | 'ready' | 'running' | 'waiting' | 'scheduled' | 'done' | 'failed' | 'cancelled';
@@ -85,6 +89,10 @@ export interface ReviewJob {
 }
 
 export interface TemplatesView { language: string; rules: string; files: Array<{ name: string; content: string }> }
+export interface OnboardingView { done: boolean; steps: { language: boolean; user: boolean; identity: boolean; persona: boolean; model: boolean } }
+export interface PersonaWrite { userName?: string; callMe?: string; botName?: string; style?: 'calm' | 'friendly' | 'direct' | 'none'; styleNote?: string }
+export interface PersonaView { soul: string; user: string; tokens: { soul: number; user: number }; budget: number | null; max: number }
+export interface EnvReloadView { loaded: boolean; apiKeys: Record<string, boolean>; notApplied: string[] }
 
 export class ApiError extends Error {
   readonly status: number;
@@ -109,7 +117,6 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   conversations: () => call<{ conversations: Conversation[] }>('/api/conversations'),
-  createConversation: () => call<{ conversation: Conversation }>('/api/conversations', { method: 'POST', body: '{}' }),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
@@ -130,7 +137,7 @@ export const api = {
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
-  memories: () => call<{ books: Record<Book, BookView> }>('/api/memories'),
+  memories: () => call<{ books: Record<Book, BookView>; context: MemoryContext }>('/api/memories'),
   addMemory: (book: Book, content: string) => call('/api/memories', { method: 'POST', body: JSON.stringify({ book, content }) }),
   editMemory: (id: number, content: string) => call(`/api/memories/${id}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
   forgetMemory: (id: number) => call<{ memory: MemoryItem; eventId: number }>(`/api/memories/${id}`, { method: 'DELETE' }),
@@ -164,4 +171,10 @@ export const api = {
   curiosityTask: (id: number) => call(`/api/curiosity/${id}/task`, { method: 'POST', body: '{}' }),
   history: (q: string, days?: number) => call<{ hits: HistoryHit[] }>(`/api/history?q=${encodeURIComponent(q)}${days ? `&days=${days}` : ''}`),
   templates: (language: string) => call<TemplatesView>(`/api/templates/${encodeURIComponent(language)}`),
+  onboarding: () => call<OnboardingView>('/api/onboarding'),
+  onboardingDone: () => call<OnboardingView>('/api/onboarding/done', { method: 'POST', body: '{}' }),
+  onboardingPersona: (input: PersonaWrite) => call<OnboardingView & { profile: Profile }>('/api/onboarding/persona', { method: 'POST', body: JSON.stringify(input) }),
+  reloadEnv: (env: string[] = []) => call<EnvReloadView>('/api/onboarding/reload-env', { method: 'POST', body: JSON.stringify({ env }) }),
+  persona: () => call<PersonaView>('/api/workspace/persona'),
+  savePersona: (patch: { soul?: string; user?: string }) => call<PersonaView>('/api/workspace/persona', { method: 'PUT', body: JSON.stringify(patch) }),
 };

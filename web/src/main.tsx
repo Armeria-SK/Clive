@@ -1,12 +1,11 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import '@fontsource/cormorant-garamond/400.css';
-import '@fontsource/cormorant-garamond/600.css';
-import '@fontsource/lora/400.css';
-import '@fontsource/lora/600.css';
-import '@fontsource/noto-serif-jp/400.css';
-import '@fontsource/noto-serif-jp/500.css';
-import '@fontsource/noto-serif-jp/600.css';
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-600.css';
+import '@fontsource/ibm-plex-sans-jp/400.css';
+import '@fontsource/ibm-plex-sans-jp/500.css';
+import '@fontsource/ibm-plex-sans-jp/600.css';
 import { api } from './api.ts';
 import { App } from './App.tsx';
 import { initLanguage, loadServerSettings } from './i18n/index.ts';

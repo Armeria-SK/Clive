@@ -5,8 +5,7 @@ import type { Draft } from './events.ts';
 import { Icon } from './icons.tsx';
 import { useT } from './i18n/index.ts';
 import { modLabel } from './keys.ts';
-import { PAGE_META } from './pages.ts';
-import { chatIdOf, isChatTab, pageOfTab, type Tab } from './tabs.ts';
+import { chatIdOf, type Tab } from './tabs.ts';
 
 interface Props {
   tabs: Tab[];
@@ -18,11 +17,10 @@ interface Props {
   panelOpen: boolean;
   onClose: (key: string) => void;
   onNewChat: () => void;
-  onSearch: () => void;
   onTogglePanel: () => void;
 }
 
-export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chatTitles, panelOpen, onClose, onNewChat, onSearch, onTogglePanel }: Props) {
+export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chatTitles, panelOpen, onClose, onNewChat, onTogglePanel }: Props) {
   const t = useT();
   const bar = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ x: 0, w: 0 });
@@ -42,7 +40,6 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chat
   }, []);
 
   const labelOf = (tab: Tab): string => {
-    if (!isChatTab(tab)) return t(PAGE_META[pageOfTab(tab)].label);
     const id = chatIdOf(tab);
     if (!id) return t('tab.newChat');
     return conversations.find(c => c.id === id)?.title ?? chatTitles[id] ?? t('conversation.untitled');
@@ -62,7 +59,7 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chat
           return (
             <div key={tab.key} role="tab" aria-selected={active} className={`tab${active ? ' active' : ''}`} onAuxClick={e => { if (e.button === 1) close(e); }}>
               <a href={tab.hash} className="tab-link" title={label}>
-                <span className="tab-icon"><Icon name={isChatTab(tab) ? 'msg' : PAGE_META[pageOfTab(tab)].icon} size={14} /></span>
+                <span className="tab-icon"><Icon name="msg" size={14} /></span>
                 <span className="tab-label">{label}</span>
                 {mark === 'generating' && <span className="spin tab-state"><Icon name="loader" size={11} /><span className="sr-only">{t('conversation.generating')}</span></span>}
                 {mark === 'approval' && <span className="tab-dot"><span className="sr-only">{t('conversation.needsApproval')}</span></span>}
@@ -74,7 +71,6 @@ export function TabBar({ tabs, activeKey, conversations, drafts, approvals, chat
       </div>
       <button className="btn btn-ghost btn-icon tab-tool" onClick={onNewChat} aria-label={t('nav.newChat')} data-tip={t('nav.newChat')} data-tip-pos="below"><Icon name="plus" size={15} /></button>
       <span className="tabbar-fill" />
-      <button className="btn btn-ghost btn-icon tab-tool" onClick={onSearch} aria-label={t('nav.search')} data-tip={t('nav.search')} data-kbd={`${modLabel()}K`} data-tip-pos="below"><Icon name="search" size={16} /></button>
       <button
         className={`btn btn-ghost btn-icon tab-tool${panelOpen ? ' on' : ''}`} onClick={onTogglePanel} aria-pressed={panelOpen}
         aria-label={t('panel.title')} data-tip={panelTip} data-kbd={kbd} data-tip-pos="below"

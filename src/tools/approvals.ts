@@ -4,6 +4,9 @@ import type { DatabaseSync } from 'node:sqlite';
 export type ApprovalDecision = 'once' | 'conversation' | 'deny';
 export type ApprovalOutcome = 'approved' | 'denied' | 'expired' | 'cancelled';
 
+// 確かめの札で見せるコードのファイル（読めないものは text に理由の文を入れる）
+export interface PreviewFile { path: string; text: string; truncated: boolean }
+
 export interface ApprovalRequest {
   runId: string;
   conversationId: string;
@@ -14,6 +17,9 @@ export interface ApprovalRequest {
   cwd?: string | undefined;
   reasons: string[];
   details: string[];
+  // コードを動かす確かめ。「この会話では許可」を出さず、同じ文字のコマンドの許可を覚えない
+  onceOnly?: boolean | undefined;
+  preview?: PreviewFile[] | undefined;
 }
 
 export interface ApprovalView extends ApprovalRequest {
@@ -21,6 +27,14 @@ export interface ApprovalView extends ApprovalRequest {
   inputHash: string;
   createdAt: number;
   expiresAt: number;
+}
+
+// 画面に渡す承認の形。SSE の知らせ・GET /api/approvals・タスクの詳細で、この 1 か所だけを使う
+export function approvalPublic(v: ApprovalView) {
+  return {
+    id: v.id, tool: v.tool, title: v.title, body: v.body, cwd: v.cwd, reasons: v.reasons, details: v.details, expiresAt: v.expiresAt,
+    onceOnly: v.onceOnly === true, preview: v.preview ?? [],
+  };
 }
 
 export function inputHash(tool: string, input: unknown): string {
@@ -71,8 +85,10 @@ export class ApprovalBroker {
   decide(id: string, decision: ApprovalDecision): boolean {
     const pending = this.#pending.get(id);
     if (!pending) return false;
-    if (decision === 'conversation') this.#conversationGrants.add(`${pending.view.conversationId}:${pending.view.inputHash}`);
-    this.#db.prepare('UPDATE approvals SET scope = ? WHERE id = ?').run(decision, id);
+    // コードを動かす確かめは、古い画面から「この会話では許可」が送られても今回だけとして扱う
+    const scope = decision === 'conversation' && pending.view.onceOnly ? 'once' : decision;
+    if (scope === 'conversation') this.#conversationGrants.add(`${pending.view.conversationId}:${pending.view.inputHash}`);
+    this.#db.prepare('UPDATE approvals SET scope = ? WHERE id = ?').run(scope, id);
     pending.resolve(decision === 'deny' ? 'denied' : 'approved');
     return true;
   }

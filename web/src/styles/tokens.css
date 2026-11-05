@@ -42,9 +42,13 @@
   --color-accent-2-800: #573d14;
   --color-accent-2-900: #382810;
 
-  --font-heading: "Cormorant Garamond", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif;
+  --font-body: "Inter", "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", Meiryo, system-ui, sans-serif;
+  --font-heading: var(--font-body);
   --font-heading-weight: 600;
-  --font-body: "Lora", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif;
+  --font-display-weight: 500;
+
+  --content-max: 1280px;
+  --content-gutter: clamp(16px, 4vw, 48px);
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --space-1: 4.6px;

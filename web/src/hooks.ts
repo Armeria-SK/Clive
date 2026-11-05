@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { registerEscape, shortcutOf, type EscLayer } from './keys.ts';
+import { registerEscapeUnlessInert, saveKeyHandler, useInert } from './inert.ts';
+import type { EscLayer } from './keys.ts';
 import { getEffectiveTheme, getThemeMode, subscribeTheme, type ThemeMode, type ThemeName } from './theme.ts';
 
 export function useNow(intervalMs: number, enabled = true): number {
@@ -20,21 +21,21 @@ export function useTheme(): { mode: ThemeMode; effective: ThemeName } {
 }
 
 export function useEscapeLayer(layer: EscLayer, active: boolean, close: () => void): void {
+  const inert = useInert();
   const latest = useRef(close);
   latest.current = close;
-  useEffect(() => (active ? registerEscape(layer, () => latest.current()) : undefined), [layer, active]);
+  useEffect(() => (active ? registerEscapeUnlessInert(layer, () => latest.current(), inert) : undefined), [layer, active, inert]);
 }
 
 // ⌘/Ctrl+S。マウントされている間だけ、ブラウザの「ページを保存」を止めて onSave を呼ぶ。
 export function useSaveShortcut(onSave: () => void): void {
+  const isInert = useInert();
+  const inert = useRef(isInert);
+  inert.current = isInert;
   const latest = useRef(onSave);
   latest.current = onSave;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (shortcutOf(e) !== 'save') return;
-      e.preventDefault();
-      latest.current();
-    };
+    const onKey = saveKeyHandler(() => inert.current, () => latest.current());
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);

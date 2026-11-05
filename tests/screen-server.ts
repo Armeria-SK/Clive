@@ -1,16 +1,15 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { App } from '../src/app.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { tempDir } from './helpers.ts';
+import { tempDir, testConfig } from './helpers.ts';
 
 // 画面が読む API を、本物のサーバーで確かめるための起動。モデルは使わない（確認は常に ok を返す）。
 export async function startScreenServer(t: Parameters<typeof tempDir>[0]) {
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.data, { recursive: true });
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };

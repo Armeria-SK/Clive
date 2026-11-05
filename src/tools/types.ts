@@ -11,6 +11,7 @@ import type { SearchThrottle } from './web/search.ts';
 import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
+import type { PreviewFile } from './approvals.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -26,6 +27,23 @@ export interface PreCheck {
   decision: Decision;
   reasons: string[];
   details?: string[];
+  // コードを動かす確かめ（種類 'code'）を含む。会話の許可を越えず、毎回確かめる
+  onceOnly?: boolean;
+  askKinds?: Array<'code'>;
+  // 確かめの札で見せるコードのファイル
+  preview?: PreviewFile[];
+  // 見せたファイルの中身の指紋。承認のあと実行の前にもう一度判定して、変わっていたら実行しない
+  bind?: string;
+  // シェル: コマンドの git がすべて、設定に core.hooksPath の無い 1 つのリポジトリのもので、そのリポジトリ自身のフックの置き場所。許されたときだけ、git のフックをここに向ける
+  ownHooksDir?: string;
+}
+
+// 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果
+export interface ExecuteInfo {
+  // 持ち主が、この呼び出しの「今回だけ」の確かめ（コードを動かす確かめ）を許した
+  approvedOnce: boolean;
+  // 許したときに持ち主に見せた事前の判定
+  check?: PreCheck;
 }
 
 export interface ToolContext {
@@ -45,6 +63,10 @@ export interface ToolContext {
     web?: { network?: PageNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
+  // 道具の結果を返せる文字数の上限（モデルのコンテキストに合わせて、エンジンが呼ぶたびに決める）。無ければ 16,000 文字
+  outputLimit?: number | undefined;
+  // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）
+  forbiddenTools?: ReadonlySet<string> | undefined;
 }
 
 export type TaskControl =
@@ -60,6 +82,8 @@ export interface ToolDef<I = any> {
   effect: ToolEffect;
   allowedIn: readonly RunKind[];
   preCheck?: (input: I, ctx: ToolContext) => PreCheck | Promise<PreCheck>;
+  // 外から読んだ内容（Web・添付）のあとで確認を求める道具。書き込み・実行の道具は、これが無くても確認する
+  escalateOnTaint?: boolean;
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
-  execute: (input: I, ctx: ToolContext) => Promise<ToolOutput>;
+  execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

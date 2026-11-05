@@ -5,13 +5,12 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { AppConfig } from '../src/config/schema.ts';
-import { defaultConfig } from '../src/config/store.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
 import { reviewPrompt, transcriptOf } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { parseSkillFile, renderSkillFile } from '../src/tools/skills/store.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { FakeAdapter, reply, tempDir, type Script } from './helpers.ts';
+import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 const MIN = 60_000;
 
@@ -27,7 +26,7 @@ async function setup(t: { after: (fn: () => void) => void }, edit: (c: AppConfig
   const paths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   before(paths.workspace);
-  const config = defaultConfig();
+  const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
   config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
   config.routing = { chat: ['m'], background: ['m'], retriesPerModel: 0 };

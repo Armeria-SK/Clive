@@ -1,7 +1,8 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
+import { openSetup } from './onboarding.ts';
 import type { Message, Profile } from './api.ts';
 import { Avatar } from './Avatar.tsx';
-import { chatTime, firstLine, toolIcon, type ContextNumbers } from './chat-logic.ts';
+import { chatTime, firstLine, TextThrottle, toolIcon, type ContextNumbers } from './chat-logic.ts';
 import { useNow } from './hooks.ts';
 import { formatNumber, useT, type PlainKey } from './i18n/index.ts';
 import { Icon, type IconName } from './icons.tsx';
@@ -80,31 +81,52 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-interface ReplyProps { profile: Profile | null; text: string; time: number; model: string | null }
+interface ReplyProps {
+  profile: Profile | null;
+  text: string;
+  time: number;
+  // 1 回の返事の最初の文だけ見出し（姿・名前・時刻）を付ける。続きの文は、見出しなしで同じ列に並べる
+  head: boolean;
+}
 
-export const AssistantMessage = memo(function AssistantMessage({ profile, text, time, model }: ReplyProps) {
+export const AssistantMessage = memo(function AssistantMessage({ profile, text, time, head, copyText }: ReplyProps & { copyText: string | null }) {
   return (
-    <div className="chat-reply">
-      <ReplyAvatar profile={profile} live={false} />
+    <div className={`chat-reply${head ? '' : ' cont'}`}>
+      {head ? <ReplyAvatar profile={profile} live={false} /> : <span aria-hidden />}
       <div className="chat-reply-main">
-        <ReplyHead profile={profile} time={time} live={false} />
+        {head && <ReplyHead profile={profile} time={time} live={false} />}
         <div className="chat-reply-body"><Markdown text={text} /></div>
-        <div className="chat-reply-foot">
-          {model && <span className="chat-model">{model}</span>}
-          <CopyButton text={text} />
-        </div>
+        {copyText !== null && (
+          <div className="chat-reply-foot">
+            <CopyButton text={copyText} />
+          </div>
+        )}
       </div>
     </div>
   );
 });
 
-export function LiveReply({ profile, text, time }: Omit<ReplyProps, 'model'>) {
+// 流れている文を、長さに応じた間隔でしか描き直さない。間隔が過ぎていれば、届いた分をすぐ描く。届かなくなったら、残りを間隔の終わりに描く
+const clock = (): number => (typeof performance === 'undefined' ? Date.now() : performance.now());
+
+function useThrottledText(text: string): string {
+  const throttle = useRef<TextThrottle | null>(null);
+  throttle.current ??= new TextThrottle(text);
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
+  const drawn = throttle.current.next(text, clock());
+  useEffect(() => throttle.current!.arm(text, { setTimer: (fn, ms) => { const id = setTimeout(fn, ms); return () => clearTimeout(id); }, now: clock, redraw }), [text]);
+  return drawn;
+}
+
+export function LiveReply({ profile, text, time, head }: ReplyProps) {
+  const t = useT();
+  const drawn = useThrottledText(text);
   return (
-    <div className="chat-reply chat-live">
-      <ReplyAvatar profile={profile} live />
+    <div className={`chat-reply chat-live${head ? '' : ' cont'}`}>
+      {head ? <ReplyAvatar profile={profile} live /> : <span aria-hidden />}
       <div className="chat-reply-main">
-        <ReplyHead profile={profile} time={time} live />
-        <div className="chat-reply-body"><Markdown text={text} /></div>
+        {head ? <ReplyHead profile={profile} time={time} live /> : <span className="chat-live-label">{t('chat.writing')}</span>}
+        <div className="chat-reply-body"><Markdown text={drawn} /></div>
       </div>
     </div>
   );
@@ -123,13 +145,13 @@ function ReplyHead({ profile, time, live }: { profile: Profile | null; time: num
 
 const secondsSince = (startedAt: number | null, now: number): number | null => (startedAt === null ? null : Math.max(0, Math.floor((now - startedAt) / 1000)));
 
-export function ThinkingRow({ profile, model, startedAt }: { profile: Profile | null; model: string | null; startedAt: number | null }) {
+export function ThinkingRow({ profile, startedAt }: { profile: Profile | null; startedAt: number | null }) {
   const t = useT();
   const seconds = secondsSince(startedAt, useNow(1000, startedAt !== null));
   return (
     <div className="chat-think">
       <ReplyAvatar profile={profile} live />
-      <span className="chat-shimmer chat-think-text">{model ? t('chat.thinkingWith', model) : t('chat.thinking')}</span>
+      <span className="chat-shimmer chat-think-text">{t('chat.thinking')}</span>
       {seconds !== null && <span className="chat-meta">{t('chat.seconds', seconds)}</span>}
     </div>
   );
@@ -268,7 +290,7 @@ export function PreSendCard({ message, hint, numbers }: PreSendProps) {
   );
 }
 
-export function SendErrorCard({ message, hint }: { message: string; hint: string | null }) {
+export function SendErrorCard({ message, hint, setup = false }: { message: string; hint: string | null; setup?: boolean }) {
   const t = useT();
   return (
     <div className="chat-fail">
@@ -281,7 +303,9 @@ export function SendErrorCard({ message, hint }: { message: string; hint: string
         </div>
       </div>
       <div className="chat-actions">
-        <a className="btn btn-secondary" href="#/settings"><Icon name="sliders" size={13} />{t('chat.settings')}</a>
+        {setup
+          ? <button type="button" className="btn btn-primary" onClick={openSetup}><Icon name="sparkles" size={13} />{t('chat.send.setupModel')}</button>
+          : <a className="btn btn-secondary" href="#/settings"><Icon name="sliders" size={13} />{t('chat.settings')}</a>}
       </div>
     </div>
   );
