@@ -3,7 +3,7 @@ import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } fro
 import type { IconName } from './icon-paths.ts';
 import { probeMessage, serverText } from './server-text.ts';
 
-export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined }
+export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: Record<string, string | number> | undefined }
 
 export interface ContextNumbers {
   effective: number | null;
@@ -39,14 +39,17 @@ function isProblem(value: unknown): value is ModelProblem {
 }
 
 // 「使えるモデルがない」の 409 は、モデルごとの理由の行（{lines}）をサーバーが文にして入れている（コードには値が付かない）。
-// 画面の言語で出すため、problems の行を、同じ状態のモデルの確認（コード付き）から組み立て直す。組み立てられなければ null（サーバーの文のまま）。
+// 画面の言語で出すため、problems の行を組み立て直す。各行は、problems[] 自身の messageCode / messageParams から作る。
+// 古いサーバーでコードが付かないときだけ、同じ状態のモデルの確認（コード付き）から作る。組み立てられなければ null（サーバーの文のまま）。
 export function noUsableText(body: unknown, models: readonly ModelView[], language: Lang): string | null {
   const record = asRecord(body);
   if (record?.errorCode !== 'engine.no_usable' || !Array.isArray(record.problems) || !record.problems.every(isProblem)) return null;
   const lines: string[] = [];
   for (const problem of record.problems.filter(isProblem)) {
     const probe = models.find(m => m.id === problem.modelId)?.probe ?? null;
-    const message = probe !== null && probe.status === problem.status ? probeMessage(probe, language) : problem.message;
+    const message = problem.messageCode
+      ? probeMessage({ message: problem.message, messageCode: problem.messageCode, messageParams: problem.messageParams }, language)
+      : probe !== null && probe.status === problem.status ? probeMessage(probe, language) : problem.message;
     const hintPart = problem.hint ? serverText('engine.problem.hint_suffix', { hint: problem.hint }, language) : '';
     const line = hintPart === null ? null : serverText('engine.problem.line', { id: problem.modelId, message, hintPart }, language);
     if (line === null) return null;

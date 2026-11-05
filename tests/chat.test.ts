@@ -295,6 +295,10 @@ test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の
   assert.equal(sendFailureOf(new ApiError(409, none), 'x', models).message, engineText('en', 'no_usable', { lines: engineText('en', 'problem.none') }));
   const other = { error: 'busy', errorMessage: '忙しい', errorCode: 'engine.send.busy' };
   assert.equal(sendFailureOf(new ApiError(409, other), 'x', models).message, engineText('en', 'send.busy'), 'ほかのコードは ApiError の訳のまま');
+  const coded = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: served.message, messageCode: served.messageCode, messageParams: served.messageParams }] };
+  assert.equal(sendFailureOf(new ApiError(409, coded), 'x', []).message, expectedEn, 'problems 自身にコードが付いていれば、モデルの一覧が無くても英語');
+  const wrongStatus = { models: [model('local', { probe: { ...unreachable, status: 'ok', messageCode: 'provider.probe.unknown' } })] };
+  assert.equal(sendFailureOf(new ApiError(409, coded), 'x', wrongStatus.models).message, expectedEn, 'コードがあれば、モデルの一覧の状態には頼らない');
   const otherWithProblems = { ...body, errorCode: 'engine.send.busy', problems: body.problems };
   assert.equal(sendFailureOf(new ApiError(409, otherWithProblems), 'x', models).message, engineText('en', 'send.busy'), 'problems があっても、「使えるモデルがない」以外のコードは組み立て直さない');
   const unknown = { ...body, problems: [{ nope: true }] };

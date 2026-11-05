@@ -65,7 +65,8 @@ export interface ChatEngineDeps {
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const ATTACHMENT_PLACEHOLDER = new RegExp(`^(?:${(['ja', 'en'] as const).flatMap(l => [engineText(l, 'attachment.image'), engineText(l, 'attachment.file')]).map(escapeRegExp).join('|')})$`, 'u');
 
-export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined }
+// messageCode / messageParams は、モデルの確認（probe）の messageCode / messageParams と同じ（確認していない・設定に無いときは engine.problem.*）。画面が自分の言語で組み立てられるように添える。
+export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: MessageParams | undefined }
 
 export type SendOutcome =
   | { ok: true; runId: string; messageId?: number }
@@ -201,10 +202,13 @@ export class ChatEngine {
     for (const id of ids) {
       const model = config.models.find(m => m.id === id);
       const provider = model && config.providers.find(p => p.id === model.provider);
-      if (!model || !provider) { problems.push({ modelId: id, status: 'error', message: engineText(language, 'problem.not_in_config') }); continue; }
+      if (!model || !provider) { problems.push({ modelId: id, status: 'error', message: engineText(language, 'problem.not_in_config'), messageCode: 'engine.problem.not_in_config' }); continue; }
       const probe = this.#d.status.get(id);
       if (probe?.status === 'ok') (this.#d.status.coolingDown(id, this.#d.now?.().getTime()) ? cooling : usable).push({ model, provider });
-      else problems.push({ modelId: id, status: probe?.status ?? 'unknown', message: probe?.message ?? engineText(language, 'problem.unchecked'), hint: probe?.hint });
+      else problems.push({
+        modelId: id, status: probe?.status ?? 'unknown', message: probe?.message ?? engineText(language, 'problem.unchecked'), hint: probe?.hint,
+        ...(probe ? (probe.messageCode ? { messageCode: probe.messageCode, ...(probe.messageParams ? { messageParams: probe.messageParams } : {}) } : {}) : { messageCode: 'engine.problem.unchecked' }),
+      });
     }
     return { usable: [...usable, ...cooling], problems };
   }
