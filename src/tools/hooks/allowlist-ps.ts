@@ -248,7 +248,9 @@ export function winArgs(name: string, words: readonly Word[], ext: string, acc: 
 export function runFindstr(words: Word[], acc: Acc, ctx: MatchCtx): void {
   const flags = flagMap('/s /i /n /r /l /m /v /x /b /e /o /c:s /f:path-r /g:path-r /d:s', true);
   const pos: Word[] = [];
+  const dirs: Word[] = [];
   let pattern = false;
+  let recursive = false;
   for (const w of words.slice(1)) {
     if (w.dynamic) acc.add('once', 'list.dynamic', { cmd: 'findstr', detail: w.text }, true);
     if (!(literal(w) && w.text.startsWith('/') && !w.quoted && /^\/[A-Za-z]/u.test(w.text))) { pos.push(w); continue; }
@@ -257,9 +259,23 @@ export function runFindstr(words: Word[], acc: Acc, ctx: MatchCtx): void {
     const def = flags.get(key);
     if (!def || (colon > 0) !== (def.type !== 'bool')) { acc.add('once', 'list.flag', { cmd: 'findstr', flag: w.text }, true); continue; }
     if (key === '/c' || key === '/g') pattern = true;
+    if (key === '/s') recursive = true;
+    if (key === '/d') for (const d of w.text.slice(colon + 1).split(';')) if (d) dirs.push({ ...w, text: d });
     if (colon > 0) checkValue(def.type as ValueType, { ...w, text: w.text.slice(colon + 1) }, acc, 'findstr', key, ctx);
   }
-  for (const w of pattern ? pos : pos.slice(1)) acc.read(w);
+  const operands = pattern ? pos : pos.slice(1);
+  for (const w of operands) acc.read(w);
+  // findstr は、ファイル名のワイルドカード（* ?）を自分で展開し（PowerShell は展開しない）、/s では下の階層まで探し、/d のフォルダの一覧も探す。
+  // 名前で絞る Windows のファイル検索の決まりは真似ず、そのフォルダの名前を全部調べる（秘密のパスがあれば止める）
+  for (const d of dirs) acc.walk(d);
+  for (const w of operands) {
+    if (w.dynamic) continue;
+    const wild = /[*?]/u.test(w.text);
+    if (!recursive && !wild) continue;
+    const dir = w.text.slice(0, Math.max(w.text.lastIndexOf('\\'), w.text.lastIndexOf('/')) + 1);
+    const wildDir = /[*?]/u.test(dir);
+    acc.walk({ ...w, text: dir === '' || wildDir ? '.' : dir, glob: false }, recursive || wildDir);
+  }
 }
 export function runPsSimple(name: string, words: Word[], acc: Acc, ctx: MatchCtx): boolean {
   const args = words.slice(1);

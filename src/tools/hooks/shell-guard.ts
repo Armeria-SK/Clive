@@ -321,7 +321,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const wanted = (name: string): boolean => (list.include.length === 0 || list.include.some(p => wildcardMatches(name, p))) && !list.exclude.some(p => wildcardMatches(name, p));
     for (const head of heads.matches) {
       if (list.items || !isDirectory(head)) { evalAbs(head, head, false, false, false); continue; }
-      const tree = listTree(head, list.deep);
+      const tree = listTree(head, list.deep, undefined, list.skipHidden);
       complete = complete && tree.complete;
       for (const entry of tree.entries) if (wanted(basename(entry)) || isDirectory(entry)) evalAbs(entry, entry, false, false, false);
       if (tree.secret && wanted(basename(tree.secret))) evalAbs(tree.secret, tree.secret, false, false, false);

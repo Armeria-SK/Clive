@@ -319,6 +319,51 @@ test('実機（bash）: 一覧に当たるコマンドは承認なしで動き�
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
+// 7 回目の審査（高）: フォルダを再帰して中身を読むコマンドは、下の秘密のパスを調べていなかった。素のシェルで本当に表示されること（前提）と、Clive のシェルでは止まり、秘密が出ないことを確かめる
+function seedSecrets(s: ReturnType<typeof setup>): void {
+  mkdirSync(s.files('proj/inner'), { recursive: true });
+  writeFileSync(s.files('.env'), 'SECRET=root\n');
+  writeFileSync(s.files('proj/.env'), 'SECRET=proj\n');
+  writeFileSync(s.files('proj/inner/.env'), 'SECRET=inner\n');
+  writeFileSync(s.files('proj/inner/a.txt'), 'plain SECRET-word\n');
+}
+async function expectDenied(s: ReturnType<typeof setup>, commands: readonly string[], raw: (command: string) => string): Promise<void> {
+  for (const command of commands) {
+    assert.match(raw(command), /SECRET=(?:root|proj|inner)/u, `前提: 素のシェルでは秘密が出る: ${command}`);
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.doesNotMatch(outcome.output.content, /SECRET=(?:root|proj|inner)/u, `${command}: 秘密が出た`);
+  }
+}
+
+test('実機（Windows PowerShell 5.1・制限モード）: findstr /s・findstr のワイルドカード・git grep --untracked / --no-index は、フォルダの下に秘密のパスがあれば止まり、秘密は出ない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  seedSecrets(s);
+  if (gitAvailable) spawnSync('git', ['init', '-q'], { cwd: s.paths.workspace });
+  const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  await expectDenied(s, ['findstr /s SECRET *', 'findstr SECRET *', 'findstr /s SECRET proj\\*', 'findstr /s SECRET a.txt .env', 'findstr /s /i secret *.*', ...(gitAvailable ? ['git grep --no-index SECRET', 'git grep --untracked SECRET', 'git grep --no-index SECRET -- proj'] : [])], raw);
+  // 秘密の無いフォルダは、これまでどおり確かめなしで動く
+  mkdirSync(s.files('clean'), { recursive: true });
+  writeFileSync(s.files('clean/c.txt'), 'SECRET-word\n');
+  const clean = await s.call('findstr /s SECRET clean\\*');
+  assert.equal(clean.decision, 'allow', clean.output.content);
+  assert.match(clean.output.content, /SECRET-word/u);
+});
+
+test('実機（bash）: grep -r・diff -r は、フォルダの下に秘密のパスがあれば止まり、秘密は出ない。秘密の無いフォルダは止めない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  seedSecrets(s);
+  mkdirSync(s.files('proj2/inner'), { recursive: true });
+  writeFileSync(s.files('proj2/inner/.env'), 'SECRET=other\n');
+  const raw = (command: string): string => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  await expectDenied(s, ['grep -r SECRET proj', 'grep -rn SECRET .', 'grep -r SECRET', 'grep -R SECRET proj/inner', 'diff -r proj proj2'], raw);
+  mkdirSync(s.files('clean'), { recursive: true });
+  writeFileSync(s.files('clean/c.txt'), 'SECRET-word\n');
+  const clean = await s.call('grep -r SECRET clean');
+  assert.equal(clean.decision, 'allow', clean.output.content);
+  assert.match(clean.output.content, /SECRET-word/u);
+});
+
 // 審査で見つかった: ホームの ~/.gitconfig は、リポジトリの設定の検査に入っていなかった。そこに仕込まれた core.fsmonitor は、許可された `git status` で動く
 for (const shell of ['powershell', 'bash'] as const) {
   const available = shell === 'powershell' ? psAvailable : bashAvailable;

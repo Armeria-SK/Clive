@@ -12,7 +12,8 @@ export const worstLevel = (a: Level, b: Level): Level => (RANK[a] >= RANK[b] ? a
 export interface Reason { key: GuardMessageKey; params: Record<string, string | number>; level: Level; exempt: boolean }
 // list: パイプで次のコマンドに流れるファイル（Get-ChildItem の出力など）として読まれる。word は一覧の元のパスで、フォルダなら中のファイル（deep なら下の階層まで）を読むものとして調べる。
 // items: フォルダの中身ではなく、当たったもの自身（Get-Item・Resolve-Path）。include/exclude: 名前の絞り込み（* と ? だけの指定。空 = すべて）
-export interface ListSpec { deep: boolean; items: boolean; include: string[]; exclude: string[] }
+// skipHidden: 「.」で始まる名前は読まれないものとして飛ばす（rg の既定）
+export interface ListSpec { deep: boolean; items: boolean; include: string[]; exclude: string[]; skipHidden?: boolean }
 // strict: スクリプトブロックの中。パスが分からない読み取りは、確かめでなく今回だけにする
 export interface PathRef { word: Word; mode: 'read' | 'write'; recursive: boolean; list?: ListSpec; strict?: boolean }
 // 書き込み先を組み立てて調べるもの（11.4）。copy: cp・mv・Copy-Item・Move-Item（先がフォルダなら 先/元の名前）、join: New-Item -Path p -Name n（p/n）、rename: Rename-Item（親/n）
@@ -70,6 +71,8 @@ export class Acc {
   strict = false;
   read(word: Word, recursive = false): void { this.paths.push({ word, mode: 'read', recursive, ...(this.strict ? { strict: true } : {}) }); }
   readList(word: Word, list: ListSpec): void { this.paths.push({ word, mode: 'read', recursive: false, list }); }
+  // 再帰して中身を読むコマンド（grep -r・rg・diff -r・findstr /s・git grep --untracked・tar -c）は、-Recurse の一覧と同じに、フォルダの下を歩いて調べる
+  walk(word: Word, deep = true, skipHidden = false): void { this.readList(word, { deep, items: false, include: [], exclude: [], ...(skipHidden ? { skipHidden } : {}) }); }
   write(word: Word, recursive = false): void { this.paths.push({ word, mode: 'write', recursive }); }
   result(): StatementResult {
     let level: Level = 'allow';
@@ -243,6 +246,10 @@ export function parseGnu(spec: GnuSpec, words: readonly Word[], acc: Acc, ctx: M
   });
   return { pos, seen, values, ddAt: ddAt < 0 ? pos.length : ddAt };
 }
+
+// 再帰して読むコマンドの、読み始めのフォルダ。パスが無ければ今のフォルダ
+const HERE: Word = { text: '.', dynamic: false, glob: false, quoted: false, home: false, kind: 'plain' };
+export const walkAll = (acc: Acc, operands: readonly Word[], skipHidden = false): void => { for (const w of operands.length > 0 ? operands : [HERE]) acc.walk(w, true, skipHidden); };
 
 // コマンドの語が、決まった綴りかどうか（引用符・変数・展開が無い）
 export const literal = (w: Word | undefined): boolean => w !== undefined && w.kind === 'plain' && !w.dynamic && !w.glob && !w.home;

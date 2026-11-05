@@ -1,6 +1,6 @@
 // git の許可の一覧（security-self-api.md §11.3.3）。リポジトリの設定は MatchCtx.repo（git-repo.ts）が調べる。ここは引数と、サブコマンドごとの扱い。
 
-import { Acc, isFlagLike, literal, parseGnu, type GnuSpec, type MatchCtx } from './allowlist-core.ts';
+import { Acc, isFlagLike, literal, parseGnu, walkAll, type GnuSpec, type MatchCtx } from './allowlist-core.ts';
 import type { Word } from './shell-lex.ts';
 
 const REV = /^[A-Za-z0-9_./~^@{}:-]+$/u;
@@ -35,6 +35,14 @@ const WRITE: Record<string, 'read' | 'write' | 'none'> = {
   rebase: 'none', 'cherry-pick': 'none', revert: 'none', tag: 'none', branch: 'none', apply: 'read', am: 'read', notes: 'none',
 };
 const NET = new Set(['fetch', 'pull', 'clone', 'ls-remote', 'submodule', 'init', 'worktree']);
+
+// git grep --untracked / --no-index は、作業フォルダのファイルを（追跡していないものまで）歩いて読む。git の pathspec の * ? [ ] と :(magic) は git が展開する（* は / にも当たる）ので、起点を決められない。今のフォルダから歩く
+function walkPathspecs(acc: Acc, operands: readonly Word[]): void {
+  const magic = (w: Word): boolean => !w.dynamic && (/[*?[]/u.test(w.text) || w.text.startsWith(':'));
+  const roots = operands.filter(w => !magic(w));
+  if (roots.length < operands.length || roots.length === 0) walkAll(acc, []);
+  for (const w of roots) acc.walk(w);
+}
 
 function positional(words: readonly Word[], ddAt: number, mode: 'rev' | 'path' | 's' | 'none' | 'read' | 'write', acc: Acc, cmd: string): void {
   words.forEach((w, i) => {
@@ -86,6 +94,8 @@ export function runGit(words: Word[], acc: Acc, ctx: MatchCtx): void {
     const p = parseGnu(spec(sub, readSub.flags, { numeric: readSub.numeric ?? false, ...(readSub.patFlags ? { patFlags: readSub.patFlags } : {}) }), rest, acc, ctx);
     const pos = readSub.first === 'pat' && !readSub.patFlags?.some(f => p.seen.has(f)) ? p.pos.slice(1) : p.pos;
     positional(pos, Math.max(0, p.ddAt - (p.pos.length - pos.length)), readSub.pos, acc, `git ${sub}`);
+    if (sub === 'grep' && (p.seen.has('--untracked') || p.seen.has('--no-index'))) walkPathspecs(acc, pos);
+    else if (sub === 'diff' && p.seen.has('--no-index')) for (const w of p.pos) acc.walk(w);
     return;
   }
   switch (sub) {

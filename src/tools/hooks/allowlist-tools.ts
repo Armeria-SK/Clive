@@ -1,7 +1,7 @@
 // 許可の一覧の表（security-self-api.md §11.3.1・11.3.4・11.3.5・11.7）: bash のコマンドと、PowerShell からも呼ぶ外部の道具（rg・tar・curl・言語の道具）。
 // 表にある綴り以外のフラグ・形は、すべて「今回だけ」（exempt: 持ち主の tools.shell.allow で外せる）。
 
-import { Acc, checkUrl, checkValue, envAssignOk, flagMap, isFlagLike, literal, parseGnu, type CopyUse, type GnuSpec, type MatchCtx } from './allowlist-core.ts';
+import { Acc, checkUrl, checkValue, envAssignOk, flagMap, isFlagLike, literal, parseGnu, walkAll, type CopyUse, type GnuSpec, type MatchCtx } from './allowlist-core.ts';
 import type { Word } from './shell-lex.ts';
 
 export type Run = (words: Word[], acc: Acc, ctx: MatchCtx) => void;
@@ -34,14 +34,22 @@ gnu({ names: ['cut'], ro: true, flags: '-d:s -f:s -c:s -b:s -s --complement', po
 gnu({ names: ['tr'], ro: true, flags: '-d -s -c -C', pos: ['s', 's'] });
 gnu({ names: ['nl', 'tac', 'rev'], ro: true, flags: '', pos: ['path-r…'] });
 gnu({ names: ['column'], ro: true, flags: '-t -s:s', pos: ['path-r…'] });
-gnu({ names: ['diff'], ro: true, flags: '-u -U:n -r -N -q -w -b -B -i -y --brief --color=never --label:s', pos: ['path-r', 'path-r'] });
+gnu({ names: ['diff'], ro: true, flags: '-u -U:n -r -N -q -w -b -B -i -y --brief --color=never --label:s', pos: ['path-r', 'path-r'] }, false, (p, acc) => { if (p.seen.has('-r')) for (const w of p.pos) acc.walk(w); });
 gnu({ names: ['cmp'], ro: true, flags: '-l -s', pos: ['path-r', 'path-r'] });
 gnu({ names: ['comm'], ro: true, flags: '-1 -2 -3', pos: ['path-r', 'path-r'] });
 const GREP_FLAGS = '-r -R -n -i -l -L -c -v -w -x -o -E -F -P -h -H -s -q -I -a -z -Z --null -A:n -B:n -C:n -m:n -e:pat -f:path-r --include:pat --exclude:pat --exclude-dir:pat --color=never';
-gnu({ names: ['grep', 'egrep', 'fgrep'], ro: true, numeric: true, flags: GREP_FLAGS, pos: ['pat', 'path-r…'], patFlags: ['-e', '-f'] });
+// -r / -R は、パスのフォルダの下を歩く（パスが無ければ今のフォルダ）。--include などの絞り込みは真似ない（全部を調べる）
+gnu({ names: ['grep', 'egrep', 'fgrep'], ro: true, numeric: true, flags: GREP_FLAGS, pos: ['pat', 'path-r…'], patFlags: ['-e', '-f'] }, false, (p, acc) => {
+  if (p.seen.has('-r') || p.seen.has('-R')) walkAll(acc, p.seen.has('-e') || p.seen.has('-f') ? p.pos : p.pos.slice(1));
+});
 gnu({
   names: ['rg'], numeric: false, patFlags: ['-e', '--files', '--type-list'], pos: ['pat', 'path-r…'],
   flags: '-n -N -i -S -s -w -v -l -c -o -F -x -u -uu -uuu -L -e:pat -g:pat -t:s -T:s -A:n -B:n -C:n -m:n -M:n -d:n --hidden --no-ignore --files --json --no-heading --heading --vimgrep --color=never --max-depth:n --sort=path --type-list --count-matches --files-with-matches --files-without-match',
+}, false, (p, acc) => {
+  // rg は、パスのフォルダの下を歩く（パスが無ければ今のフォルダ）。名前だけを出す --files と --type-list は読まない。
+  // 既定では「.」で始まる名前を読まないが、-u -uu -uuu --hidden と -g（グロブは隠しも読む。本物の rg 14 で確かめた）があれば読む。無視の一覧（.gitignore）は真似ない
+  if (p.seen.has('--files') || p.seen.has('--type-list')) return;
+  walkAll(acc, p.seen.has('-e') ? p.pos : p.pos.slice(1), !['-u', '-uu', '-uuu', '--hidden', '-g'].some(f => p.seen.has(f)));
 });
 gnu({ names: ['fd', 'fdfind'], flags: '-e:s -t:f|d|l -H -I -d:n --max-depth:n -g -a -l -0 -E:pat -s -i -F -L --color=never', pos: ['pat', 'path-r…'] });
 gnu({ names: ['file'], flags: '-b -i -L --mime-type --mime-encoding', pos: ['path-r…'] });

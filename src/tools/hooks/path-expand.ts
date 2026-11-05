@@ -115,7 +115,8 @@ export function wildcardMatches(name: string, pattern: string): boolean {
 }
 
 // フォルダの中身（deep なら下の階層まで）の一覧。幅優先で、上限を超えたら途中まで返して complete: false。入れないフォルダ・たどれないリンクがあっても complete: false
-export function listTree(dir: string, deep: boolean, cap = LIST_CAP): { entries: string[]; complete: boolean; secret?: string } {
+// skipHidden: 「.」で始まる名前は、一覧にも入れず、その下へも入らず、秘密を探すときにも数えない（rg が既定で読まないもの）
+export function listTree(dir: string, deep: boolean, cap = LIST_CAP, skipHidden = false): { entries: string[]; complete: boolean; secret?: string } {
   if (isRemotePath(dir)) return { entries: [], complete: false };
   const entries: string[] = [];
   const queue = [dir];
@@ -128,6 +129,7 @@ export function listTree(dir: string, deep: boolean, cap = LIST_CAP): { entries:
     let items: import('node:fs').Dirent[];
     try { items = readdirSync(current, { withFileTypes: true }); } catch { complete = false; continue; }
     for (const item of items) {
+      if (skipHidden && item.name.startsWith('.')) continue;
       const full = join(current, item.name);
       if (secret === undefined && isSecretPath(full)) secret = full;
       // 上限を超えても、秘密のパスを探すために、名前を数え続ける（一覧には足さない）

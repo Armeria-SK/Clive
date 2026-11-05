@@ -183,7 +183,7 @@ const LEGIT_PS = [
   'Select-String -Path *.txt -Pattern a', 'Select-String -Pattern a -Path sub/*.txt', 'Select-String -Path a.txt -Pattern a -CaseSensitive', 'sls a a.txt', 'Select-String -Path notes.md -Pattern n -Context 1,1',
   'Test-Path a.txt', 'Test-Path sub -PathType Container', 'Get-Item a.txt', 'Get-Item a.txt | Select-Object Length, LastWriteTime', 'Resolve-Path sub', 'Get-FileHash a.txt', 'Get-FileHash a.txt -Algorithm SHA256', 'Get-Item notes.md | Get-Content',
   'Get-Location', 'Join-Path sub z.txt', 'Split-Path a.txt -Leaf', 'Get-Date', 'Get-Date -Format yyyy', 'Write-Output hello', 'Write-Host hi', 'Start-Sleep -Milliseconds 10', 'Get-Command git', 'Get-Process | Select-Object -First 3 Name',
-  'git status', 'git status --short | Select-String modified', 'git log --oneline -n 5', 'git diff --stat', 'git branch', 'rg foo', 'rg -n foo sub',
+  'git status', 'git status --short | Select-String modified', 'git log --oneline -n 5', 'git diff --stat', 'git branch', 'rg foo sub', 'rg -n foo sub', 'rg --files',
   '$f = Get-ChildItem sub; $f.Count', 'foreach ($f in Get-ChildItem sub) { $f.Name }', 'if (Test-Path a.txt) { Get-Content a.txt }', 'Set-Location sub; Get-ChildItem', 'Write-Output hello | Select-String h', 'echo hello | Measure-Object -Character',
   'Get-Content a.txt > $null', 'Get-Content a.txt 2>&1',
 ];
