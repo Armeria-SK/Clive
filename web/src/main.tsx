@@ -9,7 +9,7 @@ import '@fontsource/noto-serif-jp/500.css';
 import '@fontsource/noto-serif-jp/600.css';
 import { api } from './api.ts';
 import { App } from './App.tsx';
-import { initLanguage, loadTimezone } from './i18n/index.ts';
+import { initLanguage, loadServerSettings } from './i18n/index.ts';
 import './styles/tokens.css';
 import './styles.css';
 import './styles/components.css';
@@ -19,7 +19,7 @@ import { initTheme } from './theme.ts';
 async function start(): Promise<void> {
   initTheme();
   initLanguage();
-  await loadTimezone(api.settings);
+  await loadServerSettings(api.settings);
   createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);
 }
 

@@ -8,6 +8,7 @@ import { useEscapeLayer } from './hooks.ts';
 import { useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
+import { LanguagePrompt } from './LanguagePrompt.tsx';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
 import { NarrowHeader } from './NarrowHeader.tsx';
@@ -397,6 +398,7 @@ export function App() {
                 panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onSearch={openPalette} onTogglePanel={togglePanel}
               />
             )}
+          <LanguagePrompt />
           <div className="content" key={viewKey}>
             {route.page === 'chat' && (
               <Chat

@@ -1,126 +1,209 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, type ModelView, type Profile, type SettingsView } from './api.ts';
-import { useSaveShortcut, useTheme } from './hooks.ts';
-import { formatNumber, getLanguagePreference, LANGUAGES, setLanguagePreference, setTimezone, useT, type LanguagePreference } from './i18n/index.ts';
-import { ProfileEditor } from './Profile.tsx';
-import { setThemeMode, type ThemeMode } from './theme.ts';
+import { useSaveShortcut } from './hooks.ts';
+import { Icon } from './icons.tsx';
+import { applyServerSettings, formatDateTimeSmart, getLanguagePreference, useT } from './i18n/index.ts';
+import { adoptLanguageInDraft, withAdoptedLanguage } from './language.ts';
+import { modLabel } from './keys.ts';
+import {
+  countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
+} from './settings/model.ts';
+import { SectionView } from './settings/SectionView.tsx';
+import { toast } from './toast.tsx';
+import './styles/settings.css';
 
-const STATUS_LABEL: Record<string, string> = {
-  ok: '使えます', too_small: 'コンテキスト不足', exceeds_model: 'モデル上限超え', unknown: '長さ不明',
-  unreachable: '接続できません', no_api_key: 'API キー未設定', not_found: 'モデルがありません', error: 'エラー',
-};
-const fmt = (n?: number) => (typeof n === 'number' ? formatNumber(n) : '—');
-const syncTimezone = (config: Record<string, any>) => { if (typeof config.timezone === 'string') setTimezone(config.timezone); };
+const SECTION_KEY = 'clive.settingsSection';
+
+function loadSection(): SettingsSection {
+  try { const saved = sessionStorage.getItem(SECTION_KEY); if (isSection(saved)) return saved; } catch { }
+  return 'models';
+}
+
+const withoutProfile = (config: Config): string => JSON.stringify({ ...config, profile: undefined });
 
 export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   const t = useT();
-  const [settings, setSettings] = useState<SettingsView | null>(null);
+  const [view, setView] = useState<SettingsView | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [saved, setSaved] = useState<Config | null>(null);
+  const [draft, setDraft] = useState<Config | null>(null);
   const [models, setModels] = useState<ModelView[]>([]);
-  const [draft, setDraft] = useState('');
-  const [problems, setProblems] = useState<string[]>([]);
-  const [saved, setSaved] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [section, setSectionState] = useState<SettingsSection>(loadSection);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [problems, setProblems] = useState<Problem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [restartRequired, setRestartRequired] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  const [reverts, setReverts] = useState(0);
+  const scroller = useRef<HTMLDivElement>(null);
+  const pendingField = useRef<string | null>(null);
+  const navRef = useRef<HTMLElement>(null);
 
-  async function load() {
-    const [s, m] = await Promise.all([api.settings(), api.models()]);
-    setSettings(s); setModels(m.models); setDraft(JSON.stringify(s.config, null, 2)); syncTimezone(s.config);
-  }
-  useEffect(() => { void load(); }, []);
-  const { mode: themeMode } = useTheme();
-  useSaveShortcut(() => { if (settings && !busy) void save(); });
+  const setSection = useCallback((next: SettingsSection) => {
+    setSectionState(next);
+    try { sessionStorage.setItem(SECTION_KEY, next); } catch { }
+    scroller.current?.scrollTo({ top: 0 });
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoadFailed(false);
+    try {
+      const [s, m] = await Promise.all([api.settings(), api.models()]);
+      setView(s); setModels(m.models); setSaved(s.config); setDraft(s.config); setRestartRequired(s.restartRequired); setProblems([]);
+      applyServerSettings(s);
+    } catch { setLoadFailed(true); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  // 設定を開いたまま、ほかの場所で言語が保存されたら、保存済みと編集中の language を合わせる
+  const preference = getLanguagePreference();
+  const savedLanguage = useRef<unknown>(undefined);
+  savedLanguage.current = saved?.language;
+  useEffect(() => {
+    setSaved(current => (current ? withAdoptedLanguage(current, preference) : current));
+    setDraft(current => (current ? adoptLanguageInDraft(current, savedLanguage.current, preference) : current));
+  }, [preference]);
+
+  const dirty = saved && draft ? countChanges(saved, draft) : 0;
+  const update = useCallback((change: (config: Config) => Config) => { setDraft(current => (current ? change(current) : current)); }, []);
 
   async function probe() {
-    setBusy(true);
-    try { setModels((await api.probe()).models); } finally { setBusy(false); }
+    setProbing(true);
+    try { setModels((await api.probe()).models); } catch { toast({ title: t('toast.actionFailed'), icon: 'alert' }); } finally { setProbing(false); }
   }
 
   async function save() {
-    setProblems([]); setSaved(false);
-    let parsed: unknown;
-    try { parsed = JSON.parse(draft); } catch { setProblems(['JSON として読めません（カンマや引用符を確認してください）']); return; }
-    setBusy(true);
+    if (!saved || !draft || busy || dirty === 0) return;
+    setBusy(true); setProblems([]);
     try {
-      const result = await api.saveSettings(parsed);
-      setSettings(result); setModels(result.models); setDraft(JSON.stringify(result.config, null, 2)); setSaved(true); syncTimezone(result.config);
+      let next: Config;
+      if (withoutProfile(draft) !== withoutProfile(saved)) {
+        const result = await api.saveSettings(draft);
+        setView(result); setModels(result.models); setRestartRequired(result.restartRequired);
+        next = result.config;
+        void api.profile().then(onProfile).catch(() => undefined);
+      } else {
+        const p = await api.saveProfile(draft.profile);
+        onProfile(p);
+        next = { ...saved, profile: { ...saved.profile, name: p.name, shape: p.shape, color: p.color, motion: p.motion } };
+      }
+      setSaved(next); setDraft(next);
+      applyServerSettings({ config: next });
+      setLastSavedAt(Date.now());
+      toast({ kind: 'done', icon: 'check', title: t('settings.saved') });
     } catch (error) {
-      if (error instanceof ApiError) setProblems(error.body?.problems?.length ? error.body.problems : [error.message]);
-      else setProblems(['保存できませんでした']);
+      const texts = error instanceof ApiError ? (error.body?.problems?.length ? error.body.problems as string[] : [error.message]) : [t('settings.saveFailed')];
+      setProblems(texts.map(text => parseProblem(text, draft)));
     } finally { setBusy(false); }
   }
+  useSaveShortcut(() => { void save(); });
 
-  if (!settings) return <section className="page"><p className="muted">読み込み中…</p></section>;
+  // 元に戻したら、画面の中だけに残っている入力（JSON の欄に書きかけの文字など）も捨てる
+  const revert = () => { if (saved) { setDraft(saved); setProblems([]); setReverts(n => n + 1); } };
+  const goProblem = (problem: Problem) => {
+    if (problem.section) setSection(problem.section);
+    if (problem.modelId) setSelectedModel(problem.modelId);
+    if (problem.providerId) setSelectedProvider(problem.providerId);
+    pendingField.current = problem.path;
+  };
+  useEffect(() => {
+    const path = pendingField.current;
+    if (!path) return;
+    pendingField.current = null;
+    const el = [...(scroller.current?.querySelectorAll<HTMLElement>('[data-field]') ?? [])].find(node => node.dataset.field === path);
+    el?.scrollIntoView({ block: 'center' });
+  });
+
+  // 狭い画面では節の一覧が横に並ぶので、選んでいる節（前回開いていた節など）が見える所まで寄せる
+  const loaded = Boolean(saved && draft && view);
+  useEffect(() => { navRef.current?.querySelector('.active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' }); }, [section, loaded]);
+
+  const meta = useMemo(() => SECTION_GROUPS.flatMap(g => g.items).find(i => i.id === section)!, [section]);
+
+  if (!saved || !draft || !view) {
+    return (
+      <section className="set-loading">
+        <p className="muted">{loadFailed ? t('settings.loadFailed') : t('settings.loading')}</p>
+        {loadFailed && <button className="btn btn-secondary" onClick={() => void load()}>{t('settings.retry')}</button>}
+      </section>
+    );
+  }
+
+  const dot = (id: SettingsSection) => sectionChanged(saved, draft, id) || problems.some(p => p.section === id) || (id === 'server' && restartRequired);
 
   return (
-    <section className="page">
-      <h1>設定</h1>
-      {settings.configError && (
-        <div className="error-panel">
-          <p>設定ファイルに問題があるため、直前の正しい設定で動いています。</p>
-          <ul>{settings.configError.problems.map(p => <li key={p}>{p}</li>)}</ul>
-        </div>
-      )}
-      {settings.restartRequired && <p className="notice warning">server の設定を変えました。反映するには Clive を再起動してください。</p>}
-
-      <h2>{t('settings.appearance')}</h2>
-      <div className="field">
-        <label htmlFor="display-theme">{t('settings.theme')}</label>
-        <select id="display-theme" value={themeMode} onChange={e => setThemeMode(e.target.value as ThemeMode)}>
-          <option value="auto">{t('settings.theme.auto')}</option>
-          <option value="light">{t('settings.theme.light')}</option>
-          <option value="dark">{t('settings.theme.dark')}</option>
-        </select>
-      </div>
-      <div className="field">
-        <label htmlFor="display-language">{t('settings.language')}</label>
-        <select id="display-language" value={getLanguagePreference()} onChange={e => setLanguagePreference(e.target.value as LanguagePreference)}>
-          <option value="auto">{t('settings.language.auto')}</option>
-          {LANGUAGES.map(lang => <option key={lang} value={lang}>{t(`lang.${lang}`)}</option>)}
-        </select>
-        <p className="muted small">{t('settings.language.hint')}</p>
-      </div>
-
-      <h2>名前と姿</h2>
-      <ProfileEditor onSaved={p => { onProfile(p); void load(); }} />
-
-      <h2>モデルとコンテキスト長</h2>
-      <p className="muted">
-        「必要」を下回るモデルは使いません（黙って切り捨てないため）。ローカル LLM のコンテキスト長の決め方は、README の「ローカル LLM のコンテキスト長」を見てください。
-      </p>
-      <div className="table-wrap">
-        <table className="models">
-          <thead><tr><th>モデル</th><th>状態</th><th>実際に使う長さ</th><th>必要</th><th>設定 / 実測 / モデル上限</th><th>内容</th></tr></thead>
-          <tbody>
-            {models.map(m => (
-              <tr key={m.id}>
-                <td><strong>{m.label}</strong>{m.inChat && <span className="tag">チャット</span>}<br /><code>{m.provider} / {m.model}</code></td>
-                <td><span className={`badge ${m.probe?.status === 'ok' ? 'ok' : m.probe ? 'bad' : ''}`}>{m.probe ? STATUS_LABEL[m.probe.status] ?? m.probe.status : '未確認'}</span></td>
-                <td>{fmt(m.probe?.effective)}</td>
-                <td>{fmt(m.probe?.required)}</td>
-                <td>{fmt(m.probe?.declared)} / {fmt(m.probe?.measured)} / {fmt(m.probe?.modelMax)}</td>
-                <td>{m.probe?.message}{m.probe?.hint && <p className="hint">直し方: {m.probe.hint}</p>}</td>
-              </tr>
+    <section className="set">
+      <nav className="set-nav" ref={navRef} aria-label={t('nav.settings')}>
+        <h1 className="set-nav-title">{t('nav.settings')}</h1>
+        {SECTION_GROUPS.map(group => (
+          <div className="set-nav-group" key={group.label}>
+            <span className="set-nav-label">{t(group.label)}</span>
+            {group.items.map(item => (
+              <button key={item.id} className={`set-nav-item${item.id === section ? ' active' : ''}`} aria-current={item.id === section ? 'page' : undefined} onClick={() => setSection(item.id)}>
+                <span>{t(item.label)}</span>
+                {dot(item.id) && <span className="set-dot" role="img" aria-label={t('settings.field.changed')} />}
+              </button>
             ))}
-          </tbody>
-        </table>
-      </div>
-      <button onClick={() => void probe()} disabled={busy}>確認し直す</button>
-
-      <h2>API キー</h2>
-      <p className="muted">キーの値は画面に出しません。.env か OS の環境変数に書いて、Clive を再起動してください。</p>
-      <ul className="keys">
-        {Object.entries(settings.apiKeys).map(([name, set]) => (
-          <li key={name}><code>{name}</code> <span className={`badge ${set ? 'ok' : 'bad'}`}>{set ? '設定済み' : '未設定'}</span></li>
+          </div>
         ))}
-      </ul>
+      </nav>
 
-      <h2>設定ファイル</h2>
-      <p className="muted"><code>{settings.configPath}</code>。保存すると検証してから書き込み、前の版を .bak に残します。</p>
-      <textarea className="config-editor" value={draft} onChange={e => { setDraft(e.target.value); setSaved(false); }} spellCheck={false} rows={28} aria-label="設定ファイル" />
-      {problems.length > 0 && <div className="error-panel"><ul>{problems.map(p => <li key={p} className="pre">{p}</li>)}</ul></div>}
-      {saved && <p className="notice ok">保存して、モデルを確認し直しました。</p>}
-      <div className="row">
-        <button onClick={() => void save()} disabled={busy}>保存</button>
-        <button className="secondary" onClick={() => void load()} disabled={busy}>元に戻す</button>
+      <div className="set-main">
+        <div className="set-scroll" ref={scroller}>
+          <div className="set-inner" key={section}>
+            {view.configError && (
+              <div className="set-banner" role="alert">
+                <span className="set-banner-icon"><Icon name="alert" size={16} /></span>
+                <div className="set-banner-body">
+                  <strong>{t('settings.configBroken')}</strong>
+                  <ul>{view.configError.problems.map(p => <li key={p}>{p}</li>)}</ul>
+                </div>
+              </div>
+            )}
+            <div className="set-head">
+              <span className="set-crumb">{t('settings.breadcrumb')}</span>
+              <h2 className="set-title">{t(meta.label)}</h2>
+              <span className="set-desc">{t(meta.desc)}</span>
+            </div>
+            {problems.length > 0 && (
+              <div className="set-banner" role="alert">
+                <span className="set-banner-icon"><Icon name="alert" size={16} /></span>
+                <div className="set-banner-body">
+                  <strong>{t('settings.problemsTitle', problems.length)}</strong>
+                  {problems.map(p => (
+                    <button key={p.text} className="set-problem" onClick={() => goProblem(p)}>
+                      {p.path && <span className="set-problem-path">{p.path}</span>}<span>{p.message}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {restartRequired && (
+              <div className="set-restart" role="status">
+                <span className="set-restart-icon"><Icon name="refresh" size={15} /></span>
+                <span><strong>{t('settings.restartRequired')}</strong> {t('settings.restartHowto')}</span>
+              </div>
+            )}
+            <SectionView
+              key={reverts} section={section} draft={draft} saved={saved} update={update} problems={problems}
+              models={models} probing={probing} onProbe={() => void probe()}
+              selectedModel={selectedModel} onSelectModel={setSelectedModel} selectedProvider={selectedProvider} onSelectProvider={setSelectedProvider}
+              apiKeys={view.apiKeys} configPath={view.configPath} hasConfigError={Boolean(view.configError)} lastSavedAt={lastSavedAt}
+            />
+          </div>
+        </div>
+        {dirty > 0 && (
+          <div className="set-bar" role="region" aria-label={t('settings.bar.label')}>
+            <span className="set-bar-dot" />
+            <span className="set-bar-text">{t('settings.bar.changes', dirty)}</span>
+            {lastSavedAt && <span className="set-bar-last">{t('settings.bar.lastSaved', formatDateTimeSmart(lastSavedAt))}</span>}
+            <span className="set-bar-fill" />
+            <button className="btn btn-ghost" onClick={revert} disabled={busy}>{t('settings.bar.revert')}</button>
+            <button className="btn btn-primary" onClick={() => void save()} disabled={busy}>{t('settings.bar.save')}<span className="set-bar-kbd">{modLabel()}S</span></button>
+          </div>
+        )}
       </div>
     </section>
   );

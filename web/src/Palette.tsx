@@ -3,7 +3,8 @@ import { api, type Conversation, type SkillSummary, type Task, type TaskStatus, 
 import { useExit, useTheme } from './hooks.ts';
 import { Icon } from './icons.tsx';
 import type { IconName } from './icon-paths.ts';
-import { formatRelative, getLanguage, setLanguagePreference, useT, type PlainKey } from './i18n/index.ts';
+import { formatRelative, getLanguage, useT, type PlainKey } from './i18n/index.ts';
+import { saveLanguage } from './language.ts';
 import { isComposing, modLabel } from './keys.ts';
 import { flattenPalette, filterPalette, moveIndex, type PaletteGroup, type PaletteItem } from './palette.ts';
 import { chatHash } from './routes.ts';
@@ -77,7 +78,7 @@ function PaletteDialog({ narrow, panelOpen, worker, conversations, leaving, onCl
       entry('memory', 'bookmark', t('palette.openMemory'), go('#/memory')),
       entry('settings', 'sliders', t('palette.openSettings'), go('#/settings')),
       entry('models', 'cpu', t('palette.openModels'), go('#/settings'), { sub: t('nav.settings') }),
-      entry('language', 'globe', t('palette.switchLanguage', t(`lang.${otherLanguage}`)), () => setLanguagePreference(otherLanguage)),
+      entry('language', 'globe', t('palette.switchLanguage', t(`lang.${otherLanguage}`)), () => { saveLanguage(otherLanguage).catch(() => toast({ title: t('toast.actionFailed'), icon: 'alert' })); }),
     ];
     return [
       { key: 'actions', label: t('palette.group.actions'), items: actions },

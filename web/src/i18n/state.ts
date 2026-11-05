@@ -5,8 +5,6 @@ export const LANGUAGES: readonly Lang[] = ['ja', 'en'];
 export const DEFAULT_LANGUAGE: Lang = 'ja';
 export const DEFAULT_TIMEZONE = 'Asia/Tokyo';
 
-const STORAGE_KEY = 'clive.language';
-
 export function resolveLanguage(saved: string | null | undefined, browserLanguages: readonly string[]): Lang {
   const savedLang = LANGUAGES.find(l => l === saved);
   if (savedLang) return savedLang;
@@ -34,14 +32,6 @@ function browserLanguages(): readonly string[] {
   return navigator.language ? [navigator.language] : [];
 }
 
-function readSaved(): LanguagePreference {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === 'ja' || saved === 'en') return saved;
-  } catch { }
-  return 'auto';
-}
-
 function changed(): void {
   version += 1;
   for (const listener of listeners) listener();
@@ -53,17 +43,15 @@ function applyLanguage(): void {
   changed();
 }
 
+// 言語はサーバーの設定 language（無ければ auto = ブラウザの言語）で決まる。ブラウザには保存しない。
 export function initLanguage(): void {
-  preference = readSaved();
+  preference = 'auto';
   applyLanguage();
 }
 
+// サーバーの設定の language を画面に反映する（設定を読んだとき、保存したときに呼ぶ）。
 export function setLanguagePreference(next: LanguagePreference): void {
   preference = next;
-  try {
-    if (next === 'auto') localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, next);
-  } catch { }
   applyLanguage();
 }
 

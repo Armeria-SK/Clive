@@ -120,11 +120,6 @@ select { font: inherit; color: var(--text); background: var(--bg); border: 1px s
 .answer { border: 2px solid var(--warn); border-radius: var(--radius); padding: 12px 14px; margin: 16px 0; background: color-mix(in srgb, var(--warn) 7%, var(--panel)); }
 .task-transcript { margin-top: 24px; }
 .task-transcript summary { cursor: pointer; margin-bottom: 12px; }
-.profile-editor { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
-.avatar-preview { display: flex; gap: 16px; align-items: center; }
-.shape-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 6px; margin: 12px 0; }
-.shape-option { background: transparent; border: 1px solid var(--line); padding: 5px; display: grid; place-items: center; }
-.shape-option.selected { border: 2px solid var(--accent); }
 
 .bot-avatar { overflow: visible; flex-shrink: 0; }
 .bot-avatar[data-motion='float'] { animation: avatar-float 3.2s ease-in-out infinite; }

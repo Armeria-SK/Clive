@@ -75,6 +75,8 @@ export interface ReviewJob {
   changes: MemoryEvent[];
 }
 
+export interface TemplatesView { language: string; rules: string; files: Array<{ name: string; content: string }> }
+
 export class ApiError extends Error {
   readonly status: number;
   readonly body: any;
@@ -150,4 +152,5 @@ export const api = {
   updateCuriosity: (id: number, patch: { status?: CuriosityItem['status']; result?: string }) => call(`/api/curiosity/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   curiosityTask: (id: number) => call(`/api/curiosity/${id}/task`, { method: 'POST', body: '{}' }),
   history: (q: string, days?: number) => call<{ hits: HistoryHit[] }>(`/api/history?q=${encodeURIComponent(q)}${days ? `&days=${days}` : ''}`),
+  templates: (language: string) => call<TemplatesView>(`/api/templates/${encodeURIComponent(language)}`),
 };

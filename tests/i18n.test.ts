@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { DAY_MAP } from '../src/tasks/schedule.ts';
 import { en } from '../web/src/i18n/en.ts';
 import {
-  formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getTimezone, initLanguage, loadTimezone, parseZonedInput, pluralEn,
+  applyServerSettings, formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getTimezone, initLanguage, loadServerSettings, parseZonedInput, pluralEn,
   resolveLanguage, setLanguagePreference, setTimezone, startOfDay, t, timezoneLabel,
 } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
@@ -11,6 +11,7 @@ import { subscribe } from '../web/src/i18n/state.ts';
 import { WEEKDAYS } from '../web/src/weekdays.ts';
 
 interface BrowserInit { stored?: string; languages?: string[]; language?: string; storageThrows?: boolean }
+// 言語はブラウザに保存しない（サーバーの設定）。古い保存値が残っていても読まないことも確かめる。
 
 function makeBrowser(init: BrowserInit) {
   const store = new Map<string, string>();
@@ -54,18 +55,12 @@ test('resolveLanguage: 保存した値 → ブラウザの言語の主の部分 
   assert.equal(resolveLanguage(undefined, ['en']), 'en');
 });
 
-test('initLanguage: 保存した値 → navigator.languages → ja の順で決まり、<html lang> が追従する', () => {
-  const saved = makeBrowser({ stored: 'en', languages: ['ja-JP'] });
-  withBrowser(saved, () => {
-    initLanguage();
-    assert.equal(getLanguage(), 'en');
-    assert.equal(getLanguagePreference(), 'en');
-    assert.equal(saved.documentElement.lang, 'en');
-  });
+test('initLanguage: ブラウザの言語（navigator.languages の主の部分）→ ja の順で決まり、<html lang> が追従する。ブラウザの保存値は読まない', () => {
   const gb = makeBrowser({ languages: ['en-GB', 'ja'] });
   withBrowser(gb, () => {
+    setLanguagePreference('ja');
     initLanguage();
-    assert.equal(getLanguage(), 'en');
+    assert.equal(getLanguage(), 'en', '以前に決めた言語は引き継がず、ブラウザの言語から始める');
     assert.equal(getLanguagePreference(), 'auto');
     assert.equal(gb.documentElement.lang, 'en');
   });
@@ -80,20 +75,21 @@ test('initLanguage: 保存した値 → navigator.languages → ja の順で決�
     initLanguage();
     assert.equal(getLanguage(), 'en', 'languages が無い環境は language を見る');
   });
+  const oldSaved = makeBrowser({ stored: 'en', languages: ['ja-JP'] });
+  withBrowser(oldSaved, () => {
+    initLanguage();
+    assert.equal(getLanguage(), 'ja', '段階 2 の仮の保存（clive.language）は読まない。言語はサーバーの設定が決める');
+    assert.equal(getLanguagePreference(), 'auto');
+  });
   const blocked = makeBrowser({ languages: ['en-US'], storageThrows: true });
   withBrowser(blocked, () => {
     initLanguage();
     assert.equal(getLanguage(), 'en', '保存先が読めなくても落ちずにブラウザの言語に従う');
   });
-  const junk = makeBrowser({ stored: 'fr', languages: ['en'] });
-  withBrowser(junk, () => {
-    initLanguage();
-    assert.equal(getLanguagePreference(), 'auto');
-    assert.equal(getLanguage(), 'en');
-  });
+  reset();
 });
 
-test('setLanguagePreference: 保存・<html lang>・購読者への通知が揃い、auto で保存を消してブラウザに戻る', () => {
+test('setLanguagePreference: サーバーの設定の language を反映する。<html lang>・購読者への通知が揃い、auto でブラウザの言語に戻る。ブラウザには書かない', () => {
   const env = makeBrowser({ languages: ['ja-JP'] });
   withBrowser(env, () => {
     initLanguage();
@@ -101,7 +97,8 @@ test('setLanguagePreference: 保存・<html lang>・購読者への通知が揃�
     const off = subscribe(() => { calls += 1; });
     setLanguagePreference('en');
     assert.equal(getLanguage(), 'en');
-    assert.equal(env.store.get('clive.language'), 'en');
+    assert.equal(getLanguagePreference(), 'en');
+    assert.equal(env.store.has('clive.language'), false, 'ブラウザには保存しない');
     assert.equal(env.documentElement.lang, 'en');
     assert.equal(t('nav.tasks'), 'Tasks');
     assert.ok(calls >= 1, '画面を描き直すために購読者へ知らせる');
@@ -110,15 +107,27 @@ test('setLanguagePreference: 保存・<html lang>・購読者への通知が揃�
     assert.equal(env.documentElement.lang, 'ja');
     setLanguagePreference('en');
     setLanguagePreference('auto');
-    assert.equal(env.store.has('clive.language'), false);
     assert.equal(getLanguage(), 'ja', 'ブラウザが ja-JP なので ja に戻る');
     off();
   });
-  const blocked = makeBrowser({ languages: ['ja'], storageThrows: true });
-  withBrowser(blocked, () => {
+  reset();
+});
+
+test('applyServerSettings: 設定の language（無ければ auto = ブラウザの言語）と timezone を画面に反映する', () => {
+  const env = makeBrowser({ languages: ['en-US'] });
+  withBrowser(env, () => {
     initLanguage();
-    setLanguagePreference('en');
-    assert.equal(getLanguage(), 'en', '保存できなくても画面には効く');
+    applyServerSettings({ config: { language: 'ja', timezone: 'America/New_York' } });
+    assert.equal(getLanguage(), 'ja', 'language が設定にあればそれに従う（ブラウザが英語でも）');
+    assert.equal(getLanguagePreference(), 'ja');
+    assert.equal(getTimezone(), 'America/New_York');
+    applyServerSettings({ config: {} });
+    assert.equal(getLanguagePreference(), 'auto', 'language が無ければ auto');
+    assert.equal(getLanguage(), 'en', 'auto はブラウザの言語（返事の言語は別で、サーバーが ja のまま）');
+    applyServerSettings({ config: { language: 'fr' } });
+    assert.equal(getLanguagePreference(), 'auto', '知らない言語は無いのと同じ');
+    applyServerSettings({ config: { language: 'en' } });
+    assert.equal(getLanguage(), 'en');
   });
   reset();
 });
@@ -265,17 +274,17 @@ async function quietly<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { console.warn = warn; }
 }
 
-test('loadTimezone: 待ち時間のうちに届いた設定のタイムゾーンを反映する', async () => {
+test('loadServerSettings: 待ち時間のうちに届いた設定のタイムゾーンを反映する', async () => {
   reset();
-  await loadTimezone(async () => ({ config: { timezone: 'America/New_York' } }), { waitMs: 200 });
+  await loadServerSettings(async () => ({ config: { timezone: 'America/New_York' } }), { waitMs: 200 });
   assert.equal(getTimezone(), 'America/New_York');
   reset();
 });
 
-test('loadTimezone: 待ち時間のあとに届いた設定も捨てず、届いた時点でタイムゾーンを反映する', async () => {
+test('loadServerSettings: 待ち時間のあとに届いた設定も捨てず、届いた時点でタイムゾーンを反映する', async () => {
   reset();
   const started = Date.now();
-  await loadTimezone(async () => { await sleep(120); return { config: { timezone: 'America/New_York' } }; }, { waitMs: 20 });
+  await loadServerSettings(async () => { await sleep(120); return { config: { timezone: 'America/New_York' } }; }, { waitMs: 20 });
   assert.ok(Date.now() - started < 100, '最初の描画は待ち時間で先へ進む');
   assert.equal(getTimezone(), 'Asia/Tokyo', '届くまでは既定のまま');
   await sleep(200);
@@ -283,11 +292,11 @@ test('loadTimezone: 待ち時間のあとに届いた設定も捨てず、届い
   reset();
 });
 
-test('loadTimezone: 読めなかったときは一度だけやり直し、それでも読めなければ既定のまま', async () => {
+test('loadServerSettings: 読めなかったときは一度だけやり直し、それでも読めなければ既定のまま', async () => {
   reset();
   let calls = 0;
   await quietly(async () => {
-    await loadTimezone(async () => {
+    await loadServerSettings(async () => {
       calls += 1;
       if (calls === 1) throw new Error('down');
       return { config: { timezone: 'Europe/Paris' } };
@@ -299,7 +308,7 @@ test('loadTimezone: 読めなかったときは一度だけやり直し、それ
   });
   let failures = 0;
   await quietly(async () => {
-    await loadTimezone(async () => { failures += 1; throw new Error('down'); }, { waitMs: 200, retryMs: 20 });
+    await loadServerSettings(async () => { failures += 1; throw new Error('down'); }, { waitMs: 200, retryMs: 20 });
     await sleep(150);
   });
   assert.equal(failures, 2, '最初の 1 回とやり直しの 1 回だけ');
@@ -307,10 +316,10 @@ test('loadTimezone: 読めなかったときは一度だけやり直し、それ
   reset();
 });
 
-test('loadTimezone: timezone が文字列でなければ何もしない', async () => {
+test('loadServerSettings: timezone が文字列でなければ何もしない', async () => {
   reset();
-  await loadTimezone(async () => ({ config: {} }), { waitMs: 200 });
-  await loadTimezone(async () => ({ config: { timezone: 9 } }), { waitMs: 200 });
+  await loadServerSettings(async () => ({ config: {} }), { waitMs: 200 });
+  await loadServerSettings(async () => ({ config: { timezone: 9 } }), { waitMs: 200 });
   assert.equal(getTimezone(), 'Asia/Tokyo');
 });
 
@@ -338,5 +347,16 @@ test('formatDateTimeSmart: 今日（設定のタイムゾーンで）の時刻�
   setTimezone('America/New_York');
   assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 0, 30), now), '19:30', 'ニューヨークでは now と同じ日（11/4）の晩');
   assert.equal(formatDateTimeSmart(Date.UTC(2026, 10, 5, 12, 0), now), '11/5 07:00', 'ニューヨークでは翌日（11/5）の朝');
+  reset();
+});
+
+test('loadServerSettings: 遅れて届いた language も、届いた時点で反映する', async () => {
+  reset();
+  setLanguagePreference('auto');
+  await loadServerSettings(async () => { await sleep(100); return { config: { language: 'en', timezone: 'Asia/Tokyo' } }; }, { waitMs: 20 });
+  assert.equal(getLanguagePreference(), 'auto', '最初の描画は待たずに先へ進む');
+  await sleep(200);
+  assert.equal(getLanguagePreference(), 'en');
+  assert.equal(getLanguage(), 'en');
   reset();
 });
