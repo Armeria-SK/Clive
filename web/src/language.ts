@@ -6,8 +6,9 @@ export type PromptAnswer = 'yes' | 'no';
 
 // 設定の language が無く（返事は日本語のまま）、画面だけがブラウザの言語（日本語以外）になっているときに、1 回だけ
 // 「Clive も英語にしますか」と聞く。答えたら（どちらでも）二度と聞かない。
-export function shouldAskLanguage(input: { serverLanguage: LanguagePreference; screenLanguage: Lang; answered: boolean }): boolean {
-  return input.serverLanguage === 'auto' && input.screenLanguage !== 'ja' && !input.answered;
+// 設定をまだ読めていないあいだ（最初の待ち・読み込みの失敗）は聞かない（「いいえ」を誤って覚えさせないため）。
+export function shouldAskLanguage(input: { serverLanguage: LanguagePreference; screenLanguage: Lang; answered: boolean; loaded: boolean }): boolean {
+  return input.loaded && input.serverLanguage === 'auto' && input.screenLanguage !== 'ja' && !input.answered;
 }
 
 export function loadPromptAnswer(storage: Pick<Storage, 'getItem'> | undefined = safeStorage()): PromptAnswer | null {

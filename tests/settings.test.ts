@@ -260,8 +260,9 @@ test('行の印: 問題の文と、変更の有無', () => {
 });
 
 test('Clive も英語にするかの質問: 設定に language が無く、画面が日本語以外で、まだ答えていないときだけ', () => {
-  const ask = (serverLanguage: 'auto' | 'ja' | 'en', screenLanguage: 'ja' | 'en', answered: boolean) => shouldAskLanguage({ serverLanguage, screenLanguage, answered });
+  const ask = (serverLanguage: 'auto' | 'ja' | 'en', screenLanguage: 'ja' | 'en', answered: boolean, loaded = true) => shouldAskLanguage({ serverLanguage, screenLanguage, answered, loaded });
   assert.equal(ask('auto', 'en', false), true);
+  assert.equal(ask('auto', 'en', false, false), false, '設定をまだ読めていないあいだは聞かない（「いいえ」を誤って覚えさせない）');
   assert.equal(ask('auto', 'ja', false), false, '画面が日本語なら聞かない');
   assert.equal(ask('auto', 'en', true), false, '答えたら二度と聞かない');
   assert.equal(ask('en', 'en', false), false, '設定で決まっていれば聞かない');

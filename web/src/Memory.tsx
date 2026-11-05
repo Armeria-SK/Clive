@@ -3,6 +3,7 @@ import { api, ApiError, type Book, type BookView, type HistoryHit, type MemoryEv
 import { formatDateTime, formatNumber, useT } from './i18n/index.ts';
 import { isComposing } from './keys.ts';
 import { actionKey, actorKey, BOOK_TAB_KEY, canUndo, MEMORY_TABS, memoryRef, originKey, roleKey, TAB_KEY, type MemoryTab } from './memory-page.ts';
+import { toast } from './toast.tsx';
 import { usageFraction, usageIsHigh } from './usage.ts';
 import { ZoneNote } from './ZoneNote.tsx';
 import './styles/memory.css';
@@ -116,6 +117,21 @@ function Item({ item, onChanged, setError }: { item: MemoryItem; onChanged: () =
     setHistoryFailed(false);
     void api.memoryEvents(item.id).then(r => setEvents(r.events)).catch(() => setHistoryFailed(true));
   };
+  // 削除は 1 回で消え、すぐ「取り消す」のトーストが出る（取り消しは API の undo。会話の「記憶しました」の取り消しと同じ）
+  const forget = () => void run(async () => {
+    const { eventId } = await api.forgetMemory(item.id);
+    toast({
+      kind: 'memory', title: t('memory.deleted'), body: item.content,
+      action: {
+        label: t('memory.event.undo'),
+        run: () => {
+          api.undoMemory(eventId)
+            .then(() => { onChanged(); toast({ kind: 'done', icon: 'check', title: t('memory.restored'), body: item.content }); })
+            .catch(e => toast({ icon: 'alert', title: e instanceof ApiError ? e.message : t('memory.actionFailed') }));
+        },
+      },
+    });
+  });
   const save = () => void run(async () => { await api.editMemory(item.id, text); setEditing(false); });
   const label = (key: ReturnType<typeof actionKey>, raw: string) => (key ? t(key) : raw);
 
@@ -135,7 +151,7 @@ function Item({ item, onChanged, setError }: { item: MemoryItem; onChanged: () =
           <span className="mem-content">{item.content}</span>
           <span className="mem-actions">
             <button className="btn btn-ghost" onClick={() => setEditing(true)}>{t('memory.edit')}</button>
-            <button className="btn btn-ghost" onClick={() => void run(() => api.forgetMemory(item.id))}>{t('memory.forget')}</button>
+            <button className="btn btn-ghost" onClick={forget}>{t('memory.forget')}</button>
             <button className="btn btn-ghost" onClick={toggleHistory} aria-expanded={events !== null}>{t('memory.history')}</button>
           </span>
         </div>

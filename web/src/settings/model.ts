@@ -49,8 +49,8 @@ export function sectionSlice(config: Config, section: SettingsSection): unknown 
 export const sectionChanged = (saved: Config, draft: Config, section: SettingsSection): boolean =>
   JSON.stringify(sectionSlice(saved, section)) !== JSON.stringify(sectionSlice(draft, section));
 
-const isPlain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-const hasIds = (list: unknown[]): list is Array<Record<string, unknown> & { id: string }> => list.every(item => isPlain(item) && typeof item.id === 'string');
+export const isPlain = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+export const hasIds = (list: unknown[]): list is Array<Record<string, unknown> & { id: string }> => list.every(item => isPlain(item) && typeof item.id === 'string');
 
 // 保存していない変更の数。項目ごとに 1 件。id を持つ一覧（models / providers）は id で突き合わせ、追加・削除は 1 件。
 export function countChanges(saved: unknown, draft: unknown): number {
@@ -177,6 +177,12 @@ export function addToRoute(config: Config, route: Route, id: string): Config {
 
 export function removeFromRoute(config: Config, route: Route, id: string): Config {
   return { ...config, routing: { ...config.routing, [route]: (config.routing[route] as string[]).filter(m => m !== id) } };
+}
+
+// 保存していない編集があるまま、ページを閉じる・読み直すときに、ブラウザの確認を出させる（beforeunload）。
+export function blockUnload(event: { preventDefault: () => void; returnValue?: unknown }): void {
+  event.preventDefault();
+  event.returnValue = '';
 }
 
 // 数の欄: 空欄は「未設定」、数でないものは null（直前の値を保つ呼び出し側の判断に使う）。

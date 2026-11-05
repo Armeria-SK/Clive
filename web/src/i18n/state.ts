@@ -23,6 +23,7 @@ export function isValidTimeZone(zone: string): boolean {
 let preference: LanguagePreference = 'auto';
 let language: Lang = DEFAULT_LANGUAGE;
 let timezone = DEFAULT_TIMEZONE;
+let settingsApplied = false;
 let version = 0;
 const listeners = new Set<() => void>();
 
@@ -46,6 +47,7 @@ function applyLanguage(): void {
 // 言語はサーバーの設定 language（無ければ auto = ブラウザの言語）で決まる。ブラウザには保存しない。
 export function initLanguage(): void {
   preference = 'auto';
+  settingsApplied = false;
   applyLanguage();
 }
 
@@ -53,6 +55,13 @@ export function initLanguage(): void {
 export function setLanguagePreference(next: LanguagePreference): void {
   preference = next;
   applyLanguage();
+}
+
+// サーバーの設定を実際に読めて反映したことを覚える（読めるまでは、言語が「設定に無い」のか「まだ読んでいない」のか分からない）。
+export function markSettingsApplied(): void {
+  if (settingsApplied) return;
+  settingsApplied = true;
+  changed();
 }
 
 export function setTimezone(zone: string): void {
@@ -65,6 +74,7 @@ export function setTimezone(zone: string): void {
 export const getLanguage = (): Lang => language;
 export const getLanguagePreference = (): LanguagePreference => preference;
 export const getTimezone = (): string => timezone;
+export const getSettingsApplied = (): boolean => settingsApplied;
 export const getVersion = (): number => version;
 export function subscribe(listener: () => void): () => void {
   listeners.add(listener);

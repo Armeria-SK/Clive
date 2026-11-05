@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getLanguage, getLanguagePreference, useT } from './i18n/index.ts';
+import { getLanguage, getLanguagePreference, getSettingsApplied, useT } from './i18n/index.ts';
 import { loadPromptAnswer, savePromptAnswer, saveLanguage, shouldAskLanguage } from './language.ts';
 import { toast } from './toast.tsx';
 
@@ -8,7 +8,7 @@ export function LanguagePrompt() {
   const [answered, setAnswered] = useState(() => loadPromptAnswer() !== null);
   const [busy, setBusy] = useState(false);
   const screen = getLanguage();
-  if (!shouldAskLanguage({ serverLanguage: getLanguagePreference(), screenLanguage: screen, answered })) return null;
+  if (!shouldAskLanguage({ serverLanguage: getLanguagePreference(), screenLanguage: screen, answered, loaded: getSettingsApplied() })) return null;
 
   const decline = () => { savePromptAnswer('no'); setAnswered(true); };
   const accept = async () => {

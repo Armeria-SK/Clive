@@ -158,3 +158,4 @@
 .lang-prompt { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 8px 16px; border-bottom: 1px solid var(--color-divider); background: var(--color-surface); font-size: 13px; }
 .lang-prompt-text { flex: 1; min-width: 200px; }
 .lang-prompt-hint { color: var(--color-text-muted); font-size: 12px; }
+.set-reload { align-self: flex-start; margin-top: 6px; }

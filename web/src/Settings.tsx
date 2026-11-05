@@ -5,8 +5,9 @@ import { Icon } from './icons.tsx';
 import { applyServerSettings, formatDateTimeSmart, getLanguagePreference, useT } from './i18n/index.ts';
 import { adoptLanguageInDraft, withAdoptedLanguage } from './language.ts';
 import { modLabel } from './keys.ts';
+import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merge.ts';
 import {
-  countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
+  blockUnload, countChanges, isSection, parseProblem, SECTION_GROUPS, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
 import { SectionView } from './settings/SectionView.tsx';
 import { toast } from './toast.tsx';
@@ -19,7 +20,6 @@ function loadSection(): SettingsSection {
   return 'models';
 }
 
-const withoutProfile = (config: Config): string => JSON.stringify({ ...config, profile: undefined });
 
 export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   const t = useT();
@@ -37,6 +37,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   const [restartRequired, setRestartRequired] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [reverts, setReverts] = useState(0);
+  const [conflicted, setConflicted] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const pendingField = useRef<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
@@ -67,6 +68,12 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   }, [preference]);
 
   const dirty = saved && draft ? countChanges(saved, draft) : 0;
+  // 保存していない編集があるまま、ページを閉じる・読み直すときは、ブラウザに確かめさせる
+  useEffect(() => {
+    if (dirty === 0) return undefined;
+    addEventListener('beforeunload', blockUnload);
+    return () => removeEventListener('beforeunload', blockUnload);
+  }, [dirty > 0]);
   const update = useCallback((change: (config: Config) => Config) => { setDraft(current => (current ? change(current) : current)); }, []);
 
   async function probe() {
@@ -74,20 +81,33 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
     try { setModels((await api.probe()).models); } catch { toast({ title: t('toast.actionFailed'), icon: 'alert' }); } finally { setProbing(false); }
   }
 
+  // 保存は「画面を開いたあとにほかの場所が変えた値」を巻き戻さない。直前に最新の設定を読み直し、自分が触った所だけを当てる。
+  // 触った所をほかの場所も先に変えていたら、何も書かずに、その行を示す。
   async function save() {
     if (!saved || !draft || busy || dirty === 0) return;
-    setBusy(true); setProblems([]);
+    setBusy(true); setProblems([]); setConflicted(false);
     try {
+      const latest = (await api.settings()).config;
+      const edits = diffConfig(saved, draft);
+      const merged = applyEdits(latest, edits);
+      if (merged.conflicts.length) {
+        setProblems(merged.conflicts.map(c => parseProblem(`${c.path}: ${t('settings.conflict')}`, draft)));
+        setConflicted(true);
+        return;
+      }
+      const profileOnly = profilePatch(edits);
       let next: Config;
-      if (withoutProfile(draft) !== withoutProfile(saved)) {
-        const result = await api.saveSettings(draft);
+      if (deepEqual(merged.config, latest)) {
+        next = latest;
+      } else if (profileOnly) {
+        const p = await api.saveProfile(profileOnly);
+        onProfile(p);
+        next = { ...merged.config, profile: { ...merged.config.profile, name: p.name, shape: p.shape, color: p.color, motion: p.motion } };
+      } else {
+        const result = await api.saveSettings(merged.config);
         setView(result); setModels(result.models); setRestartRequired(result.restartRequired);
         next = result.config;
         void api.profile().then(onProfile).catch(() => undefined);
-      } else {
-        const p = await api.saveProfile(draft.profile);
-        onProfile(p);
-        next = { ...saved, profile: { ...saved.profile, name: p.name, shape: p.shape, color: p.color, motion: p.motion } };
       }
       setSaved(next); setDraft(next);
       applyServerSettings({ config: next });
@@ -101,7 +121,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
   useSaveShortcut(() => { void save(); });
 
   // 元に戻したら、画面の中だけに残っている入力（JSON の欄に書きかけの文字など）も捨てる
-  const revert = () => { if (saved) { setDraft(saved); setProblems([]); setReverts(n => n + 1); } };
+  const revert = () => { if (saved) { setDraft(saved); setProblems([]); setConflicted(false); setReverts(n => n + 1); } };
   const goProblem = (problem: Problem) => {
     if (problem.section) setSection(problem.section);
     if (problem.modelId) setSelectedModel(problem.modelId);
@@ -177,6 +197,7 @@ export function Settings({ onProfile }: { onProfile: (p: Profile) => void }) {
                       {p.path && <span className="set-problem-path">{p.path}</span>}<span>{p.message}</span>
                     </button>
                   ))}
+                  {conflicted && <button className="btn btn-secondary set-reload" onClick={() => void load()}>{t('settings.conflict.reload')}</button>}
                 </div>
               </div>
             )}

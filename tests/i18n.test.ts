@@ -3,11 +3,11 @@ import { test } from 'node:test';
 import { DAY_MAP } from '../src/tasks/schedule.ts';
 import { en } from '../web/src/i18n/en.ts';
 import {
-  applyServerSettings, formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getTimezone, initLanguage, loadServerSettings, parseZonedInput, pluralEn,
+  applyServerSettings, formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRelative, getLanguage, getLanguagePreference, getSettingsApplied, getTimezone, initLanguage, loadServerSettings, parseZonedInput, pluralEn,
   resolveLanguage, setLanguagePreference, setTimezone, startOfDay, t, timezoneLabel,
 } from '../web/src/i18n/index.ts';
 import { ja } from '../web/src/i18n/ja.ts';
-import { subscribe } from '../web/src/i18n/state.ts';
+import { markSettingsApplied, subscribe } from '../web/src/i18n/state.ts';
 import { WEEKDAYS } from '../web/src/weekdays.ts';
 
 interface BrowserInit { stored?: string; languages?: string[]; language?: string; storageThrows?: boolean }
@@ -117,7 +117,9 @@ test('applyServerSettings: 設定の language（無ければ auto = ブラウザ
   const env = makeBrowser({ languages: ['en-US'] });
   withBrowser(env, () => {
     initLanguage();
+    assert.equal(getSettingsApplied(), false, '設定を読むまでは「反映した」ではない');
     applyServerSettings({ config: { language: 'ja', timezone: 'America/New_York' } });
+    assert.equal(getSettingsApplied(), true);
     assert.equal(getLanguage(), 'ja', 'language が設定にあればそれに従う（ブラウザが英語でも）');
     assert.equal(getLanguagePreference(), 'ja');
     assert.equal(getTimezone(), 'America/New_York');
@@ -274,6 +276,20 @@ async function quietly<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { console.warn = warn; }
 }
 
+test('markSettingsApplied: 初めて読めたときだけ、画面に知らせる（2 回目以降は知らせない）', () => {
+  initLanguage();
+  let notified = 0;
+  const stop = subscribe(() => { notified += 1; });
+  markSettingsApplied();
+  assert.equal(getSettingsApplied(), true);
+  assert.equal(notified, 1);
+  markSettingsApplied();
+  assert.equal(notified, 1, '同じ状態を何度も知らせない');
+  stop();
+  initLanguage();
+  assert.equal(getSettingsApplied(), false, '起動のやり直しでは、読めていない状態に戻る');
+});
+
 test('loadServerSettings: 待ち時間のうちに届いた設定のタイムゾーンを反映する', async () => {
   reset();
   await loadServerSettings(async () => ({ config: { timezone: 'America/New_York' } }), { waitMs: 200 });
@@ -282,17 +298,21 @@ test('loadServerSettings: 待ち時間のうちに届いた設定のタイムゾ
 });
 
 test('loadServerSettings: 待ち時間のあとに届いた設定も捨てず、届いた時点でタイムゾーンを反映する', async () => {
+  initLanguage();
   reset();
   const started = Date.now();
   await loadServerSettings(async () => { await sleep(120); return { config: { timezone: 'America/New_York' } }; }, { waitMs: 20 });
   assert.ok(Date.now() - started < 100, '最初の描画は待ち時間で先へ進む');
   assert.equal(getTimezone(), 'Asia/Tokyo', '届くまでは既定のまま');
+  assert.equal(getSettingsApplied(), false, '待っているあいだは、設定を読めていない');
   await sleep(200);
   assert.equal(getTimezone(), 'America/New_York', '遅れて届いた設定で入れ替わる');
+  assert.equal(getSettingsApplied(), true, '届いたら読めた');
   reset();
 });
 
 test('loadServerSettings: 読めなかったときは一度だけやり直し、それでも読めなければ既定のまま', async () => {
+  initLanguage();
   reset();
   let calls = 0;
   await quietly(async () => {
@@ -302,10 +322,13 @@ test('loadServerSettings: 読めなかったときは一度だけやり直し、
       return { config: { timezone: 'Europe/Paris' } };
     }, { waitMs: 200, retryMs: 20 });
     assert.equal(getTimezone(), 'Asia/Tokyo', '最初の読み込みは失敗');
+    assert.equal(getSettingsApplied(), false, '失敗では「反映した」にしない');
     await sleep(120);
     assert.equal(calls, 2);
     assert.equal(getTimezone(), 'Europe/Paris', 'やり直しで届いた設定を反映する');
+    assert.equal(getSettingsApplied(), true);
   });
+  initLanguage();
   let failures = 0;
   await quietly(async () => {
     await loadServerSettings(async () => { failures += 1; throw new Error('down'); }, { waitMs: 200, retryMs: 20 });
@@ -313,6 +336,7 @@ test('loadServerSettings: 読めなかったときは一度だけやり直し、
   });
   assert.equal(failures, 2, '最初の 1 回とやり直しの 1 回だけ');
   assert.equal(getTimezone(), 'Europe/Paris', '失敗では書き換えない');
+  assert.equal(getSettingsApplied(), false, '読めないままなら、設定を読めていない');
   reset();
 });
 

@@ -8,7 +8,7 @@ export { formatDateTime, formatDateTimeSmart, formatList, formatNumber, formatRe
 export { formatElapsed } from './elapsed.ts';
 export { applyServerSettings, loadServerSettings, type LoadSettingsOptions, type ServerSettingsView } from './load-settings.ts';
 export {
-  DEFAULT_LANGUAGE, DEFAULT_TIMEZONE, LANGUAGES, getLanguage, getLanguagePreference, getTimezone, initLanguage, resolveLanguage, setLanguagePreference, setTimezone,
+  DEFAULT_LANGUAGE, DEFAULT_TIMEZONE, LANGUAGES, getLanguage, getLanguagePreference, getSettingsApplied, getTimezone, initLanguage, resolveLanguage, setLanguagePreference, setTimezone,
   type Lang, type LanguagePreference,
 } from './state.ts';
 export type { DictKey, PlainKey } from './types.ts';

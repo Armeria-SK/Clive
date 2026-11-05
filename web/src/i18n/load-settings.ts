@@ -1,4 +1,4 @@
-import { LANGUAGES, setLanguagePreference, setTimezone } from './state.ts';
+import { LANGUAGES, markSettingsApplied, setLanguagePreference, setTimezone } from './state.ts';
 
 export interface ServerSettingsView { config: { timezone?: unknown; language?: unknown } }
 
@@ -15,6 +15,7 @@ export function applyServerSettings({ config }: ServerSettingsView): void {
   if (typeof config.timezone === 'string') setTimezone(config.timezone);
   const language = LANGUAGES.find(l => l === config.language);
   setLanguagePreference(language ?? 'auto');
+  markSettingsApplied();
 }
 
 // 最初の描画は waitMs までしか待たない。そのあとで設定が届いたら、届いた時点で反映する
