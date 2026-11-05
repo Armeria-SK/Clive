@@ -1,3 +1,6 @@
+import { getLanguage } from './i18n/state.ts';
+import { errorBodyText } from './server-text.ts';
+
 export interface Conversation { id: string; title: string | null; created_at: number; last_message_at: number }
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
@@ -14,7 +17,7 @@ export interface ContextDetail { reason: string; measured?: number; required?: n
 
 export interface Probe {
   modelId: string; status: string; server: string; declared?: number; measured?: number; modelMax?: number; effective?: number;
-  required: number; message: string; hint?: string; capabilities?: string[]; checkedAt: number;
+  required: number; message: string; messageCode?: string; messageParams?: Record<string, string | number>; hint?: string; capabilities?: string[]; checkedAt: number;
 }
 export interface ModelView {
   id: string; label: string; provider: string; model: string; providerKind?: string;
@@ -87,7 +90,8 @@ export class ApiError extends Error {
   readonly status: number;
   readonly body: any;
   constructor(status: number, body: any) {
-    super(typeof body?.errorMessage === 'string' ? body.errorMessage : typeof body?.message === 'string' ? body.message : `HTTP ${status}`);
+    // コード（code / errorCode）が辞書にあれば画面の言語で、無ければサーバーの文のまま
+    super(errorBodyText(body, getLanguage()) ?? (typeof body?.errorMessage === 'string' ? body.errorMessage : typeof body?.message === 'string' ? body.message : `HTTP ${status}`));
     this.status = status;
     this.body = body;
   }

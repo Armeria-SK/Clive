@@ -264,3 +264,39 @@ test('restartApprovalGate: 見ていない間に出た札も、画面に戻っ�
   assert.equal(approvalEnterAllowed(returned, 'a', 1_000 + 5 * 60_000 + APPROVAL_ENTER_GRACE_MS), true);
   assert.deepEqual(restartApprovalGate({ id: null, since: 5 }, 9), { id: null, since: 9 }, '札が無いときも壊れない');
 });
+
+test('sendFailureOf: 「使えるモデルがない」の 409 は、problems の行を、同じ状態のモデルの確認（コード付き）から画面の言語で組み立て直す', async () => {
+  const { errorProbeText } = await import('../src/providers/context.ts');
+  const { providerError } = await import('../src/providers/types.ts');
+  const { engineText } = await import('../src/shared/messages/engine.ts');
+  const served = errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'ja');
+  const unreachable = probe({ modelId: 'local', status: 'unreachable', message: served.message, ...(served.messageCode ? { messageCode: served.messageCode } : {}), ...(served.messageParams ? { messageParams: served.messageParams as Record<string, string | number> } : {}) });
+  const body = {
+    error: 'provider_error', errorKind: 'provider_error', errorCode: 'engine.no_usable',
+    errorMessage: engineText('ja', 'no_usable', { lines: engineText('ja', 'problem.line', { id: 'local', message: served.message, hintPart: '' }) }),
+    problems: [{ modelId: 'local', status: 'unreachable', message: served.message }],
+  };
+  const models = [model('local', { probe: unreachable })];
+  const expectedEn = engineText('en', 'no_usable', { lines: engineText('en', 'problem.line', { id: 'local', message: errorProbeText(providerError('provider_error', 'probe.ollama_unreachable', { base: 'http://127.0.0.1:11434' }), 'en').message, hintPart: '' }) });
+
+  setLanguagePreference('en');
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, expectedEn, 'en の画面では、サーバーが ja で書いていても英語');
+  assert.notEqual(sendFailureOf(new ApiError(409, body), 'x', models).message, body.errorMessage);
+  setLanguagePreference('ja');
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', models).message, body.errorMessage, 'ja ならサーバーの文と同じ');
+
+  setLanguagePreference('en');
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', []).message.includes('Nothing was sent'), true, 'モデルの確認が無くても、問題の文はサーバーのままで枠は英語');
+  const stale = [model('local', { probe: { ...unreachable, status: 'ok' } })];
+  assert.equal(sendFailureOf(new ApiError(409, body), 'x', stale).message.includes(served.message), true, '状態が違う確認は使わず、サーバーの行のまま');
+  const withHint = { ...body, problems: [{ modelId: 'local', status: 'unreachable', message: served.message, hint: '直し方' }] };
+  assert.equal(sendFailureOf(new ApiError(409, withHint), 'x', models).message.includes('(直し方)'), true, 'hint は付く（英語の括弧）');
+  const none = { ...body, problems: [] };
+  assert.equal(sendFailureOf(new ApiError(409, none), 'x', models).message, engineText('en', 'no_usable', { lines: engineText('en', 'problem.none') }));
+  const other = { error: 'busy', errorMessage: '忙しい', errorCode: 'engine.send.busy' };
+  assert.equal(sendFailureOf(new ApiError(409, other), 'x', models).message, engineText('en', 'send.busy'), 'ほかのコードは ApiError の訳のまま');
+  const otherWithProblems = { ...body, errorCode: 'engine.send.busy', problems: body.problems };
+  assert.equal(sendFailureOf(new ApiError(409, otherWithProblems), 'x', models).message, engineText('en', 'send.busy'), 'problems があっても、「使えるモデルがない」以外のコードは組み立て直さない');
+  const unknown = { ...body, problems: [{ nope: true }] };
+  assert.equal(sendFailureOf(new ApiError(409, unknown), 'x', models).message, new ApiError(409, unknown).message);
+});

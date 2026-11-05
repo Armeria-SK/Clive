@@ -1,7 +1,8 @@
 import type { ModelView } from '../api.ts';
 import { copyText } from '../clipboard.ts';
 import { Icon, type IconName } from '../icons.tsx';
-import { formatNumber, useT, type PlainKey } from '../i18n/index.ts';
+import { formatNumber, getLanguage, useT, type PlainKey } from '../i18n/index.ts';
+import { probeMessage } from '../server-text.ts';
 import { toast } from '../toast.tsx';
 import { FieldRow, NumberField, SegField, SubTitle, TextField } from './fields.tsx';
 import {
@@ -118,7 +119,7 @@ export function ModelsSection({ draft, saved, update, problems, probes, probing,
               <div className="set-num-item" key={key}><span className="set-num-label">{t(key)}</span><span className={`set-num-value${bad ? ' bad' : ''}`}>{num(value)}</span></div>
             ))}
           </div>
-          {selProbe?.message && <span className="set-card-message">{selProbe.message}</span>}
+          {selProbe?.message && <span className="set-card-message">{probeMessage(selProbe, getLanguage())}</span>}
           {selProbe?.hint && <div className="set-card-hint"><strong>{t('settings.models.hint')}</strong> {selProbe.hint}</div>}
         </div>
       )}

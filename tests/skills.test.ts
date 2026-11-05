@@ -123,6 +123,24 @@ test('広すぎる場所: ディスク全体・ドライブの直下・ホーム
   for (const path of ['workspace', '~/Documents', '/home/alice/notes', '/var/log', 'C:\\Users\\carol\\Documents', 'C:\\Windows', '/home', '', '   ']) assert.equal(broadKind(path), null, path);
 });
 
+test('広すぎる場所: . と .. を畳んで見分ける（ホームの . や、ディスク全体への ..、ホームの外への ~/..）。相対の名前は見分けない', () => {
+  for (const path of ['/home/alice/.', '/home/alice/./', '/home/alice/notes/..', '/home//alice', '/Users/bob/x/y/../..', 'C:\\Users\\carol\\.', 'C:\\Users\\carol\\Documents\\..', '~/.', '~/x/..', '~/./']) {
+    assert.equal(broadKind(path), 'home', path);
+  }
+  for (const path of ['/tmp/..', '/var/log/../..', '/..', '/../..', '/home/alice/../..', 'C:\\Windows\\..', 'D:/a/../', '~/..', '~/../..', '~/x/../..']) {
+    assert.equal(broadKind(path), 'filesystem', path);
+  }
+  for (const path of ['/home/alice/..', '/Users/bob/..', 'workspace/..', '../..', './', 'notes/./x', '~user', '~user/..', '/home/alice/x/./y']) {
+    assert.equal(broadKind(path), null, path);
+  }
+});
+
+test('広すぎる場所: . と .. を使った書き方でも、フォルダを足す確認に「広すぎる」の印が付く', () => {
+  const base = { roots: [], deny: [] };
+  assert.deepEqual(wideningChanges(base, addRoot(base, '/home/alice/.', 'read')), [{ kind: 'root-added', path: '/home/alice/.', mode: 'read', broad: 'home' }]);
+  assert.deepEqual(wideningChanges(base, addRoot(base, '/tmp/..', 'write')), [{ kind: 'root-added', path: '/tmp/..', mode: 'write', broad: 'filesystem' }]);
+});
+
 test('既定の触れないパス: 画面の DEFAULT_DENY は、サーバーの既定値と同じ', () => {
   assert.deepEqual([...DEFAULT_DENY], defaultConfig().tools.deny);
 });

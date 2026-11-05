@@ -1,6 +1,7 @@
 import { ApiError, type ModelView } from './api.ts';
-import { formatElapsed, getLanguage, getTimezone, type PlainKey } from './i18n/index.ts';
+import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
 import type { IconName } from './icon-paths.ts';
+import { probeMessage, serverText } from './server-text.ts';
 
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined }
 
@@ -37,11 +38,29 @@ function isProblem(value: unknown): value is ModelProblem {
   return record !== null && typeof record.modelId === 'string' && typeof record.status === 'string' && typeof record.message === 'string';
 }
 
-export function sendFailureOf(error: unknown, fallback: string): SendFailure {
+// 「使えるモデルがない」の 409 は、モデルごとの理由の行（{lines}）をサーバーが文にして入れている（コードには値が付かない）。
+// 画面の言語で出すため、problems の行を、同じ状態のモデルの確認（コード付き）から組み立て直す。組み立てられなければ null（サーバーの文のまま）。
+export function noUsableText(body: unknown, models: readonly ModelView[], language: Lang): string | null {
+  const record = asRecord(body);
+  if (record?.errorCode !== 'engine.no_usable' || !Array.isArray(record.problems) || !record.problems.every(isProblem)) return null;
+  const lines: string[] = [];
+  for (const problem of record.problems.filter(isProblem)) {
+    const probe = models.find(m => m.id === problem.modelId)?.probe ?? null;
+    const message = probe !== null && probe.status === problem.status ? probeMessage(probe, language) : problem.message;
+    const hintPart = problem.hint ? serverText('engine.problem.hint_suffix', { hint: problem.hint }, language) : '';
+    const line = hintPart === null ? null : serverText('engine.problem.line', { id: problem.modelId, message, hintPart }, language);
+    if (line === null) return null;
+    lines.push(line);
+  }
+  const text = lines.length ? lines.join('\n') : serverText('engine.problem.none', {}, language);
+  return text === null ? null : serverText('engine.no_usable', { lines: text }, language);
+}
+
+export function sendFailureOf(error: unknown, fallback: string, models: readonly ModelView[] = []): SendFailure {
   if (!(error instanceof ApiError)) return { message: fallback, hint: null, context: false, body: null };
   const body = asRecord(error.body);
   return {
-    message: error.message,
+    message: noUsableText(error.body, models, getLanguage()) ?? error.message,
     hint: text(asRecord(body?.detail)?.hint),
     context: (body?.errorKind ?? body?.error) === 'context_overflow',
     body: error.body,

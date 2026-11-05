@@ -124,13 +124,28 @@ export const DEFAULT_DENY: readonly string[] = ['~/.ssh', '~/.aws', '~/.gnupg'];
 export type BroadKind = 'filesystem' | 'home';
 
 // ディスク全体（/ やドライブの直下）とホームフォルダの全体は、範囲として広すぎる。ホームの実際の場所は画面からは分からないので、~ と、/home/<名前>・/Users/<名前>（ドライブ付きも）の形で見分ける。
+// . と .. は先に畳む（/home/alice/. はホーム、/tmp/.. はディスク全体、~/.. はホームの外）。相対の名前（workspace など）は、置き場所が分からないので見分けない。
 export function broadKind(path: string): BroadKind | null {
   const trimmed = path.trim();
   if (!trimmed) return null;
-  const stripped = trimmed.replace(/[\\/]+$/u, '');
-  if (stripped === '' || /^[A-Za-z]:$/u.test(stripped)) return 'filesystem';
-  if (stripped === '~' || /^(?:[A-Za-z]:)?[\\/](?:home|Users)[\\/][^\\/]+$/iu.test(stripped)) return 'home';
-  return null;
+  const parts = trimmed.split(/[\\/]+/u);
+  const absolute = /^[\\/]/u.test(trimmed);
+  const drive = /^[A-Za-z]:$/u.test(parts[0] ?? '');
+  if (drive) parts.shift();
+  const home = !absolute && !drive && parts[0] === '~';
+  if (home) parts.shift();
+  const stack: string[] = [];
+  let above = false;
+  for (const part of parts) {
+    if (part === '' || part === '.') continue;
+    if (part !== '..') stack.push(part);
+    else if (stack.length) stack.pop();
+    else above = true;
+  }
+  if (home) return above ? 'filesystem' : stack.length === 0 ? 'home' : null;
+  if (!absolute && !drive) return null;
+  if (stack.length === 0) return 'filesystem';
+  return stack.length === 2 && /^(?:home|users)$/iu.test(stack[0]!) ? 'home' : null;
 }
 
 export type Widening =

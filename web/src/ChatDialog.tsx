@@ -1,4 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useEscapeLayer } from './hooks.ts';
 import { Icon } from './icons.tsx';
 import { useT } from './i18n/index.ts';
@@ -33,7 +34,9 @@ export function ChatDialog({ eyebrow, title, subtitle, wide, actions, onClose, c
     if (e.shiftKey && (document.activeElement === first || document.activeElement === root.current)) { e.preventDefault(); last.focus(); }
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
-  return (
+  // 開いている画面の中に置くと、画面が動いている最中（transform）は fixed の基準がその画面になってしまう。枠（.shell）の直下へ出す
+  const host = document.querySelector('.shell') ?? document.body;
+  return createPortal(
     <>
       <div className="chat-dialog-backdrop" onClick={onClose} />
       <div className="chat-dialog-wrap">
@@ -50,6 +53,7 @@ export function ChatDialog({ eyebrow, title, subtitle, wide, actions, onClose, c
           <div className="dialog-actions chat-dialog-actions">{actions}</div>
         </div>
       </div>
-    </>
+    </>,
+    host,
   );
 }

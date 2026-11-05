@@ -5,7 +5,7 @@ import { presenceOf } from './avatar.ts';
 import { Chat, type ConversationChange, type RunNotice } from './Chat.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
 import { useEscapeLayer } from './hooks.ts';
-import { useT, type DictKey } from './i18n/index.ts';
+import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
 import { LanguagePrompt } from './LanguagePrompt.tsx';
@@ -20,6 +20,7 @@ import { Palette } from './Palette.tsx';
 import { PAGE_META, pickChatModel } from './pages.ts';
 import { chatHash, parseRoute } from './routes.ts';
 import { Runs } from './Runs.tsx';
+import { serverText, warningText } from './server-text.ts';
 import { Settings } from './Settings.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { StatusBar } from './StatusBar.tsx';
@@ -233,7 +234,7 @@ export function App() {
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, text: d.text + e.text } : d));
         break;
       case 'warning':
-        if (e.code !== 'compacted') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: e.message });
+        if (e.code !== 'compacted') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: warningText(e, getLanguage()) });
         break;
       case 'compaction':
         addNotice(e.conversationId, { runId: e.runId, kind: 'compaction', message: t('notice.compacted', e.summarized) });
@@ -281,7 +282,7 @@ export function App() {
         refreshWorker();
         if (!e.ok && e.errorKind !== 'cancelled') {
           addNotice(e.conversationId, {
-            runId: e.runId, kind: 'error', message: e.errorMessage ?? e.errorKind ?? '', hint: e.detail?.hint,
+            runId: e.runId, kind: 'error', message: serverText(e.errorCode, e.errorParams, getLanguage()) ?? e.errorMessage ?? e.errorKind ?? '', hint: e.detail?.hint,
             errorKind: e.errorKind, measured: e.detail?.measured, required: e.detail?.required,
           });
         }

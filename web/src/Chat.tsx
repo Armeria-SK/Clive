@@ -161,7 +161,7 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
   }, [messages.length, draft?.text.length, draft?.activeTool, notices.length, failure, loaded, approvals.length]);
 
   async function fail(error: unknown, fallback: string): Promise<void> {
-    const base = sendFailureOf(error, fallback);
+    const base = sendFailureOf(error, fallback, models);
     let card: ContextCardData | null = null;
     if (base.context) {
       let known = models;

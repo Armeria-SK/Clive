@@ -5,7 +5,7 @@ export type RunEvent =
   | { type: 'run.start'; runId: string; conversationId: string; modelId: string }
   | { type: 'model.switch'; runId: string; conversationId: string; from: string; to: string; reason: string }
   | { type: 'text.delta'; runId: string; conversationId: string; text: string }
-  | { type: 'warning'; runId: string; conversationId: string; code: string; message: string }
+  | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: Record<string, unknown> }
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: string }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
   | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: string; preview: string }
@@ -13,7 +13,7 @@ export type RunEvent =
   | { type: 'approval.resolved'; runId: string; conversationId: string; approvalId: string; outcome: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
-  | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
+  | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
   | { type: 'task.changed'; task: Task }
   | { type: 'notification'; notification: NotificationItem };
 
