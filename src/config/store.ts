@@ -7,11 +7,22 @@ import { AppConfig, ToolsConfig as ToolsConfigSchema, type ModelConfig, type Pro
 
 const ToolsSchema = ToolsConfigSchema();
 
+export interface ConfigIssue { path: string; message: string }
+
+// 文（場所: 内容）から場所と内容を取り出す。issues を渡されなかった ConfigError の代わり。場所が無い文は path が空になる
+function issueOfText(text: string): ConfigIssue {
+  const colon = text.indexOf(': ');
+  return colon > 0 ? { path: text.slice(0, colon), message: text.slice(colon + 2) } : { path: '', message: text };
+}
+
 export class ConfigError extends Error {
+  // problems は文（画面の古い読み取りと CLI 用）、issues は ID で書いた場所つきの同じ問題（同じ順・同じ数）
   readonly problems: readonly string[];
-  constructor(message: string, problems: readonly string[] = []) {
+  readonly issues: readonly ConfigIssue[];
+  constructor(message: string, problems: readonly string[] = [], issues: readonly ConfigIssue[] = problems.map(issueOfText)) {
     super(problems.length ? `${message}\n- ${problems.join('\n- ')}` : message);
     this.problems = problems;
+    this.issues = issues;
   }
 }
 
@@ -39,55 +50,78 @@ export function defaultTools(): ToolsConfig {
   return Value.Default(ToolsSchema, {}) as ToolsConfig;
 }
 
-export function semanticProblems(config: AppConfig): string[] {
-  const problems: string[] = [];
+interface Finding extends ConfigIssue { text: string }
+
+// 内容の問題。path は ID で書いた場所（画面が行に結ぶ）、text は今までどおりの文（場所: 内容）
+function findings(config: AppConfig): Finding[] {
+  const found: Finding[] = [];
+  const add = (path: string, message: string, label = path): void => { found.push({ path, message, text: `${label}: ${message}` }); };
   const providerIds = new Set<string>();
   for (const provider of config.providers) {
-    if (providerIds.has(provider.id)) problems.push(`providers: ID「${provider.id}」が重複しています`);
+    if (providerIds.has(provider.id)) add(`providers.${provider.id}.id`, `ID「${provider.id}」が重複しています`, 'providers');
     providerIds.add(provider.id);
-    if (provider.kind === 'openai_compatible' && !provider.baseUrl) problems.push(`providers.${provider.id}: OpenAI 互換には baseUrl が必要です`);
+    if (provider.kind === 'openai_compatible' && !provider.baseUrl) add(`providers.${provider.id}.baseUrl`, 'OpenAI 互換には baseUrl が必要です', `providers.${provider.id}`);
     if (provider.baseUrl !== undefined) {
       const checked = checkBaseUrl(provider.baseUrl, Boolean(provider.apiKeyEnv));
-      if ('problem' in checked) problems.push(`providers.${provider.id}.baseUrl: ${checked.problem}`);
+      if ('problem' in checked) add(`providers.${provider.id}.baseUrl`, checked.problem);
     }
   }
   const modelIds = new Set<string>();
   for (const model of config.models) {
-    if (modelIds.has(model.id)) problems.push(`models: ID「${model.id}」が重複しています`);
+    if (modelIds.has(model.id)) add(`models.${model.id}.id`, `ID「${model.id}」が重複しています`, 'models');
     modelIds.add(model.id);
     const provider = config.providers.find(p => p.id === model.provider);
-    if (!provider) { problems.push(`models.${model.id}: プロバイダ「${model.provider}」がありません`); continue; }
+    if (!provider) { add(`models.${model.id}.provider`, `プロバイダ「${model.provider}」がありません`, `models.${model.id}`); continue; }
     if (provider.kind !== 'anthropic' && model.contextLength === undefined) {
-      problems.push(`models.${model.id}: ローカル LLM や OpenAI 互換では contextLength が必須です（README の「ローカル LLM のコンテキスト長」を参照）`);
+      add(`models.${model.id}.contextLength`, 'ローカル LLM や OpenAI 互換では contextLength が必須です（README の「ローカル LLM のコンテキスト長」を参照）', `models.${model.id}`);
     }
     // contextLength < minContext は保存を止めない（使う前の確認で「使えない」と知らせる）。
     // 起動や保存を拒否すると、メタデータの誤りで全体が止まってしまう
     if (model.contextLength !== undefined && model.maxOutputTokens >= model.contextLength) {
-      problems.push(`models.${model.id}: maxOutputTokens がコンテキスト長以上です`);
+      add(`models.${model.id}.maxOutputTokens`, 'maxOutputTokens がコンテキスト長以上です', `models.${model.id}`);
     }
   }
   for (const route of ['chat', 'background'] as const) {
-    for (const id of config.routing[route]) if (!modelIds.has(id)) problems.push(`routing.${route}: モデル「${id}」がありません`);
+    for (const id of config.routing[route]) if (!modelIds.has(id)) add(`routing.${route}`, `モデル「${id}」がありません`);
   }
   config.tools.shell.allow.forEach((entry, i) => {
-    if (!parseAllowEntry(entry)) problems.push(`tools.shell.allow: ${i + 1} 番目の「${entry}」は書けない形です。決まったコマンドだけ（引用符・変数・ワイルドカード・置換・リダイレクト・区切りを含まない、1 つの文）を書いてください`);
+    if (!parseAllowEntry(entry)) add('tools.shell.allow', `${i + 1} 番目の「${entry}」は書けない形です。決まったコマンドだけ（引用符・変数・ワイルドカード・置換・リダイレクト・区切りを含まない、1 つの文）を書いてください`);
   });
   for (const origin of config.server.origins) {
-    try { if (new URL(origin).origin !== origin) problems.push(`server.origins: 「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
-    catch { problems.push(`server.origins: 「${origin}」が URL として読めません`); }
+    try { if (new URL(origin).origin !== origin) add('server.origins', `「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
+    catch { add('server.origins', `「${origin}」が URL として読めません`); }
   }
-  return problems;
+  return found;
+}
+
+export function semanticProblems(config: AppConfig): string[] {
+  return findings(config).map(f => f.text);
+}
+
+// 形式の検査の場所（JSON Pointer。/models/0/contextLength）を、ID で書いた場所（models.<id>.contextLength）に直す。
+// 番号が指す項目に id が無いとき、models と providers 以外の一覧は、番号のまま点で結ぶ
+function issuePath(pointer: string, raw: unknown): string {
+  const segments = pointer.split('/').filter(Boolean).map(part => part.replaceAll('~1', '/').replaceAll('~0', '~'));
+  const [root, index] = segments;
+  if ((root === 'models' || root === 'providers') && index !== undefined && /^\d+$/u.test(index) && typeof raw === 'object' && raw !== null) {
+    const list = (raw as Record<string, unknown>)[root];
+    const id = Array.isArray(list) ? (list[Number(index)] as { id?: unknown } | null | undefined)?.id : undefined;
+    if (typeof id === 'string' && id) segments[1] = id;
+  }
+  return segments.join('.');
 }
 
 export function parseConfig(raw: unknown): AppConfig {
   const withDefaults = Value.Default(AppConfig, Value.Clone(raw));
   if (!Value.Check(AppConfig, withDefaults)) {
-    const problems = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20).map(e => `${e.path || '/'}: ${e.message}`);
-    throw new ConfigError('設定ファイルの形式が正しくありません', problems);
+    const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20);
+    throw new ConfigError('設定ファイルの形式が正しくありません',
+      errors.map(e => `${e.path || '/'}: ${e.message}`),
+      errors.map(e => ({ path: issuePath(e.path, withDefaults), message: e.message })));
   }
   const config = withDefaults as AppConfig;
-  const problems = semanticProblems(config);
-  if (problems.length) throw new ConfigError('設定の内容に問題があります', problems);
+  const found = findings(config);
+  if (found.length) throw new ConfigError('設定の内容に問題があります', found.map(f => f.text), found.map(({ path, message }) => ({ path, message })));
   return config;
 }
 

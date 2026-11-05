@@ -6,7 +6,7 @@ import { getLanguagePreference, setLanguagePreference } from '../web/src/i18n/in
 import { ja } from '../web/src/i18n/ja.ts';
 import { adoptLanguageInDraft, configWithLanguage, loadPromptAnswer, savePromptAnswer, saveLanguage, shouldAskLanguage, withAdoptedLanguage } from '../web/src/language.ts';
 import {
-  addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, providerInUse, pruned,
+  addModel, addProvider, addTag, addToRoute, closeAction, countChanges, isEnvName, isSection, keyUsage, moveInRoute, parseNumber, parseProblem, problemsOf, providerInUse, pruned,
   removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, SECTION_GROUPS, SECTION_IDS, sectionChanged, secondsOf, uniqueId,
   updateAt, updateIn, updateListItem, type Config,
 } from '../web/src/settings/model.ts';
@@ -438,4 +438,49 @@ test('モデルを足したとき、チャットも裏方も空の順番には�
   const oneEmpty = { ...sample(), routing: { chat: ['big'], background: [], retriesPerModel: 1 } };
   assert.deepEqual(addModel(oneEmpty).config.routing, oneEmpty.routing, '片方でも順番があるときは触らない（裏方が空ならチャットの順番を使う）');
   assert.deepEqual(addModel(sample()).config.routing, sample().routing, '順番があるときは触らない');
+});
+
+test('保存の問題: issues があれば文を読み取らずに、そのまま行と節に結ぶ。古い応答・壊れた応答は今までの読み取りに戻る', () => {
+  const config = sample();
+  const body = {
+    problems: ['/nothing/useful: ???'],
+    issues: [
+      { path: 'models.big.contextLength', message: 'too small' },
+      { path: 'providers.local.baseUrl', message: 'bad url' },
+      { path: 'routing.chat', message: 'missing' },
+      { path: 'tools.shell.allow', message: 'cannot write' },
+      { path: 'server.origins', message: 'not an origin' },
+      { path: 'weird.place', message: 'unknown root' },
+    ],
+  };
+  const problems = problemsOf(body, 'failed', config);
+  assert.deepEqual(problems.map(p => [p.path, p.message, p.section, p.modelId, p.providerId]), [
+    ['models.big.contextLength', 'too small', 'models', 'big', undefined],
+    ['providers.local.baseUrl', 'bad url', 'providers', undefined, 'local'],
+    ['routing.chat', 'missing', 'models', undefined, undefined],
+    ['tools.shell.allow', 'cannot write', 'tools', undefined, undefined],
+    ['server.origins', 'not an origin', 'server', undefined, undefined],
+    ['weird.place', 'unknown root', null, undefined, undefined],
+  ], '文（problems）は読まない');
+  assert.equal(errorFor(problems, 'models.big.contextLength'), 'too small');
+  assert.equal(new Set(problems.map(p => p.text)).size, problems.length, '行の key に使う text が重ならない');
+
+  const dotted = { ...config, models: [{ ...config.models[0], id: 'gpt-4.1' }, ...config.models.slice(1)] };
+  const withDot = problemsOf({ issues: [{ path: 'models.gpt-4.1.contextLength', message: 'x' }, { path: 'models.gpt-4.1.id', message: 'dup' }] }, 'failed', dotted);
+  assert.deepEqual(withDot.map(p => [p.path, p.modelId]), [['models.gpt-4.1.contextLength', 'gpt-4.1'], ['models.gpt-4.1.id', 'gpt-4.1']], 'ID に点があっても、モデルを取り違えない');
+
+  const old = { problems: ['/models/0/contextLength: too small', 'routing.chat: モデル「x」がありません'] };
+  assert.deepEqual(problemsOf(old, 'failed', config), old.problems.map(text => parseProblem(text, config)), '古いサーバーの応答は文を読む');
+  for (const broken of [{ problems: ['models.big: 文'], issues: [] }, { problems: ['models.big: 文'], issues: [{ path: 3, message: 'x' }] }, { problems: ['models.big: 文'], issues: 'none' }, { problems: ['models.big: 文'], issues: [null] }]) {
+    assert.deepEqual(problemsOf(broken, 'failed', config), [parseProblem('models.big: 文', config)], JSON.stringify(broken.issues));
+  }
+  assert.deepEqual(problemsOf({ message: 'x' }, 'ただの失敗', config), [parseProblem('ただの失敗', config)], 'どちらも無ければ、渡された文');
+  assert.deepEqual(problemsOf(undefined, 'ただの失敗', config), [parseProblem('ただの失敗', config)]);
+});
+
+test('設定の道具の節: 道具を使う回数の上限の説明に「0 は制限なし」が入る（ja・en）', () => {
+  assert.match(ja['settings.tools.maxSteps'], /道具/u);
+  assert.match(ja['settings.tools.maxStepsDesc'], /0.*制限なし/u);
+  assert.match(en['settings.tools.maxStepsDesc'], /0.*no limit/iu);
+  assert.doesNotMatch(en['settings.tools.maxSteps'] + en['settings.tools.maxStepsDesc'], /[\u3040-\u30ff\u4e00-\u9fff]/u);
 });

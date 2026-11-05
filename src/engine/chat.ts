@@ -23,12 +23,12 @@ import { ContextOverflow, fitMessages } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
-import { estimateTextTokens } from './tokens.ts';
+import { estimateRequest, estimateTextTokens } from './tokens.ts';
 import { languageOf } from '../shared/language.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { engineText, type EngineMessageKey } from '../shared/messages/engine.ts';
 import type { MessageParams } from '../shared/messages/define.ts';
-import { compactPrompt, compactSpeaker, compactSystem, replyLanguageKey, snapshotLanguageKey, summarySection, withReplyReminder } from './prompts.ts';
+import { compactPrompt, compactSpeaker, compactSystem, nextStepOf, replyLanguageKey, snapshotLanguageKey, summarySection, withReplyReminder, wrapUpPrompt, wrapUpSystem } from './prompts.ts';
 import { buildDynamic, buildSnapshot, recordFileVersions } from './workspace.ts';
 import { stripAttachments } from '../uploads/store.ts';
 
@@ -39,6 +39,12 @@ const TRUNCATION_STRIKES = 2;
 const CALIBRATION_ALPHA = 0.3;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_INVALID_STREAK = 3;
+const UNATTENDED_ITERATION_CEILING = 100;
+
+export function iterationLimit(configured: number, kind: RunKind): number {
+  if (configured > 0) return configured;
+  return kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
+}
 const COMPACT_MIN_MESSAGES = 4;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
 
@@ -58,6 +64,7 @@ export interface ChatEngineDeps {
   curiosity?: CuriosityStore;
   skills?: SkillStore;
   web?: NonNullable<ToolContext['services']>['web'];
+  notify?: NonNullable<ToolContext['services']>['notify'];
   log?: (line: string) => void;
   now?: () => Date;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -75,6 +82,10 @@ export type SendOutcome =
   | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; detail?: ContextDetail; problems?: ModelProblem[] };
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
+
+export type ContextUsageOutcome =
+  | { ok: true; modelId: string; tokens: number; available: number; capacity: number; ratio: number }
+  | (Extract<SendOutcome, { ok: false }> & { errorParams?: MessageParams });
 
 // 会話（チャット）や裏の作業が、どのモデルを順に試すか。順番が空なら設定のモデル全部（モデルが 0 個なら空）。
 // 送信の画像の可否の確かめも、これを使う（エンジンと確かめの候補を食い違わせない）。
@@ -98,13 +109,15 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-interface Active { runId: string; conversationId: string; kind: RunKind; providers: Set<string>; controller: AbortController; done: Promise<EngineResult> }
+interface Active { runId: string; conversationId: string; kind: RunKind; taskId?: string; providers: Set<string>; controller: AbortController; done: Promise<EngineResult> }
 
 export class ChatEngine {
   readonly #d: ChatEngineDeps;
   #active = new Map<string, Active>();
   #byConversation = new Map<string, string>();
   #preempted = new Set<string>();
+  // 会話の実行が止めたタスク（会話の実行が終わるとき、会話で進んだ分をこのタスクに引き継ぐ）
+  #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
@@ -119,12 +132,13 @@ export class ChatEngine {
     if (this.#byConversation.has(conversationId)) return this.#busy('send.busy_chat');
     const chain = this.#chain('chat');
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
-    this.#preemptFor(chain.usable);
+    const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: text, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
     // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
     this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(text).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : text);
     const runId = randomUUID();
+    if (preempted.length) this.#preemptedTasks.set(runId, preempted);
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     // 添付の中身は外部のデータなので、この実行ではシェルと書き込みを承認制にする（taint）
     if (attachments.length) this.#initialTaint.set(runId, attachments.map(a => engineText(languageOf(this.#d.config()), 'attachment.taint', { name: a.name })));
@@ -138,9 +152,10 @@ export class ChatEngine {
     if (!last || last.role === 'assistant') return { ok: false, httpStatus: 409, errorKind: 'not_found', errorMessage: engineText(languageOf(this.#d.config()), 'send.nothing_to_retry'), errorCode: 'engine.send.nothing_to_retry' };
     const chain = this.#chain('chat');
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
-    this.#preemptFor(chain.usable);
+    const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     const runId = randomUUID();
+    if (preempted.length) this.#preemptedTasks.set(runId, preempted);
     this.#start(runId, conversationId, chain.usable, 'chat');
     return { ok: true, runId };
   }
@@ -204,13 +219,17 @@ export class ChatEngine {
     return smallest;
   }
 
-  #preemptFor(routes: Route[]): void {
+  // 会話の実行が使うプロバイダを使っている裏の実行を止める。止めたタスクの id を返す
+  #preemptFor(routes: Route[]): string[] {
     const providers = new Set(routes.map(r => r.provider.id));
+    const tasks: string[] = [];
     for (const active of this.#active.values()) {
       if (active.kind === 'chat' || ![...active.providers].some(p => providers.has(p))) continue;
       this.#preempted.add(active.runId);
+      if (active.taskId) tasks.push(active.taskId);
       active.controller.abort(new ProviderError('cancelled', engineText('ja', 'run.preempted'), { retryable: false }));
     }
+    return tasks;
   }
 
   stop(runId: string): boolean {
@@ -249,7 +268,7 @@ export class ChatEngine {
     return { usable: [...usable, ...cooling], problems };
   }
 
-  #noUsableModel(problems: ModelProblem[]): SendOutcome {
+  #noUsableModel(problems: ModelProblem[]): Extract<SendOutcome, { ok: false }> {
     const contextProblem = problems.find(p => p.status === 'too_small' || p.status === 'exceeds_model' || p.status === 'unknown');
     const language = languageOf(this.#d.config());
     const lines = problems.map(p => engineText(language, 'problem.line', { id: p.modelId, message: p.message, hintPart: p.hint ? engineText(language, 'problem.hint_suffix', { hint: p.hint }) : '' }));
@@ -278,10 +297,11 @@ export class ChatEngine {
       .finally(() => {
         this.#active.delete(runId);
         this.#byConversation.delete(conversationId);
+        this.#preemptedTasks.delete(runId);
         setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
         try { this.onRunEnd?.({ runId, conversationId, kind }); } catch (error) { this.#d.log?.(`[ERROR] onRunEnd: ${(error as Error).message}`); }
       });
-    this.#active.set(runId, { runId, conversationId, kind, providers: new Set(chain.map(r => r.provider.id)), controller, done });
+    this.#active.set(runId, { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), controller, done });
   }
 
   #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>): ToolDef[] {
@@ -298,7 +318,7 @@ export class ChatEngine {
     d.bus.publish({ type: 'run.start', runId, conversationId, modelId: chain[0]!.model.id });
     const flags: string[] = [];
     const usage: Usage = {};
-    const counters = { attempts: 0, iterations: 0, toolCalls: 0 };
+    const counters = { attempts: 0, iterations: 0, toolCalls: 0, workCalls: 0 };
     let index = 0;
     let invalidStreak = 0;
     let lastEstimate = 0;
@@ -306,12 +326,14 @@ export class ChatEngine {
     const policy = buildPolicy(config, d.paths);
     // 道具が書き込む「どう終えるか」の印は、ワーカーが読む control.value と同じ入れ物にする
     const taskSlot = task ? { id: task.task.id, get control() { return task.control.value; }, set control(v: TaskControl) { task.control.value = v; } } : undefined;
+    const touchedTasks = new Set<string>();
     const ctx: ToolContext = {
       runId, conversationId, kind, signal, config, paths: d.paths, policy, workspace: defaultWorkspace(policy, d.paths),
       taint: (() => { const sources = this.#initialTaint.get(runId) ?? []; this.#initialTaint.delete(runId); return { tainted: sources.length > 0, sources }; })(),
       log: d.log ?? (() => undefined),
-      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, emit: e => d.bus.publish(e) } : undefined,
+      services: d.memory ? { db: d.conversations.db, memory: d.memory, tasks: d.tasks, curiosity: d.curiosity, skills: d.skills, web: d.web, notify: d.notify, emit: e => d.bus.publish(e) } : undefined,
       task: taskSlot,
+      touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
     };
     const addUsage = (u: Usage) => {
@@ -320,8 +342,9 @@ export class ChatEngine {
       }
     };
     let replyLanguage: Language | undefined;
-    const finishOk = (text: string, stop: StopReason): EngineResult => {
+    const finishOk = (text: string, stop: StopReason, wrapUp?: { nextAction: string | undefined }): EngineResult => {
       if (replyLanguage && this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
+      if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop };
@@ -334,7 +357,7 @@ export class ChatEngine {
       return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
     };
 
-    const maxIterations = config.tools.maxIterations;
+    const maxIterations = iterationLimit(config.tools.maxIterations, kind);
     const compaction = { done: false };
     for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid });
@@ -359,6 +382,7 @@ export class ChatEngine {
       for (const toolCall of call.toolCalls) {
         if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
         counters.toolCalls++;
+        if (!toolCall.name.startsWith('task_')) counters.workCalls++;
         const toolModel = lastRoute.model;
         const toolCapacity = d.status.get(toolModel.id)?.effective ?? toolModel.contextLength ?? 0;
         ctx.outputLimit = toolCapacity > 0 ? toolOutputLimit(contextAvailable(toolCapacity, toolModel), TOOL_OUTPUT_LIMIT) : undefined;
@@ -380,7 +404,70 @@ export class ChatEngine {
     }
     flags.push('max_iterations');
     d.bus.publish({ type: 'warning', runId, conversationId, code: 'max_iterations', message: engineText(languageOf(config), 'warn.max_iterations', { max: maxIterations }), params: { max: maxIterations } });
-    return finishOk('', 'other');
+    if (kind !== 'chat') return finishOk('', 'other');
+    // 会話は黙って止まらない: 道具なしで 1 回だけ、ここまで・次の一手を書かせて返事として残す。書けなければ決まった文
+    const wrapped = await this.#wrapUp({ route: lastRoute, conversationId, signal, onUsage: addUsage });
+    if (wrapped === 'cancelled') return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
+    const text = wrapped ?? engineText(languageOf(config), 'wrapup.fallback', { max: maxIterations });
+    const saved = d.conversations.append(conversationId, { role: 'assistant', content: text }, runId);
+    d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
+    return finishOk(text, 'other', { nextAction: wrapped ? nextStepOf(wrapped) : undefined });
+  }
+
+  // 上限で止まった会話のまとめ。道具を渡さず、直近のやり取りを文字の記録にして 1 通で渡す（道具の呼び出しの履歴を送ると、道具の定義が要るプロバイダがあるため）。
+  // 書けた文を返す。空・失敗は null、止められたときは 'cancelled'
+  async #wrapUp(c: { route: Route; conversationId: string; signal: AbortSignal; onUsage: (usage: Usage) => void }): Promise<string | 'cancelled' | null> {
+    const d = this.#d;
+    const language = languageOf(d.config());
+    const { model, provider } = c.route;
+    const adapter = d.registry.get(provider.id);
+    if (!adapter) return null;
+    const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
+    const available = contextAvailable(capacity, model);
+    const conversation = d.conversations.get(c.conversationId);
+    const stored = d.conversations.messages(c.conversationId).filter(m => m.id > (conversation?.summary_upto ?? 0));
+    const maxChars = Math.min(COMPACT_TRANSCRIPT_CHARS, Math.max(1000, Math.floor(available * 0.5)));
+    const transcript = stored.map(m => `${compactSpeaker(m.message, language)}: ${m.text.slice(0, 1500)}`).join('\n').slice(-maxChars);
+    let release: (() => void) | undefined;
+    let usage: Usage = {};
+    try {
+      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, c.signal);
+      let text = '';
+      for await (const event of adapter.stream({
+        model, system: { frozen: wrapUpSystem(language), dynamic: '' },
+        messages: [{ role: 'user', content: wrapUpPrompt(transcript, language) }], tools: [], maxOutputTokens: Math.min(1000, model.maxOutputTokens), signal: c.signal,
+      })) {
+        if (event.type === 'text') text += event.delta;
+        else if (event.type === 'usage') usage = { ...usage, ...event.usage };
+      }
+      return text.trim() || null;
+    } catch {
+      return c.signal.aborted ? 'cancelled' : null;
+    } finally { c.onUsage(usage); release?.(); }
+  }
+
+  // 会話の実行が終わるとき、会話で進んだ分をタスクの経過（メモ）に書く。書く先は次のとおりで、普通の終わりで何にも触っていなければ何も書かない:
+  // - この実行で作った・task_update で触ったタスク（作る以外の道具を使った実行だけ。作っただけの確認の返事はメモにしない）
+  // - 道具の上限で止まったときは、さらに、この会話で作った実行待ち・返事待ちのタスク。まとめに次の一手があれば、次の一手も書く
+  // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触った・この会話で作ったときだけ書き、そのとき実行中のままの状態（running）も許す
+  // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
+  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, run: { wrapUp: boolean; workCalls: number; touched: ReadonlySet<string>; tainted: boolean }): void {
+    const d = this.#d;
+    const note = summary.note.trim();
+    if (!d.tasks || !note || run.tainted) return;
+    const preempted = new Set(this.#preemptedTasks.get(runId) ?? []);
+    const targets = new Set<string>();
+    if (run.wrapUp || run.workCalls > 0) for (const id of run.touched) targets.add(id);
+    if (run.wrapUp) for (const id of d.tasks.createdByConversation(conversationId)) targets.add(id);
+    if (!targets.size) return;
+    const language = languageOf(d.config());
+    for (const id of targets) {
+      const task = d.tasks.get(id);
+      if (!task) continue;
+      const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
+      if (!open.includes(task.status)) continue;
+      d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }), ...(summary.nextAction ? { nextAction: summary.nextAction } : {}) }, 'clive', runId);
+    }
   }
 
   async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: { done: boolean }; kind: RunKind; forbid?: ReadonlySet<string> | undefined }): Promise<CallResult> {
@@ -398,28 +485,12 @@ export class ChatEngine {
       }
       const adapter = d.registry.get(provider.id);
       if (!adapter) { last = { kind: 'internal', message: engineText(language, 'run.no_provider', { id: provider.id }), code: 'engine.run.no_provider', params: { id: provider.id }, retryable: false, route }; continue; }
-      const toolDefs = this.#toolsFor(model, p.kind, p.forbid);
-      const specs = ToolRegistry.specs(toolDefs);
-      const fallbackMode = model.toolMode === 'json_fallback';
-      const toolNames = new Set(toolDefs.map(t => t.name));
 
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
-        const available = contextAvailable(capacity, model);
-        const conversation = d.conversations.get(p.conversationId);
-        const upto = conversation?.summary_upto ?? 0;
-        const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
-        const config = d.config();
-        const summary = summarySection(conversation?.summary ?? '', language);
-        const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date()), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
-        const system = { frozen: p.snapshot, dynamic };
-        let history = stored.map(m => m.message);
-        if (fallbackMode) history = toJsonFallbackHistory(history, language);
-        if (this.#frozenLanguage(p.conversationId) !== language || this.#lastReplyLanguage(p.conversationId) !== language) history = withReplyReminder(history, language);
-        const apiTools = fallbackMode ? [] : specs;
-        const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
+        const { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid });
+        const toolNames = new Set(toolDefs.map(t => t.name));
         let fitted;
         try {
           fitted = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor });
@@ -488,6 +559,57 @@ export class ChatEngine {
     return { ok: false, cancelled: false, partial: '', failure: last };
   }
 
+  // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
+  // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
+  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined }) {
+    const d = this.#d;
+    const { model } = p;
+    const config = d.config();
+    const language = languageOf(config);
+    const toolDefs = this.#toolsFor(model, p.kind, p.forbid);
+    const specs = ToolRegistry.specs(toolDefs);
+    const fallbackMode = model.toolMode === 'json_fallback';
+    const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
+    const available = contextAvailable(capacity, model);
+    const conversation = d.conversations.get(p.conversationId);
+    const upto = conversation?.summary_upto ?? 0;
+    const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
+    const summary = summarySection(conversation?.summary ?? '', language);
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date()), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
+    const system = { frozen: p.snapshot, dynamic };
+    let history = stored.map(m => m.message);
+    if (fallbackMode) history = toJsonFallbackHistory(history, language);
+    if (this.#frozenLanguage(p.conversationId) !== language || this.#lastReplyLanguage(p.conversationId) !== language) history = withReplyReminder(history, language);
+    const apiTools = fallbackMode ? [] : specs;
+    const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
+    return { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor };
+  }
+
+  // いまの会話を次に送るとき、モデルへ送る量（トークンの見積もり）。古い発言を削る前の全体で、available（削り始める境目）に対する割合 ratio は 1 を超えうる。
+  // 副作用を持たない: 無い会話を作らず、固定の system が無い会話は固定せず（そのとき作るはずの文で数える）、ファイルの版も言語の記録も書かない。
+  contextUsage(conversationId: string, modelId?: string): ContextUsageOutcome {
+    const d = this.#d;
+    const config = d.config();
+    const language = languageOf(config);
+    let model: ModelConfig | undefined;
+    if (modelId !== undefined) {
+      model = config.models.find(m => m.id === modelId);
+      if (!model) return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: engineText(language, 'usage.model_missing', { id: modelId }), errorCode: 'engine.usage.model_missing', errorParams: { id: modelId } };
+      if (!((d.status.get(model.id)?.effective ?? model.contextLength ?? 0) > 0)) {
+        return this.#noUsableModel([{ modelId: model.id, status: 'unknown', message: engineText(language, 'problem.unchecked'), messageCode: 'engine.problem.unchecked' }]);
+      }
+    } else {
+      const chain = this.#chain('chat');
+      model = chain.usable.map(r => r.model).find(m => (d.status.get(m.id)?.effective ?? m.contextLength ?? 0) > 0);
+      if (!model) return this.#noUsableModel(chain.problems);
+    }
+    const existing = d.conversations.get(conversationId);
+    const snapshot = existing?.snapshot ?? this.#previewSnapshot(language);
+    const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat' });
+    const { tokens } = estimateRequest(`${built.system.frozen}\n${built.system.dynamic}`, built.history, built.apiTools, built.factor);
+    return { ok: true, modelId: model.id, tokens, available: built.available, capacity: built.capacity, ratio: tokens / built.available };
+  }
+
   #finishCancelled(runId: string, conversationId: string, counters: { attempts: number; iterations: number; toolCalls: number }, route: Route, partial: string): EngineResult {
     const d = this.#d;
     const language = languageOf(d.config());
@@ -541,13 +663,21 @@ export class ChatEngine {
     if (existing) return existing;
     recordFileVersions(d.conversations.db, d.paths);
     const language = languageOf(d.config());
-    const snapshot = buildSnapshot(d.paths, {
-      ...(d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
-      ...(d.skills ? { skills: d.skills.index(language) } : {}),
-    }, language);
+    const snapshot = this.#buildSnapshotText(language);
     if (d.conversations.setSnapshotOnce(conversationId, snapshot.text, snapshot.hash)) d.kv.set(snapshotLanguageKey(conversationId), language);
     return d.conversations.get(conversationId)?.snapshot ?? snapshot.text;
   }
+
+  // 会話の始めに固定する system の文。作るだけで、何も書かない
+  #buildSnapshotText(language: Language) {
+    const d = this.#d;
+    return buildSnapshot(d.paths, {
+      ...(d.memory ? { memories: renderBooks(d.memory.list(), language, this.memoryBudget()) } : {}),
+      ...(d.skills ? { skills: d.skills.index(language) } : {}),
+    }, language);
+  }
+
+  #previewSnapshot(language: Language): string { return this.#buildSnapshotText(language).text; }
 
   #checkTruncation(runId: string, conversationId: string, model: ModelConfig, estimate: { raw: number; tokens: number }, usage: Usage, capacity: number, flags: string[]): void {
     const d = this.#d;

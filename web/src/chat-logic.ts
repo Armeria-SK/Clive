@@ -1,4 +1,4 @@
-import { ApiError, type ModelView } from './api.ts';
+import { ApiError, type ApprovalPathView, type ModelView } from './api.ts';
 import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
 import type { IconName } from './icon-paths.ts';
 import { probeMessage, serverText } from './server-text.ts';
@@ -265,6 +265,37 @@ export function firstLine(value: string, max = 160): string {
 }
 
 export const formatCountdown = (ms: number): string => formatElapsed(Math.max(0, ms));
+
+// 承認の札の、見つけたパスごとの判定の札。中は読み書き・読むだけで文が分かれ、知らない判定は「判定できない」
+export function approvalPathKey(path: Pick<ApprovalPathView, 'verdict' | 'mode'>): PlainKey {
+  switch (path.verdict) {
+    case 'in': return path.mode === 'read' ? 'approval.verdict.inRead' : 'approval.verdict.inWrite';
+    case 'out': return 'approval.verdict.out';
+    case 'deny': return 'approval.verdict.deny';
+    default: return 'approval.verdict.unknown';
+  }
+}
+
+// サーバーが切って出さなかったパスの行の数（古い応答には無いので 0）
+export const approvalPathsMore = (a: { pathsMore?: number }): number => Math.max(0, Math.floor(a.pathsMore ?? 0));
+
+// 許可フォルダの中は目立たせず、それ以外（外・拒否・判定できない）は縁取りで目立たせる（デザインどおり）
+export const approvalPathTone = (verdict: ApprovalPathView['verdict']): 'neutral' | 'outline' => (verdict === 'in' ? 'neutral' : 'outline');
+
+// コンテキストの使用量の表示。割合は四捨五入し、1 を超えたら「100%+」（輪は 100% で止める）
+export function contextPercent(ratio: number): { text: string; over: boolean; fraction: number } {
+  const value = Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
+  if (value > 1) return { text: '100%+', over: true, fraction: 1 };
+  return { text: `${Math.round(value * 100)}%`, over: false, fraction: value };
+}
+
+// トークン数を 12.4k / 180k / 1.25M のようにまとめる
+export function compactTokens(n: number): string {
+  const value = Number.isFinite(n) && n > 0 ? n : 0;
+  if (value < 1000) return String(Math.round(value));
+  if (value >= 999_950) return `${Number((Math.round(value / 10_000) / 100).toFixed(2))}M`;
+  return `${Number((Math.round(value / 100) / 10).toFixed(1))}k`;
+}
 
 export function approvalFraction(expiresAt: number, now: number, totalMs: number): number {
   if (!(totalMs > 0)) return 0;

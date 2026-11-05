@@ -33,6 +33,8 @@ export interface Task {
   updated_at: number;
   completed_at: number | null;
   curiosity_id: number | null;
+  cancelled_from: TaskStatus | null;
+  created_in_conversation: string | null;
 }
 
 export type TaskView = Task & { cron_text: string | null };
@@ -52,6 +54,7 @@ export interface CreateTask {
   timezone?: string | undefined;
   propose?: boolean | undefined;
   curiosityId?: number | undefined;
+  createdInConversation?: string | undefined;
   actor: string;
 }
 
@@ -61,11 +64,15 @@ export class TaskError extends LocalizedError<TaskErrorCode> {
 
 const ORIGIN_ORDER = "CASE origin WHEN 'user' THEN 0 WHEN 'schedule' THEN 1 WHEN 'self' THEN 2 ELSE 3 END";
 const ACTIVE: TaskStatus[] = ['inbox', 'ready', 'running', 'waiting', 'scheduled'];
+// 取り消しを元に戻せる状態（取り消す直前がこの中のどれかのときだけ、戻す先を覚える）
+const RESTORABLE: readonly TaskStatus[] = ACTIVE;
 
 export class TaskStore {
   readonly #db: DatabaseSync;
   readonly #now: () => number;
   onChange: ((task: Task) => void) | undefined;
+  // 取り消しを戻すとき、タスクの書き換えと同じ transaction の中で呼ばれる（好奇心の状態を戻すため）
+  onUncancelled: ((task: Task) => void) | undefined;
 
   readonly #language: () => Language;
 
@@ -81,6 +88,11 @@ export class TaskStore {
     if (idOrPrefix.length < 6) return undefined;
     const rows = this.#db.prepare('SELECT * FROM tasks WHERE id LIKE ? LIMIT 2').all(`${idOrPrefix}%`) as unknown as Task[];
     return rows.length === 1 ? rows[0] : undefined;
+  }
+
+  createdByConversation(conversationId: string): string[] {
+    const rows = this.#db.prepare('SELECT id FROM tasks WHERE created_in_conversation = ?').all(conversationId) as Array<{ id: string }>;
+    return rows.map(r => r.id);
   }
 
   byConversation(conversationId: string): Task | undefined {
@@ -126,10 +138,10 @@ export class TaskStore {
       if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
       status = 'scheduled';
     }
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
-      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, now, now,
+      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, now, now,
     );
     this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);
@@ -177,10 +189,50 @@ export class TaskStore {
 
   finish(id: string, status: 'done' | 'failed' | 'cancelled', summary: string | null, actor: string, runId?: string): Task {
     const now = this.#now();
-    this.#db.prepare(`UPDATE tasks SET status = ?, result_summary = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, completed_at = ?, updated_at = ? WHERE id = ?`)
-      .run(status, summary, now, now, id);
+    if (status === 'cancelled') {
+      // 取り消す直前の状態を覚える（取り消しを戻す先）。質問の文は消さない。もう取り消してあるものを重ねて取り消しても、前の記録を残す
+      const before = this.get(id);
+      const from = before?.status === 'cancelled' ? before.cancelled_from : before && RESTORABLE.includes(before.status) ? before.status : null;
+      this.#db.prepare(`UPDATE tasks SET status = 'cancelled', result_summary = ?, lease_until = NULL, cancelled_from = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
+        .run(summary, from, now, now, id);
+    } else {
+      this.#db.prepare(`UPDATE tasks SET status = ?, result_summary = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = ?, updated_at = ? WHERE id = ?`)
+        .run(status, summary, now, now, id);
+    }
     this.event(id, status, actor, summary, runId);
     return this.#changed(id);
+  }
+
+  // 取り消しを、取り消す直前の状態へ戻す。状態が変わっていなければ（まだ取り消したまま）いつでも戻せる
+  uncancel(id: string, actor: string): Task {
+    transaction(this.#db, () => {
+      const task = this.get(id);
+      if (!task) throw new TaskError('error.not_found', { id });
+      if (task.status !== 'cancelled') throw new TaskError('error.not_cancelled');
+      const from = task.cancelled_from;
+      if (!from) throw new TaskError('error.no_cancel_record');
+      // 繰り返しの実行は、同じ予定の別の実行が動いているあいだは戻さない（重ねて動かさない。#spawnChild と同じ決まり）
+      if (task.parent_id && this.hasOpenRun(task.parent_id)) throw new TaskError('error.sibling_open');
+      const now = this.#now();
+      let runAt = task.run_at;
+      let status: TaskStatus = from;
+      if (from === 'running') { status = 'ready'; runAt = null; }
+      if (from === 'scheduled' && (runAt === null || runAt <= now)) {
+        // 取り消していたあいだの回を、あとからまとめて動かさない
+        runAt = nextRunAt(task.cron ?? '', task.timezone ?? 'UTC', now);
+        if (runAt === null) throw new TaskError('error.bad_cron', { cron: task.cron ?? '' });
+      }
+      this.#db.prepare(`UPDATE tasks SET status = ?, run_at = ?, lease_until = NULL, cancelled_from = NULL, completed_at = NULL, result_summary = NULL, updated_at = ? WHERE id = ?`)
+        .run(status, runAt, now, id);
+      this.event(id, 'uncancelled', actor, taskText(this.#language(), 'event.uncancelled'));
+      this.onUncancelled?.(this.get(id)!);
+    });
+    return this.#changed(id);
+  }
+
+  // 同じ予定から作られた実行で、まだ終わっていない（実行待ち・実行中・返事待ち）ものがあるか
+  hasOpenRun(parentId: string): boolean {
+    return Boolean(this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(parentId));
   }
 
   approve(id: string): Task {
@@ -223,8 +275,7 @@ export class TaskStore {
   #spawnChild(template: Task, actor: string): Task | undefined {
     const now = this.#now();
     // 前回分がまだ終わっていなければ、重ねて作らない
-    const open = this.#db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND status IN ('ready', 'running', 'waiting')").get(template.id);
-    if (open) { this.event(template.id, 'skipped', 'system', taskText(this.#language(), 'event.skipped')); return undefined; }
+    if (this.hasOpenRun(template.id)) { this.event(template.id, 'skipped', 'system', taskText(this.#language(), 'event.skipped')); return undefined; }
     const id = randomUUID();
     this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, parent_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, 'ready', 'schedule', ?, ?, ?, ?)`).run(id, template.title, template.body, template.next_action, template.done_criteria, template.priority, template.id, now, now);
@@ -237,8 +288,13 @@ export class TaskStore {
     if (!task) throw new TaskError('error.not_found', { id });
     if (task.status === 'running') throw new TaskError('error.running');
     if (task.status === 'scheduled') throw new TaskError('error.schedule_cannot_run');
-    this.#db.prepare(`UPDATE tasks SET status = 'ready', attempts = 0, run_at = NULL, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`)
-      .run(this.#now(), id);
+    const now = this.#now();
+    // 繰り返しのひな形は、一回きりの実行待ちではなく予定に戻す（次の回を計算する）
+    const isTemplate = task.cron !== null && task.parent_id === null;
+    const nextRun = isTemplate ? nextRunAt(task.cron!, task.timezone ?? 'UTC', now) : null;
+    if (isTemplate && nextRun === null) throw new TaskError('error.bad_cron', { cron: task.cron! });
+    this.#db.prepare(`UPDATE tasks SET status = ?, attempts = 0, run_at = ?, lease_until = NULL, waiting_kind = NULL, waiting_text = NULL, cancelled_from = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`)
+      .run(isTemplate ? 'scheduled' : 'ready', nextRun, now, id);
     this.event(id, 'reopened', actor, reason ?? null);
     return this.#changed(id);
   }

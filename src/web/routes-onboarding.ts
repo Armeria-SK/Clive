@@ -7,7 +7,7 @@ import {
 } from '../engine/persona.ts';
 import { reloadEnvFile } from '../paths.ts';
 import { languageOf } from '../shared/language.ts';
-import { HttpProblem, problem, readJson, requireObject, requireString, type Router, sendJson } from './http.ts';
+import { configProblem, problem, readJson, requireObject, requireString, type Router, sendJson } from './http.ts';
 
 const DONE_KEY = 'onboarding:done';
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;
@@ -78,7 +78,7 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
     if (input.botName !== undefined && config.profile.name !== input.botName) {
       try { await app.applyConfig({ ...config, profile: { ...config.profile, name: input.botName } }); }
       catch (error) {
-        if (error instanceof ConfigError) throw new HttpProblem(400, { error: 'invalid_config', message: error.message.split('\n')[0], problems: error.problems });
+        if (error instanceof ConfigError) throw configProblem(error);
         throw error;
       }
     }

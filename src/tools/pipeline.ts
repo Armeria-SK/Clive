@@ -113,7 +113,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
-      cwd: summary.cwd, reasons, details, onceOnly, preview: first?.preview,
+      cwd: summary.cwd, reasons, details, onceOnly, preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore,
     }, ctx.config.tools.shell.approvalTimeoutSec * 1000, ctx.signal);
     approvalId = deps.approvals.pending().find(p => p.inputHash === hash && p.runId === ctx.runId)?.id;
     const outcome = await pending;
@@ -140,7 +140,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   let output: ToolOutput;
   try { output = await tool.execute(args, ctx, { approvedOnce, ...(approvedOnce && first ? { check: first } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
-  if (tool.effect === 'network') { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
+  // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる
+  if (tool.effect === 'network' && !(output.isError && output.noRemoteContent)) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 
   // ── 実行後フック（記録用。結果は変えない） ──
   for (const hook of ctx.config.tools.hooks.postToolUse) {

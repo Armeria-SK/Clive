@@ -118,6 +118,32 @@ export function parseProblem(text: string, config: Config): Problem {
   return problem;
 }
 
+export interface ServerIssue { path: string; message: string }
+const isIssue = (value: unknown): value is ServerIssue =>
+  isPlain(value) && typeof value.path === 'string' && typeof value.message === 'string';
+
+// サーバーが ID で書いた場所つきで返した問題（issues）を、そのまま行と節に結ぶ。モデルの ID に点があっても取り違えないよう、設定の ID と突き合わせる
+function problemOfIssue(issue: ServerIssue, config: Config): Problem {
+  const segments = issue.path.split('.').filter(Boolean);
+  const root = segments[0] ?? '';
+  const problem: Problem = { text: issue.path ? `${issue.path}: ${issue.message}` : issue.message, path: issue.path, message: issue.message, section: SECTION_OF_ROOT[root] ?? null };
+  if (root === 'models' || root === 'providers') {
+    const list = config[root];
+    const ids = Array.isArray(list) ? list.map(item => item?.id).filter((id): id is string => typeof id === 'string').sort((a, b) => b.length - a.length) : [];
+    const id = ids.find(candidate => issue.path === `${root}.${candidate}` || issue.path.startsWith(`${root}.${candidate}.`));
+    if (id !== undefined) problem[root === 'models' ? 'modelId' : 'providerId'] = id;
+  }
+  return problem;
+}
+
+// 保存を断られたときの応答から、画面に出す問題の一覧を作る。issues があればそれを使い、無い・読めない古い応答は文（problems）を今までの読み取りで読む。
+export function problemsOf(body: unknown, fallback: string, config: Config): Problem[] {
+  const record = isPlain(body) ? body : {};
+  if (Array.isArray(record.issues) && record.issues.length > 0 && record.issues.every(isIssue)) return record.issues.map(issue => problemOfIssue(issue, config));
+  const texts = Array.isArray(record.problems) ? record.problems.filter((text): text is string => typeof text === 'string') : [];
+  return (texts.length ? texts : [fallback]).map(text => parseProblem(text, config));
+}
+
 // ---- 設定の書き換え（元の設定は書き換えず、新しい設定を返す）----
 
 export function updateAt(config: Config, root: string, patch: Record<string, unknown>): Config {

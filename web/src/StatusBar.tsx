@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import type { WorkerStatus } from './api.ts';
+import type { ContextUsage, WorkerStatus } from './api.ts';
+import { compactTokens, contextPercent } from './chat-logic.ts';
 import { useNow, useTheme } from './hooks.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { formatElapsed, useT } from './i18n/index.ts';
@@ -12,6 +13,7 @@ interface Props {
   runStartedAt: number | undefined;
   approvals: number;
   modelName: string | null;
+  usage: ContextUsage | null;
   unread: number;
   notificationsOpen: boolean;
   onReconnect: () => void;
@@ -60,6 +62,7 @@ export function StatusBar(props: Props) {
       </div>
       <div className="sb-group">
         {approvals > 0 && <Item icon="shield" iconClass="on" tip={t('status.approvalsTip')} onClick={props.onOpenApproval} accent>{t('status.approvals', approvals)}</Item>}
+        {props.usage && <Item icon="circle" tip={`${t('context.label')}: ${t('context.tip', compactTokens(props.usage.tokens), compactTokens(props.usage.available), compactTokens(props.usage.capacity))}${contextPercent(props.usage.ratio).over ? ` · ${t('context.over')}` : ''}`}>{contextPercent(props.usage.ratio).text}</Item>}
         {modelName && <Item icon="cpu" tip={t('status.modelTip')}><span className="sb-mono">{modelName}</span></Item>}
         <Item icon="bell" iconClass={unread ? 'on' : undefined} tip={t('status.notifications')} onClick={props.onOpenNotifications} expanded={props.notificationsOpen}>{String(unread)}</Item>
         <Item icon={effective === 'dark' ? 'sun' : 'moon'} tip={effective === 'dark' ? t('theme.toLight') : t('theme.toDark')} onClick={toggleTheme} />

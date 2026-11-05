@@ -81,6 +81,14 @@ export class CuriosityStore {
     else this.update(item.id, { status: 'open', taskId: null });
   }
 
+  // 取り消したタスクが戻されたとき、取り消しで下ろした興味を調べ中に戻す。持ち主が気になることを戻した・別のタスクが引き継いだなど、取り消しのあとで変わっていれば触らない
+  onTaskRestored(task: { id: string; curiosity_id: number | null }): void {
+    if (!task.curiosity_id) return;
+    const item = this.get(task.curiosity_id);
+    if (!item || item.status !== 'dropped' || item.task_id !== null) return;
+    this.update(item.id, { status: 'researching', taskId: task.id });
+  }
+
   importMarkdown(markdown: string): number {
     let count = 0;
     for (const line of markdown.split(/\r?\n/u)) {

@@ -91,3 +91,32 @@ test('KV の読み書き', () => {
   kv.delete('a');
   assert.equal(kv.get('a'), undefined);
 });
+
+test('マイグレーション 8: tasks に created_in_conversation が足される。前からある行は NULL', t => {
+  const path = join(tempDir(t), 'clive.db');
+  const before = openDatabase(path, MIGRATIONS.slice(0, 7));
+  before.prepare(`INSERT INTO tasks (id, title, status, origin, created_at, updated_at) VALUES ('old', '前からあるタスク', 'ready', 'user', 1, 1)`).run();
+  before.close();
+  const db = openDatabase(path, MIGRATIONS);
+  try {
+    const columns = (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map(c => c.name);
+    assert.ok(columns.includes('created_in_conversation'));
+    assert.equal((db.prepare("SELECT created_in_conversation FROM tasks WHERE id = 'old'").get() as { created_in_conversation: string | null }).created_in_conversation, null);
+    db.prepare("UPDATE tasks SET created_in_conversation = 'c1' WHERE id = 'old'").run();
+  } finally { db.close(); }
+});
+
+test('マイグレーション 7: tasks に cancelled_from が足される。前からある行は NULL（戻せない）で、不正な値は入らない', t => {
+  const path = join(tempDir(t), 'clive.db');
+  const before = openDatabase(path, MIGRATIONS.slice(0, 6));
+  before.prepare(`INSERT INTO tasks (id, title, status, origin, created_at, updated_at, completed_at) VALUES ('old', '前に取り消したもの', 'cancelled', 'user', 1, 1, 1)`).run();
+  before.close();
+  const db = openDatabase(path, MIGRATIONS);
+  try {
+    const columns = (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map(c => c.name);
+    assert.ok(columns.includes('cancelled_from'));
+    assert.equal((db.prepare("SELECT cancelled_from FROM tasks WHERE id = 'old'").get() as { cancelled_from: string | null }).cancelled_from, null);
+    db.prepare("UPDATE tasks SET cancelled_from = 'running' WHERE id = 'old'").run();
+    assert.throws(() => db.prepare("UPDATE tasks SET cancelled_from = 'done' WHERE id = 'old'").run(), /CHECK/u);
+  } finally { db.close(); }
+});

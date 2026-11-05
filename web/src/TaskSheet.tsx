@@ -23,13 +23,13 @@ interface Props {
 }
 
 interface Detail { task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }
-type Field = 'title' | 'body' | 'next';
+type Field = 'title' | 'body' | 'next' | 'done';
 
 const ACTION_LABEL = {
   approve: 'tasks.action.approve', runNow: 'tasks.action.runNow', retry: 'tasks.action.retryRun', done: 'tasks.action.done', cancel: 'tasks.action.cancel',
 } as const satisfies Record<SheetAction, string>;
 const ACTION_ICON: Record<SheetAction, IconName> = { approve: 'check', runNow: 'play', retry: 'refresh', done: 'check', cancel: 'circleSlash' };
-const FIELD_LABEL = { body: 'tasks.field.body', next: 'tasks.field.next' } as const;
+const FIELD_LABEL = { body: 'tasks.field.body', next: 'tasks.field.next', done: 'tasks.field.done' } as const;
 
 function Tag({ task }: { task: Task }) {
   const t = useT();
@@ -95,11 +95,11 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
   const startEdit = (field: Field) => {
     if (!data) return;
     setEditing(field);
-    setDraft(field === 'title' ? data.task.title : field === 'body' ? data.task.body : data.task.next_action ?? '');
+    setDraft(field === 'title' ? data.task.title : field === 'body' ? data.task.body : field === 'next' ? data.task.next_action ?? '' : data.task.done_criteria ?? '');
   };
   const save = () => once('sheet', async () => {
     if (!data || !editing) return;
-    const patch = editing === 'title' ? { title: draft.trim() } : editing === 'body' ? { body: draft } : { nextAction: draft.trim() || null };
+    const patch = editing === 'title' ? { title: draft.trim() } : editing === 'body' ? { body: draft } : editing === 'next' ? { nextAction: draft.trim() || null } : { doneCriteria: draft.trim() || null };
     try {
       await api.editTask(data.task.id, patch);
       toast({ kind: 'done', icon: 'check', title: t('tasks.toast.saved'), body: editing === 'title' ? draft.trim() : t(FIELD_LABEL[editing]) });
@@ -127,7 +127,7 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
     : task.status === 'running' || task.status === 'waiting' ? t(STATUS_KEY[task.status])
     : formatRelative(task.updated_at);
 
-  const fieldRow = (field: 'body' | 'next', value: string | null): ReactNode => (
+  const fieldRow = (field: 'body' | 'next' | 'done', value: string | null): ReactNode => (
     <div className="tk-field" key={field}>
       <div className="tk-field-head">
         <span className="tk-field-label">{t(FIELD_LABEL[field])}</span>
@@ -135,7 +135,7 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
       </div>
       {editing === field ? (
         <div className="tk-field-edit tk-expand">
-          <textarea className="input" autoFocus value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={editKey} />
+          <textarea className="input" autoFocus value={draft} maxLength={field === 'done' ? 500 : undefined} onChange={e => setDraft(e.target.value)} onKeyDown={editKey} />
           <div className="tk-field-buttons">
             <button className="btn btn-ghost" onClick={() => setEditing(null)}>{t('tasks.field.cancel')}</button>
             <button className="btn btn-primary" disabled={busy || (field === 'body' && !draft.trim())} onClick={() => void save()}>{t('tasks.field.save')}</button>
@@ -217,10 +217,7 @@ function SheetContent({ id, revision, runId, runStartedAt, busyWithOther, onClos
               <div className="tk-fields">
                 {fieldRow('body', task.body)}
                 {fieldRow('next', task.next_action)}
-                <div className="tk-field">
-                  <div className="tk-field-head"><span className="tk-field-label">{t('tasks.field.done')}</span></div>
-                  <span className={`tk-field-value${task.done_criteria ? '' : ' unset'}`}>{task.done_criteria || t('tasks.field.empty')}</span>
-                </div>
+                {fieldRow('done', task.done_criteria)}
               </div>
 
               {task.result_summary && (

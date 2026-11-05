@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ApiError, type Conversation } from './api.ts';
-import { routeHash, type Route } from './routes.ts';
+import { chatHash, routeHash, type Route } from './routes.ts';
 import { closeTab, dropChats, findGoneChats, loadTabs, openTab, saveTabs, toTab, unlistedChatIds, type ChatProbe, type Tab } from './tabs.ts';
 
 // 一覧（100 件まで）の外の会話は、題が一覧に無いので、確かめるついでに題も受け取って、タブの名前にする。
@@ -61,5 +61,13 @@ export function useTabs(route: Route, conversations: Conversation[], conversatio
     location.hash = '#/';
   }, []);
 
-  return { tabs, titles, activeKey: current?.key ?? null, close, openNewChat };
+  // 元に戻した会話は、今開いているタブを置き換えず、並べて足して開く
+  const openChat = useCallback((id: string) => {
+    const hash = chatHash(id);
+    if (location.hash === hash) return;
+    append.current = true;
+    location.hash = hash;
+  }, []);
+
+  return { tabs, titles, activeKey: current?.key ?? null, close, openNewChat, openChat };
 }

@@ -16,7 +16,7 @@ export function reportTaskError(error: unknown): void {
 }
 
 // 行とシートで共通の操作。成功したら通知（トースト）を出して true を返す。失敗したら理由を出して false を返す。
-// 取り消しのトーストに「元に戻す」は付けない（サーバーの取り消しは戻せない）。
+// 取り消し・見送りのトーストには「元に戻す」を付ける（トーストが出ているあいだだけ押せる。サーバーは時間では切らず、状態が変わっていなければ戻す）。
 export async function performTaskAction(action: TaskAction, task: Pick<Task, 'id' | 'title'>, context: ActionContext = {}): Promise<boolean> {
   try {
     if (action === 'stop') {
@@ -33,15 +33,27 @@ export async function performTaskAction(action: TaskAction, task: Pick<Task, 'id
         toast({ icon: 'play', title: t(context.busyWithOther ? 'tasks.toast.runNext' : 'tasks.toast.runStarted'), body: task.title });
         break;
       case 'done': toast({ kind: 'done', icon: 'check', title: t('tasks.toast.done'), body: task.title }); break;
-      case 'cancel': toast({ icon: 'circleSlash', title: t('tasks.toast.cancelled'), body: task.title }); break;
+      case 'cancel': toast({ icon: 'circleSlash', title: t('tasks.toast.cancelled'), body: task.title, action: undoCancel(task) }); break;
       case 'approve': toast({ kind: 'done', icon: 'check', title: t('tasks.toast.approved'), body: task.title }); break;
-      case 'skip': toast({ icon: 'circleSlash', title: t('tasks.toast.skipped'), body: task.title }); break;
+      case 'skip': toast({ icon: 'circleSlash', title: t('tasks.toast.skipped'), body: task.title, action: undoCancel(task) }); break;
     }
     return true;
   } catch (error) {
     reportTaskError(error);
     return false;
   }
+}
+
+function undoCancel(task: Pick<Task, 'id' | 'title'>): { label: string; run: () => void } {
+  return {
+    label: t('tasks.toast.undo'),
+    run: () => {
+      void api.taskAction(task.id, 'uncancel').then(
+        () => { toast({ kind: 'done', icon: 'undo', title: t('tasks.toast.restored'), body: task.title }); },
+        reportTaskError,
+      );
+    },
+  };
 }
 
 export async function answerTask(task: Pick<Task, 'id'>, text: string): Promise<boolean> {

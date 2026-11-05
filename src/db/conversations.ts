@@ -61,6 +61,10 @@ export class Conversations {
     this.db.prepare('UPDATE conversations SET archived = 1 WHERE id = ?').run(id);
   }
 
+  unarchive(id: string): void {
+    this.db.prepare('UPDATE conversations SET archived = 0 WHERE id = ?').run(id);
+  }
+
   setSnapshotOnce(id: string, snapshot: string, hash: string): boolean {
     const result = this.db.prepare('UPDATE conversations SET snapshot = ?, snapshot_hash = ? WHERE id = ? AND snapshot IS NULL')
       .run(snapshot, hash, id);

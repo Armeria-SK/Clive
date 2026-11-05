@@ -10,12 +10,16 @@ export interface Message {
 }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
 export interface ApprovalPreview { path: string; text: string; truncated: boolean }
+// 見つけたパスごとの判定。in は許可フォルダの中（mode はそのフォルダの読み書き / 読むだけ）、out は外、deny は拒否、unknown は判定できない（path が無い）
+export interface ApprovalPathView { input: string; path?: string; verdict: 'in' | 'out' | 'deny' | 'unknown'; mode?: 'read' | 'write' }
 export interface Approval {
   id: string; runId: string; conversationId: string; tool: string; title: string; body: string; cwd?: string;
-  reasons: string[]; details: string[]; expiresAt: number;
+  reasons: string[]; details: string[]; paths: ApprovalPathView[]; pathsMore?: number; expiresAt: number;
   // コードを動かす確かめ: 毎回確かめる（「この会話では許可」と Enter での許可は無い）。preview は動かすファイルの中身
   onceOnly: boolean; preview: ApprovalPreview[];
 }
+// 会話を次に送るときのコンテキストの使用量。tokens は古い発言を削る前の見積もり、available は削り始める境目、capacity はモデル全体、ratio は tokens / available（1 を超えうる）
+export interface ContextUsage { modelId: string; tokens: number; available: number; capacity: number; ratio: number }
 export interface ContextDetail { reason: string; measured?: number; required?: number; hint?: string }
 
 export interface Probe {
@@ -29,7 +33,7 @@ export interface ModelView {
 export interface SettingsView {
   config: Record<string, any>;
   apiKeys: Record<string, boolean>;
-  configError: { message: string; problems: string[] } | null;
+  configError: { message: string; problems: string[]; issues?: Array<{ path: string; message: string }> } | null;
   restartRequired: boolean;
   configPath: string;
 }
@@ -119,7 +123,9 @@ export const api = {
   conversations: () => call<{ conversations: Conversation[] }>('/api/conversations'),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
+  unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),
   messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
+  contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   decide: (id: string, decision: 'once' | 'conversation' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   send: (id: string, text: string, attachments: string[] = []) => call<{ runId: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}) }) }),
@@ -146,10 +152,10 @@ export const api = {
   tasks: () => call<{ active: Task[]; finished: Task[] }>('/api/tasks'),
   task: (id: string) => call<{ task: Task; events: TaskEvent[]; approvals: Approval[]; runs: Task[] }>(`/api/tasks/${id}`),
   createTask: (task: NewTask) => call<{ task: Task }>('/api/tasks', { method: 'POST', body: JSON.stringify(task) }),
-  editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; priority?: number; when?: string | null }) =>
+  editTask: (id: string, patch: { title?: string; body?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; when?: string | null }) =>
     call<{ task: Task }>(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   answerTask: (id: string, text: string) => call<{ task: Task }>(`/api/tasks/${id}/answer`, { method: 'POST', body: JSON.stringify({ text }) }),
-  taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),
+  taskAction: (id: string, action: 'run-now' | 'approve' | 'cancel' | 'uncancel' | 'done') => call<{ task: Task }>(`/api/tasks/${id}/${action}`, { method: 'POST', body: '{}' }),
   worker: () => call<WorkerStatus>('/api/worker'),
   setWorker: (patch: { paused?: boolean; autonomy?: boolean }) => call<WorkerStatus>('/api/worker', { method: 'POST', body: JSON.stringify(patch) }),
   notifications: () => call<{ notifications: NotificationItem[]; unread: number }>('/api/notifications'),

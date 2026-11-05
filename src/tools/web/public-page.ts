@@ -25,6 +25,19 @@ function failure(code: RetrievalCode, key: ToolMessageKey, params: MessageParams
   return new RetrievalFailure(code, toolText('ja', key, params), status, key, params);
 }
 
+export function clip(text: string, max: number): string {
+  const clean = text.replace(/\p{Cc}/gu, ' ');
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+}
+
+// 相手が返した Content-Type から、画面とモデルに見せる「種類」だけを取る（パラメータ・指示のような文は捨てる）。種類の形でなければ undefined
+export function mediaTypeOf(contentType: string): string | undefined {
+  const media = (contentType.split(';')[0] ?? '').trim();
+  return /^[\w.+-]+\/[\w.+-]+$/u.test(media) ? media.slice(0, 100) : undefined;
+}
+
+const typeShown = (contentType: string) => mediaTypeOf(contentType) ?? toolText('ja', 'fetch.type_unknown');
+
 const MAX_BYTES = 512 * 1024;
 const PAGE_TYPES = /^(text\/(html|plain|xml|markdown|csv)|application\/(json|xml|rss\+xml|atom\+xml|xhtml\+xml))(;|$)/iu;
 const USER_AGENT = 'Clive/0.1 (personal agent; public page reader)';
@@ -80,7 +93,7 @@ export function networkFor(accept: string, types: RegExp, maxBytes = MAX_BYTES, 
           response.destroy();
           reject(status !== 200
             ? failure(status === 404 ? 'not_found' : [401, 403, 429].includes(status) ? 'refused' : 'http_failure', 'fetch.http_status', { status }, status)
-            : failure('invalid_response', 'fetch.type', { type: contentType || toolText('ja', 'fetch.type_unknown') }, status));
+            : failure('invalid_response', 'fetch.type', { type: typeShown(contentType) }, status));
           return;
         }
         const chunks: Buffer[] = [];
@@ -110,7 +123,7 @@ export async function publicAddress(host: string, signal: AbortSignal, resolveHo
   const addresses = await new Promise<string[]>((resolve, reject) => {
     const abort = () => reject(failure('aborted', 'fetch.aborted'));
     signal.addEventListener('abort', abort, { once: true });
-    resolveHost(host).then(resolve, error => reject(failure('not_found', 'fetch.dns', { host, detail: (error as Error).message })))
+    resolveHost(host).then(resolve, error => reject(failure('not_found', 'fetch.dns', { host, detail: clip((error as Error).message, 200) })))
       .finally(() => signal.removeEventListener('abort', abort));
   });
   signal.throwIfAborted();
@@ -137,13 +150,13 @@ export async function fetchPublic(input: string, signal: AbortSignal | undefined
         continue;
       }
       if (response.status !== 200) throw failure(response.status === 404 ? 'not_found' : 'http_failure', 'fetch.http_status', { status: response.status }, response.status);
-      if (!PAGE_TYPES.test(response.contentType) || /[\r\n]/u.test(response.contentType)) throw failure('invalid_response', 'fetch.type', { type: response.contentType });
+      if (!PAGE_TYPES.test(response.contentType) || /[\r\n]/u.test(response.contentType)) throw failure('invalid_response', 'fetch.type', { type: typeShown(response.contentType) });
       return { url: url.href, contentType: response.contentType, body: response.body, truncated: Boolean(response.truncated) };
     }
   } catch (error) {
     if (error instanceof RetrievalFailure) throw error;
     if (cancellation.aborted) throw signal?.aborted ? failure('aborted', 'fetch.aborted') : failure('aborted', 'fetch.timeout', { seconds: timeoutMs / 1000 });
-    throw failure('http_failure', 'fetch.connect', { detail: (error as Error).message });
+    throw failure('http_failure', 'fetch.connect', { detail: clip((error as Error).message, 200) });
   }
   throw failure('invalid_response', 'fetch.redirects');
 }

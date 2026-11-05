@@ -203,7 +203,7 @@ test('辞書: 状態・出どころ・優先度・経過の種類・気になる
   const keys = [
     ...Object.values(STATUS_KEY), ...Object.values(ORIGIN_KEY), ...Object.values(CURIOSITY_STATUS_KEY),
     priorityKey(1), priorityKey(2), priorityKey(3), priorityKey(9),
-    ...['created', 'note', 'requeued', 'question', 'approval', 'answer', 'run', 'done', 'failed', 'cancelled', 'approved', 'reopened', 'skipped', 'edited', 'context'].map(kind => eventKey(kind)!),
+    ...['created', 'note', 'requeued', 'question', 'approval', 'answer', 'run', 'done', 'failed', 'cancelled', 'approved', 'reopened', 'skipped', 'edited', 'context', 'uncancelled'].map(kind => eventKey(kind)!),
   ];
   for (const key of keys) {
     assert.equal(typeof (ja as Record<string, unknown>)[key], 'string', `${key} が ja に無い`);

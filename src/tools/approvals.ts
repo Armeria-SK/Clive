@@ -1,11 +1,49 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import type { Placement } from './hooks/scope.ts';
 
 export type ApprovalDecision = 'once' | 'conversation' | 'deny';
 export type ApprovalOutcome = 'approved' | 'denied' | 'expired' | 'cancelled';
 
 // 確かめの札で見せるコードのファイル（読めないものは text に理由の文を入れる）
 export interface PreviewFile { path: string; text: string; truncated: boolean }
+
+// 承認の札に出す、見つけたパスごとの判定。in: 許可フォルダの中（mode はそのフォルダの読み書き / 読むだけ）、out: 外、deny: 拒否、unknown: 判定できない（変数など。path は無い）
+export interface ApprovalPath { input: string; path?: string; verdict: 'in' | 'out' | 'deny' | 'unknown'; mode?: 'read' | 'write' }
+
+// 判定の材料: 道具の事前判定が、見つけたパスごとに残した置き場所
+export interface PlacedPath { input: string; path?: string | undefined; placement: Placement | { kind: 'unresolved'; reason: string } }
+
+const MAX_APPROVAL_PATHS = 30;
+
+// 判定そのものは事前判定が済ませている。ここでは見つけたパスを、画面に渡す形に直すだけで、判定には何も足さない。
+// 同じ入力・同じ場所・同じ判定の重なりは 1 行にする
+function distinctPaths(found: readonly PlacedPath[]): ApprovalPath[] {
+  const out: ApprovalPath[] = [];
+  const seen = new Set<string>();
+  for (const { input, path, placement } of found) {
+    const item: ApprovalPath = placement.kind === 'inside' ? { input, ...(path !== undefined ? { path } : {}), verdict: 'in', mode: placement.mode }
+      : placement.kind === 'outside' ? { input, ...(path !== undefined ? { path } : {}), verdict: 'out' }
+      : placement.kind === 'deny' ? { input, ...(path !== undefined ? { path } : {}), verdict: 'deny' }
+      : { input, verdict: 'unknown' };
+    const key = JSON.stringify([item.input, item.path, item.verdict, item.mode]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+// 画面に出す行: 許可フォルダの外・拒否・判定できないを先に（それぞれ見つけた順）、中はそのあと。多すぎる分は切る
+export function approvalPaths(found: readonly PlacedPath[]): ApprovalPath[] {
+  const all = distinctPaths(found);
+  return [...all.filter(p => p.verdict !== 'in'), ...all.filter(p => p.verdict === 'in')].slice(0, MAX_APPROVAL_PATHS);
+}
+
+// 切って出さなかった行の数
+export function approvalPathsMore(found: readonly PlacedPath[]): number {
+  return Math.max(0, distinctPaths(found).length - MAX_APPROVAL_PATHS);
+}
 
 export interface ApprovalRequest {
   runId: string;
@@ -20,6 +58,10 @@ export interface ApprovalRequest {
   // コードを動かす確かめ。「この会話では許可」を出さず、同じ文字のコマンドの許可を覚えない
   onceOnly?: boolean | undefined;
   preview?: PreviewFile[] | undefined;
+  // 見つけたパスごとの判定（details の文と同じものを構造で渡す。無ければ空）
+  paths?: ApprovalPath[] | undefined;
+  // paths に入りきらず、切った行の数
+  pathsMore?: number | undefined;
 }
 
 export interface ApprovalView extends ApprovalRequest {
@@ -33,8 +75,13 @@ export interface ApprovalView extends ApprovalRequest {
 export function approvalPublic(v: ApprovalView) {
   return {
     id: v.id, tool: v.tool, title: v.title, body: v.body, cwd: v.cwd, reasons: v.reasons, details: v.details, expiresAt: v.expiresAt,
-    onceOnly: v.onceOnly === true, preview: v.preview ?? [],
+    onceOnly: v.onceOnly === true, preview: v.preview ?? [], paths: v.paths ?? [], pathsMore: v.pathsMore ?? 0,
   };
+}
+
+// API の応答（GET /api/approvals・会話・タスクの詳細）が返す形。どの実行・会話の承認かを添える
+export function approvalWire(v: ApprovalView) {
+  return { runId: v.runId, conversationId: v.conversationId, ...approvalPublic(v) };
 }
 
 export function inputHash(tool: string, input: unknown): string {

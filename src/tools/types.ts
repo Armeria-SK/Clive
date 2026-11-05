@@ -11,7 +11,7 @@ import type { SearchThrottle } from './web/search.ts';
 import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
-import type { PreviewFile } from './approvals.ts';
+import type { ApprovalPath, PreviewFile } from './approvals.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
@@ -21,12 +21,16 @@ export interface ToolOutput {
   content: string;
   isError?: boolean;
   fullRef?: string;
+  noRemoteContent?: boolean;
 }
 
 export interface PreCheck {
   decision: Decision;
   reasons: string[];
   details?: string[];
+  // 見つけたパスごとの判定（details と同じ材料を構造で。判定には使わず、承認の札に出すだけ）
+  paths?: ApprovalPath[];
+  pathsMore?: number;
   // コードを動かす確かめ（種類 'code'）を含む。会話の許可を越えず、毎回確かめる
   onceOnly?: boolean;
   askKinds?: Array<'code'>;
@@ -56,10 +60,16 @@ export interface ToolContext {
   policy: ScopePolicy;
   workspace: string;
   taint: { tainted: boolean; sources: string[] };
+  // この実行で、検索が自動アクセスの判定（ボット判定）で続けて止められた回数（成功・別の失敗で 0 に戻る）
+  searchBlocks?: number | undefined;
+  // この実行で、task_create で作った・task_update で触ったタスクの id（会話の実行が終わるとき、会話で進んだ分を渡す先を決める）
+  touchedTasks?: Set<string> | undefined;
   log: (line: string) => void;
   services?: {
     db: DatabaseSync; memory: MemoryStore; emit: (event: RunEvent) => void;
     tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined;
+    // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
+    notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string }) => unknown) | undefined;
     web?: { network?: PageNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;

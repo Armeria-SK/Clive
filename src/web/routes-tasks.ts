@@ -4,9 +4,9 @@ import { ConfigError } from '../config/store.ts';
 import { parseCron } from '../tasks/schedule.ts';
 import { TaskError, taskView, type Task } from '../tasks/store.ts';
 import { languageOf } from '../shared/language.ts';
-import { approvalPublic } from '../tools/approvals.ts';
+import { approvalWire } from '../tools/approvals.ts';
 import { taskText } from '../shared/messages/tasks.ts';
-import { domainProblem, HttpProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
+import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
 const MOTIONS = ['auto', 'none', 'float', 'sway', 'pulse'] as const;
 
@@ -21,6 +21,12 @@ function priorityOf(body: Record<string, unknown>): number | undefined {
     throw problem(400, 'invalid_field', 'bad_priority', { field: 'priority' });
   }
   return body.priority;
+}
+
+function doneCriteriaOf(body: Record<string, unknown>): string | null | undefined {
+  if (body.doneCriteria === undefined) return undefined;
+  if (body.doneCriteria === null || (typeof body.doneCriteria === 'string' && !body.doneCriteria.trim())) return null;
+  return requireString(body, 'doneCriteria', { max: 500 })!.trim();
 }
 
 function whenOf(body: Record<string, unknown>): number | null | undefined {
@@ -74,7 +80,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
 
   router.add('GET', '/api/tasks/:id', ({ res, params }) => {
     const task = getTask(params[0]!);
-    const approvals = task.conversation_id ? app.approvals.pending().filter(a => a.conversationId === task.conversation_id).map(a => ({ runId: a.runId, conversationId: a.conversationId, ...approvalPublic(a) })) : [];
+    const approvals = task.conversation_id ? app.approvals.pending().filter(a => a.conversationId === task.conversation_id).map(approvalWire) : [];
     const children = task.status === 'scheduled'
       ? app.db.prepare('SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at DESC LIMIT 20').all(task.id) as unknown as Task[]
       : [];
@@ -87,12 +93,14 @@ export function registerTaskRoutes(router: Router, app: App): void {
     const title = requireString(body, 'title', { optional: true, max: 200 });
     const text = requireString(body, 'body', { optional: true, max: 20_000 });
     const nextAction = body.nextAction === null ? null : requireString(body, 'nextAction', { optional: true, max: 2000 });
+    const doneCriteria = doneCriteriaOf(body);
     const priority = priorityOf(body);
     const when = whenOf(body);
     try {
       const updated = app.tasks.update(task.id, {
         ...(title !== undefined ? { title } : {}), ...(text !== undefined ? { body: text } : {}),
-        ...(nextAction !== undefined ? { nextAction } : {}), ...(priority !== undefined ? { priority } : {}),
+        ...(nextAction !== undefined ? { nextAction } : {}), ...(doneCriteria !== undefined ? { doneCriteria } : {}),
+        ...(priority !== undefined ? { priority } : {}),
         ...(when !== undefined ? { runAt: when } : {}),
       }, 'user');
       app.tasks.event(task.id, 'edited', 'user');
@@ -122,7 +130,15 @@ export function registerTaskRoutes(router: Router, app: App): void {
       } else if (task.status === 'inbox') {
         task = app.tasks.approve(task.id);
       } else if (task.status !== 'ready' || task.attempts >= task.max_attempts) {
+        // 取り消した予定のひな形は、予定に戻したうえで今回の実行を 1 つ作る（前の実行が残っていれば、予定も戻さずに断る）
+        const template = task.cron !== null && task.parent_id === null;
+        if (template && app.tasks.hasOpenRun(task.id)) throw new TaskError('error.previous_unfinished');
         task = app.tasks.reopen(task.id, 'user', taskText(languageOf(app.config()), 'event.run_now'));
+        if (template) {
+          const child = app.tasks.spawnNow(task.id);
+          if (!child) throw new TaskError('error.previous_unfinished');
+          task = child;
+        }
       } else {
         task = app.tasks.update(task.id, { runAt: null }, 'user');
       }
@@ -145,6 +161,10 @@ export function registerTaskRoutes(router: Router, app: App): void {
     sendJson(res, 200, { task: view(updated) });
   };
   router.add('POST', '/api/tasks/:id/cancel', close('cancelled'));
+  router.add('POST', '/api/tasks/:id/uncancel', ({ res, params }) => {
+    const task = getTask(params[0]!);
+    try { sendJson(res, 200, { task: view(app.tasks.uncancel(task.id, 'user')) }); } catch (error) { taskProblem(error); }
+  });
   router.add('POST', '/api/tasks/:id/done', close('done'));
 
   // ── ワーカー ──
@@ -205,7 +225,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
       const saved = await app.applyConfig({ ...config, profile });
       sendJson(res, 200, { ...saved.profile, shapes: AVATAR_SHAPES, motions: MOTIONS });
     } catch (error) {
-      if (error instanceof ConfigError) throw new HttpProblem(400, { error: 'invalid_config', message: error.message.split('\n')[0], problems: error.problems });
+      if (error instanceof ConfigError) throw configProblem(error);
       throw error;
     }
   });

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Language } from '../config/schema.ts';
+import type { ConfigError } from '../config/store.ts';
 import type { LocalizedError, MessageParams } from '../shared/messages/define.ts';
 import { httpText, type HttpMessageKey } from '../shared/messages/http.ts';
 
@@ -23,6 +24,10 @@ export function problem(status: number, error: string, key: HttpMessageKey, opti
   const params = options.params ?? {};
   const body = { error, ...(options.field ? { field: options.field } : {}), message: httpText('ja', key, params), code: `http.${key}`, ...(Object.keys(params).length ? { params } : {}) };
   return new HttpProblem(status, body, language => httpText(language, key, params));
+}
+
+export function configProblem(error: ConfigError): HttpProblem {
+  return new HttpProblem(400, { error: 'invalid_config', message: error.message.split('\n')[0], problems: error.problems, issues: error.issues });
 }
 
 export function domainProblem<K extends string>(status: number, kind: string, error: LocalizedError<K>): HttpProblem {

@@ -292,3 +292,102 @@ test('会話で使う候補: 順番が空なら設定のモデル全部。裏方
   assert.deepEqual(candidateModelIds(config, 'chat'), []);
   assert.deepEqual(candidateModelIds(config, 'background'), []);
 });
+
+// ── コンテキストの使用量（A2） ──
+
+const kvRows = (s: Awaited<ReturnType<typeof setup>>) => JSON.stringify(s.conversations.db.prepare('SELECT * FROM kv ORDER BY key').all());
+const tableCount = (s: Awaited<ReturnType<typeof setup>>, table: string) => (s.conversations.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+
+test('使用量: 数は、同じ会話を送ったときの実行の est_prompt_tokens と同じ（見積もりの補正・要約・道具なしの組み立ても同じ）', async t => {
+  const s = await setup(t, { models: [localModel('a')], scripts: [reply('1'), reply('2'), reply('3'), reply('4')] });
+  s.kv.setJson('calibration:a', 1.3);
+  s.conversations.append('c1', { role: 'user', content: '前の質問' });
+  s.conversations.append('c1', { role: 'assistant', content: '前の答え' });
+  s.conversations.setSummary('c1', '- 前の話は決まった', s.conversations.messages('c1')[0]!.id);
+  for (const text of ['一つ目の質問', '二つ目の質問は少し長くしてみます。'.repeat(20), 'three']) {
+    const outcome = s.engine.send('c1', text);
+    assert.ok(outcome.ok);
+    // send が返った時点で、最初のモデル呼び出しの組み立ては終わっている。数はそれと同じでなければならない
+    const usage = s.engine.contextUsage('c1');
+    assert.ok(usage.ok, JSON.stringify(usage));
+    await s.engine.wait(outcome.runId);
+    assert.equal(usage.tokens, s.runs.get(outcome.runId)!.est_prompt_tokens, text.slice(0, 8));
+    assert.equal(usage.modelId, 'a');
+    assert.equal(usage.capacity, 65536);
+    assert.equal(usage.available, Math.floor(65536 * 0.95) - 1024);
+    assert.equal(usage.ratio, usage.tokens / usage.available);
+  }
+  const one = s.engine.contextUsage('c1');
+  const noFactor = (s.kv.delete('calibration:a'), s.engine.contextUsage('c1'));
+  assert.ok(one.ok && noFactor.ok && one.tokens > noFactor.tokens, '補正の係数が数に効く');
+});
+
+test('使用量: 数えても何も書かない（会話を作らない・system を固定しない・ファイルの版と kv を増やさない）', async t => {
+  const s = await setup(t, { models: [localModel('a')] });
+  s.conversations.create({ id: 'bare' });
+  s.conversations.append('has', { role: 'user', content: 'こんにちは' });
+  s.conversations.setSnapshotOnce('has', '固定ずみの system', 'h');
+  const before = { conversations: tableCount(s, 'conversations'), messages: tableCount(s, 'messages'), versions: tableCount(s, 'file_versions'), runs: tableCount(s, 'engine_runs'), kv: kvRows(s) };
+  for (const id of ['ghost', 'bare', 'has']) {
+    const usage = s.engine.contextUsage(id);
+    assert.ok(usage.ok, id);
+    assert.ok(usage.tokens > 0, id);
+  }
+  assert.deepEqual({ conversations: tableCount(s, 'conversations'), messages: tableCount(s, 'messages'), versions: tableCount(s, 'file_versions'), runs: tableCount(s, 'engine_runs'), kv: kvRows(s) }, before);
+  assert.equal(s.conversations.get('ghost'), undefined, 'まだ無い会話は作らない');
+  assert.equal(s.conversations.get('bare')!.snapshot, null, 'system をまだ固定していない会話は、固定しない');
+  assert.equal(s.kv.get('snapshot-language:bare'), undefined);
+  assert.equal(s.conversations.get('has')!.snapshot, '固定ずみの system', '固定ずみの会話は、その固定した文で数える');
+  assert.equal(tableCount(s, 'file_versions'), 0, 'SOUL.md があっても、ファイルの版は書かない');
+});
+
+test('使用量: まだ固定していない会話は、そのとき作るはずの system で数える（最初の発言を足した数と、実行の見積もりが合う）', async t => {
+  const s = await setup(t, { models: [localModel('a')], scripts: [reply('はい')] });
+  const empty = s.engine.contextUsage('fresh');
+  assert.ok(empty.ok);
+  const message = 'はじめまして、よろしく';
+  const outcome = s.engine.send('fresh', message);
+  assert.ok(outcome.ok);
+  const withMessage = s.engine.contextUsage('fresh');
+  assert.ok(withMessage.ok);
+  await s.engine.wait(outcome.runId);
+  assert.equal(withMessage.tokens, s.runs.get(outcome.runId)!.est_prompt_tokens);
+  const added = withMessage.tokens - empty.tokens;
+  const expected = Math.ceil((4 + estimateTextTokens(message)) * 1.15);
+  assert.ok(Math.abs(added - expected) <= 1, `発言の分だけ増える（増えた ${added}、見込み ${expected}）。system の数え方が固定のときと違えば大きくずれる`);
+});
+
+test('使用量: 容量を超えていても数える（ratio は 1 を超える）。投げない', async t => {
+  const s = await longConversation(t);
+  const usage = s.engine.contextUsage('c1');
+  assert.ok(usage.ok);
+  assert.ok(usage.ratio > 1, String(usage.ratio));
+  assert.equal(usage.ratio, usage.tokens / usage.available);
+  assert.equal(usage.capacity, 20000);
+});
+
+test('使用量: モデルは指定 → 無ければ会話で使う順番の最初の使えるモデル。指定が設定に無ければ 404、使えるモデルが無ければ 409', async t => {
+  const s = await setup(t, { models: [localModel('a', { contextLength: 4096, minContext: 4096 }), localModel('b', { contextLength: 32768 }), localModel('c', { contextLength: 131072 })] });
+  assert.equal(s.status.get('a')?.status, 'too_small');
+  const auto = s.engine.contextUsage('c1');
+  assert.ok(auto.ok);
+  assert.equal(auto.modelId, 'b', '使えない a は飛ばして、順番の最初の使えるモデル');
+  assert.equal(auto.capacity, 32768);
+  const picked = s.engine.contextUsage('c1', 'c');
+  assert.ok(picked.ok);
+  assert.deepEqual([picked.modelId, picked.capacity], ['c', 131072]);
+  assert.ok(picked.available > auto.available);
+  assert.equal(picked.tokens, auto.tokens, '同じ会話なら、モデルが違っても同じ組み立て（補正が無いかぎり数は同じ）');
+  const unknown = s.engine.contextUsage('c1', 'zzz');
+  assert.deepEqual(unknown.ok === false && [unknown.httpStatus, unknown.errorKind, unknown.errorCode], [404, 'not_found', 'engine.usage.model_missing']);
+
+  const none = await setup(t, { models: [localModel('a', { contextLength: 4096, minContext: 4096 })] });
+  const refused = none.engine.contextUsage('c1');
+  assert.ok(!refused.ok);
+  assert.deepEqual([refused.httpStatus, refused.errorCode], [409, 'engine.no_usable']);
+  assert.equal(refused.problems?.length, 1);
+  const empty = await setup(t, { models: [] });
+  const noModels = empty.engine.contextUsage('c1');
+  assert.ok(!noModels.ok);
+  assert.deepEqual([noModels.httpStatus, noModels.errorCode, noModels.problems], [409, 'engine.no_usable', []]);
+});

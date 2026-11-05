@@ -238,3 +238,138 @@ test('API: まだ無い会話への最初の発言は UUID の形の id だけ�
   await s.app.engine.wait(((await fresh.json()) as any).runId);
   assert.equal(s.app.conversations.get('00000000-0000-4000-8000-0000000000aa')?.kind, 'chat');
 });
+
+test('API: 会話のアーカイブは PATCH の archived で戻せる。true と false 以外は 400 で、題の変更も一緒に取りやめる', async t => {
+  const s = await startApp(t);
+  const patch = (id: string, body: unknown) => s.api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  const listed = async () => ((await (await s.api('/api/conversations')).json()) as any).conversations.map((c: any) => c.id) as string[];
+  s.app.conversations.create({ id: 'keep', title: '残す会話' });
+  s.app.conversations.create({ id: 'hide', title: 'しまう会話' });
+  s.app.conversations.append('hide', { role: 'user', content: '大事な話' });
+  const lastAt = s.app.conversations.get('hide')!.last_message_at;
+  assert.deepEqual((await listed()).toSorted(), ['hide', 'keep']);
+
+  assert.equal((await patch('hide', { archived: true })).status, 200);
+  assert.deepEqual(await listed(), ['keep'], 'アーカイブすると一覧から消える');
+  assert.equal(s.app.conversations.messages('hide').length, 1, '中身は残る');
+
+  const restored = await patch('hide', { archived: false });
+  assert.equal(restored.status, 200);
+  assert.equal(((await restored.json()) as any).conversation.archived, 0);
+  assert.deepEqual((await listed()).toSorted(), ['hide', 'keep'], 'false で一覧に戻る');
+  assert.equal(s.app.conversations.get('hide')!.last_message_at, lastAt, '戻しても並びの元になる時刻は変えない');
+  assert.equal((await patch('hide', { archived: false })).status, 200, 'アーカイブしていない会話に false を送っても害は無い');
+
+  for (const bad of ['x', 'true', 1, 0, null, {}, []]) {
+    const refused = await patch('hide', { title: '書き換えない', archived: bad });
+    assert.equal(refused.status, 400, JSON.stringify(bad));
+    const body = (await refused.json()) as any;
+    assert.deepEqual([body.error, body.code, body.field], ['invalid_field', 'http.bad_bool', 'archived']);
+    assert.equal(s.app.conversations.get('hide')!.title, 'しまう会話', '断ったら題も変えない');
+  }
+  assert.equal(s.app.conversations.get('hide')!.archived, 0);
+  assert.equal((await patch('nothing', { archived: false })).status, 404);
+  assert.equal((await patch('hide', { title: '題だけ変える' })).status, 200, 'archived を送らなければ今まで通り');
+  assert.equal(s.app.conversations.get('hide')!.title, '題だけ変える');
+});
+
+test('API: 設定の問題は文（problems）のほかに、ID で書いた場所つきの issues でも返す（保存の 400 と、壊れた設定の GET）', async t => {
+  const s = await startApp(t);
+  const view = await (await s.api('/api/settings')).json() as any;
+  assert.equal(view.configError, null);
+
+  const unknownRoute = await s.api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: { ...view.config, routing: { ...view.config.routing, chat: ['nope'] } } }) });
+  assert.equal(unknownRoute.status, 400);
+  const first = (await unknownRoute.json()) as any;
+  assert.equal(first.error, 'invalid_config');
+  assert.deepEqual(first.issues, [{ path: 'routing.chat', message: 'モデル「nope」がありません' }]);
+  assert.deepEqual(first.problems, ['routing.chat: モデル「nope」がありません'], '文は今までと同じ');
+
+  const badShape = structuredClone(view.config);
+  badShape.models[0].contextLength = 'many';
+  const second = (await (await s.api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: badShape }) })).json()) as any;
+  assert.ok(second.issues.some((i: any) => i.path === 'models.m.contextLength'), '番号ではなくモデルの ID で返す');
+  assert.ok(second.problems.some((p: string) => p.startsWith('/models/0/contextLength: ')), '文の側は番号のまま');
+
+  writeFileSync(s.app.paths.config, JSON.stringify({ ...view.config, routing: { ...view.config.routing, background: ['ghost'] } }));
+  const broken = (await (await s.api('/api/settings')).json()) as any;
+  assert.deepEqual(broken.configError.issues, [{ path: 'routing.background', message: 'モデル「ghost」がありません' }]);
+  assert.deepEqual(broken.configError.problems, ['routing.background: モデル「ghost」がありません']);
+});
+
+test('API: 承認の札の paths は、承認の一覧・会話・タスクの詳細・SSE のどれでも同じ形で、無ければ空の配列', async t => {
+  const s = await startApp(t);
+  const seen: RunEvent[] = [];
+  s.app.bus.subscribe(e => seen.push(e.event));
+  const conversation = s.app.conversations.create({ kind: 'chat' });
+  const task = s.app.tasks.create({ title: '調べもの', origin: 'user', actor: 'user' });
+  const taskConversation = s.app.conversations.create({ kind: 'task' });
+  s.app.db.prepare('UPDATE tasks SET conversation_id = ? WHERE id = ?').run(taskConversation.id, task.id);
+  const paths = [
+    { input: 'a.txt', path: '/w/a.txt', verdict: 'in', mode: 'write' },
+    { input: '../out.txt', path: '/out.txt', verdict: 'out' },
+    { input: '$x', verdict: 'unknown' },
+  ] as const;
+  const signal = new AbortController().signal;
+  const request = (conversationId: string, extra: object) => s.app.approvals.request(
+    { runId: 'r1', conversationId, tool: 'shell_run', input: { command: `x ${conversationId}` }, title: '実行', body: 'x', reasons: [], details: [], ...extra }, 60_000, signal,
+  );
+  void request(conversation.id, { paths: [...paths] });
+  void request(taskConversation.id, { paths: [...paths] });
+  void request('plain', {});
+
+  const list = (await (await s.api('/api/approvals')).json() as any).approvals as Array<{ conversationId: string; paths: unknown }>;
+  assert.deepEqual(list.find(a => a.conversationId === conversation.id)!.paths, paths);
+  assert.deepEqual(list.find(a => a.conversationId === 'plain')!.paths, [], 'パスが無ければ空の配列');
+  const chat = (await (await s.api(`/api/conversations/${conversation.id}/messages`)).json() as any).approvals;
+  assert.deepEqual(chat.map((a: any) => a.paths), [paths]);
+  const detail = (await (await s.api(`/api/tasks/${task.id}`)).json() as any).approvals;
+  assert.deepEqual(detail.map((a: any) => a.paths), [paths]);
+  const sse = (seen.filter(e => e.type === 'approval.requested') as Array<Extract<RunEvent, { type: 'approval.requested' }>>).find(e => e.conversationId === conversation.id)!;
+  assert.deepEqual(sse.approval.paths, paths);
+  const strip = (a: any) => { const { runId, conversationId, ...rest } = a; void runId; void conversationId; return rest; };
+  assert.deepEqual(strip(chat[0]), JSON.parse(JSON.stringify(sse.approval)), 'API と SSE は同じ形（API は runId と conversationId を添える）');
+  assert.deepEqual(Object.keys(chat[0]).sort(), Object.keys(detail[0]).sort(), '会話の応答とタスクの詳細は同じ項目を持つ');
+  s.app.approvals.cancelAll();
+});
+
+test('API: GET /api/conversations/:id/context は使用量を返す。無い会話でも会話を作らず、指定のモデルが設定に無ければ 404、使えるモデルが無ければ 409', async t => {
+  const s = await startApp(t, [
+    { id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false },
+    { id: 'big', provider: 'fake', model: 'y', contextLength: 131072, minContext: 4096, maxOutputTokens: 2048, toolMode: 'native', vision: false },
+  ]);
+  const get = async (path: string) => { const res = await s.api(path); return { status: res.status, body: (await res.json()) as any }; };
+  s.app.conversations.create({ id: 'chat1', title: '会話' });
+  s.app.conversations.append('chat1', { role: 'user', content: 'こんにちは' });
+  const known = await get('/api/conversations/chat1/context');
+  assert.equal(known.status, 200);
+  assert.deepEqual(Object.keys(known.body).sort(), ['available', 'capacity', 'modelId', 'ratio', 'tokens']);
+  assert.deepEqual([known.body.modelId, known.body.capacity, known.body.available], ['m', 65536, Math.floor(65536 * 0.95) - 1024]);
+  assert.equal(known.body.ratio, known.body.tokens / known.body.available);
+
+  const before = (s.app.db.prepare('SELECT COUNT(*) AS n FROM conversations').get() as { n: number }).n;
+  const ghost = await get('/api/conversations/not-created-yet/context');
+  assert.equal(ghost.status, 200, 'まだ無い会話も、そのとき作る system で数える');
+  assert.ok(ghost.body.tokens > 0 && ghost.body.tokens < known.body.tokens + 1000);
+  assert.equal(s.app.conversations.get('not-created-yet'), undefined);
+  assert.equal((s.app.db.prepare('SELECT COUNT(*) AS n FROM conversations').get() as { n: number }).n, before, '会話を作らない');
+
+  const picked = await get('/api/conversations/chat1/context?modelId=big');
+  assert.deepEqual([picked.status, picked.body.modelId, picked.body.capacity], [200, 'big', 131072]);
+  const missing = await get('/api/conversations/chat1/context?modelId=nope');
+  assert.equal(missing.status, 404);
+  assert.deepEqual([missing.body.errorCode, missing.body.errorParams], ['engine.usage.model_missing', { id: 'nope' }]);
+
+  s.app.conversations.create({ id: 'task-conv', kind: 'task', title: 'タスクの会話' });
+  const task = await get('/api/conversations/task-conv/context');
+  assert.deepEqual([task.status, task.body.code], [409, 'http.not_chat_conversation']);
+
+  const none = await startApp(t, [{ id: 'tiny', provider: 'fake', model: 'z', contextLength: 4096, minContext: 4096, maxOutputTokens: 512, toolMode: 'native', vision: false }]);
+  const refused = await (await none.api('/api/conversations/c1/context')).json() as any;
+  assert.equal(refused.errorCode, 'engine.no_usable');
+  assert.equal(refused.problems.length, 1);
+  const noModels = await startApp(t, []);
+  const empty = await noModels.api('/api/conversations/c1/context');
+  assert.equal(empty.status, 409);
+  assert.deepEqual(((await empty.json()) as any).problems, []);
+});

@@ -7,12 +7,12 @@ import { candidateModelIds } from '../engine/chat.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
-import { approvalPublic, type ApprovalView } from '../tools/approvals.ts';
+import { approvalWire } from '../tools/approvals.ts';
 import { searchHistory } from '../memory/history.ts';
 import { MemoryError, planBooks } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
 import { httpText } from '../shared/messages/http.ts';
-import { domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
+import { configProblem, domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
@@ -38,7 +38,7 @@ function settingsView(app: App) {
   return {
     config,
     apiKeys: Object.fromEntries(keys.map(k => [k, Boolean(env[k]?.trim())])),
-    configError: app.configStore.lastError ? { message: app.configStore.lastError.message, problems: app.configStore.lastError.problems } : null,
+    configError: app.configStore.lastError ? { message: app.configStore.lastError.message, problems: app.configStore.lastError.problems, issues: app.configStore.lastError.issues } : null,
     restartRequired: app.restartRequired(),
     configPath: app.configStore.path,
   };
@@ -46,10 +46,6 @@ function settingsView(app: App) {
 
 function isLanguage(value: string): value is Language {
   return (LANGUAGES as readonly string[]).includes(value);
-}
-
-function approvalView(a: ApprovalView) {
-  return { runId: a.runId, conversationId: a.conversationId, ...approvalPublic(a) };
 }
 
 function modelsView(app: App) {
@@ -93,8 +89,12 @@ export function createWebServer(app: App): WebServer {
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     const body = requireObject(await readJson(req));
     const title = requireString(body, 'title', { optional: true, max: 200 });
+    if (body.archived !== undefined && typeof body.archived !== 'boolean') {
+      throw problem(400, 'invalid_field', 'bad_bool', { field: 'archived', params: { field: 'archived' } });
+    }
     if (title) app.conversations.rename(id, title);
     if (body.archived === true) app.conversations.archive(id);
+    if (body.archived === false) app.conversations.unarchive(id);
     sendJson(res, 200, { conversation: app.conversations.get(id) });
   });
   router.add('GET', '/api/conversations/:id/messages', ({ res, params }) => {
@@ -114,8 +114,18 @@ export function createWebServer(app: App): WebServer {
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError) } : {}),
       })),
       activeRun: active ? { runId: active.runId, draft: app.bus.drafts().find(d => d.runId === active.runId)?.text ?? '' } : null,
-      approvals: app.approvals.pending().filter(a => a.conversationId === id).map(approvalView),
+      approvals: app.approvals.pending().filter(a => a.conversationId === id).map(approvalWire),
     });
+  });
+  // 次に送るときの量。何も書かない（まだ無い会話を作らず、system も固定しない）
+  router.add('GET', '/api/conversations/:id/context', ({ res, params, url }) => {
+    const id = params[0]!;
+    const existing = app.conversations.get(id);
+    if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
+    const outcome = app.engine.contextUsage(id, url.searchParams.get('modelId') || undefined);
+    if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
+    const { ok: _ok, ...usage } = outcome;
+    sendJson(res, 200, usage);
   });
   router.add('POST', '/api/conversations/:id/messages', async ({ req, res, params }) => {
     const id = params[0]!;
@@ -178,7 +188,7 @@ export function createWebServer(app: App): WebServer {
   });
 
   // ── 承認とツールの記録 ──
-  router.add('GET', '/api/approvals', ({ res }) => sendJson(res, 200, { approvals: app.approvals.pending().map(approvalView) }));
+  router.add('GET', '/api/approvals', ({ res }) => sendJson(res, 200, { approvals: app.approvals.pending().map(approvalWire) }));
   router.add('POST', '/api/approvals/:id', async ({ req, res, params }) => {
     const body = requireObject(await readJson(req));
     const decision = body.decision;
@@ -256,7 +266,7 @@ export function createWebServer(app: App): WebServer {
     let next;
     try { next = parseConfig(Value.Clone(body.config)); }
     catch (error) {
-      if (error instanceof ConfigError) throw new HttpProblem(400, { error: 'invalid_config', message: error.message.split('\n')[0], problems: error.problems });
+      if (error instanceof ConfigError) throw configProblem(error);
       throw error;
     }
     await app.applyConfig(next);

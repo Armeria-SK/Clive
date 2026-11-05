@@ -60,8 +60,9 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,
-        origin: self ? 'self' : 'user', propose: self && ctx.config.worker.selfTasksNeedApproval, actor: 'clive',
+        origin: self ? 'self' : 'user', propose: self && ctx.config.worker.selfTasksNeedApproval, actor: 'clive', createdInConversation: ctx.conversationId,
       });
+      ctx.touchedTasks?.add(task.id);
       const language = languageOf(ctx.config);
       store(ctx).event(task.id, 'context', 'clive', toolText(language, 'task.context', { cid: ctx.conversationId }), ctx.runId);
       const note = task.status === 'inbox' ? toolText(language, 'task.note_proposal')
@@ -112,6 +113,7 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
         ...(input.priority ? { priority: input.priority } : {}), ...(input.when ? { runAt: parseWhen(input.when) ?? null } : {}),
       }, 'clive', ctx.runId);
       if (input.status) updated = s.finish(task.id, input.status, input.note ?? null, 'clive', ctx.runId);
+      ctx.touchedTasks?.add(task.id);
       return { content: toolText(languageOf(ctx.config), 'task.updated', { line: line(updated, ctx.config.timezone, languageOf(ctx.config)) }) };
     } catch (error) { return fail(error, ctx); }
   },

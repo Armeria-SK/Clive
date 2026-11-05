@@ -105,7 +105,8 @@ export function ToolsConfig() {
       region: Type.String({ default: 'jp-jp', maxLength: 10 }),
       maxSearchesPerHour: Type.Integer({ minimum: 1, maximum: 600, default: 30 }),
     }, { additionalProperties: false, default: {} }),
-    maxIterations: Type.Integer({ minimum: 1, maximum: 100, default: 16 }),
+    // 1 回の実行で道具を呼べる回数。0 は制限なし（止めるのは、止めるボタン・取り消し・割り込み・承認の拒否や時間切れ・コンテキストの量だけ）
+    maxIterations: Type.Integer({ minimum: 0, maximum: 100, default: 16 }),
   }, { additionalProperties: false, default: {} });
 }
 

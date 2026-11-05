@@ -143,6 +143,7 @@ export class App {
       tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, log: this.log,
       web: { network: options.webNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
+      notify: input => this.notifications.notify(input),
       ...(options.now ? { now: () => new Date(now()) } : {}),
     });
     this.worker = new Worker({
@@ -161,6 +162,7 @@ export class App {
       }
       this.worker.poke();
     };
+    this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
     this.notifications.onNotify = notification => this.bus.publish({ type: 'notification', notification });
     this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));
