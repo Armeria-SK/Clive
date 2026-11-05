@@ -87,20 +87,7 @@ th { color: var(--muted); font-weight: 600; white-space: nowrap; }
 .notice.memory { border-color: var(--accent); color: var(--text); }
 button.link { background: none; border: 0; padding: 0 4px; color: var(--color-accent-text); cursor: pointer; font-size: 0.9em; text-decoration: underline; }
 .small { font-size: 0.85em; }
-.book { margin-bottom: 28px; }
-.meter { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; margin: 4px 0 12px; }
-.meter span { display: block; height: 100%; background: var(--accent); }
-.meter span.high { background: var(--warn); }
-.memory-list, .memory-events, .history-hits { list-style: none; padding: 0; margin: 0 0 12px; }
-.memory-item { border-bottom: 1px solid var(--line); padding: 8px 0; }
-.memory-line { display: flex; gap: 8px; align-items: baseline; }
-.memory-content { flex: 1; overflow-wrap: anywhere; }
-.memory-actions { white-space: nowrap; }
-.memory-item p.small { margin: 2px 0 0; }
-.memory-events li { font-size: 0.88em; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); margin: 4px 0; }
 .row input { flex: 1; }
-.history-hits li { padding: 8px 0; border-bottom: 1px solid var(--line); }
-.snippet { margin: 4px 0 0; color: var(--muted); }
 
 .badge.warn { color: var(--warn); border-color: var(--warn); }
 select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; }

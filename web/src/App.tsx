@@ -54,6 +54,7 @@ export function App() {
   const [taskRevision, setTaskRevision] = useState(0);
   const [runRevision, setRunRevision] = useState(0);
   const [notificationRevision, setNotificationRevision] = useState(0);
+  const [memoryRevision, setMemoryRevision] = useState(0);
   const [celebrating, setCelebrating] = useState(false);
   const [modelName, setModelName] = useState<string | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
@@ -249,6 +250,7 @@ export function App() {
         setApprovals(list => list.filter(a => a.id !== e.approvalId));
         break;
       case 'memory.changed':
+        setMemoryRevision(n => n + 1);
         addNotice(e.conversationId, { runId: e.runId, kind: 'memory', message: t(MEMORY_NOTICE[e.action], e.content), eventId: e.eventId });
         toast({ kind: 'memory', title: t(MEMORY_TOAST[e.action]), body: e.content });
         break;
@@ -419,7 +421,7 @@ export function App() {
             )}
             {route.page === 'settings' && <Settings onProfile={setProfile} />}
             {route.page === 'runs' && <Runs />}
-            {route.page === 'memory' && <Memory />}
+            {route.page === 'memory' && <Memory revision={memoryRevision} />}
             {route.page === 'review' && <ReviewPage revision={taskRevision + notificationRevision} />}
             {route.page === 'skills' && <SkillsPage />}
             {route.page === 'curiosity' && <CuriosityPage revision={taskRevision} />}
