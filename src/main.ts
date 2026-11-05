@@ -21,7 +21,7 @@ async function start(): Promise<void> {
   if (!isLoopbackHost(config.server.host)) {
     throw new ConfigError(`server.host は 127.0.0.1 などのループバックにしてください（今は ${config.server.host}）。ほかの端末からは Tailscale Serve 経由で開きます（README の「ほかの端末から使う」）`);
   }
-  if (!config.models.length) log('[WARN] モデルがまだ設定されていません。画面の設定の「モデル」で足してください（足すまで、送信とワーカーは動きません）');
+  if (!config.models.length) log('[WARN] モデルがまだ設定されていません。画面の「はじめの設定」で足してください（足すまで、送信とワーカーは動きません）');
   else log('[INFO] モデルのコンテキスト長を確認しています…');
   const results = await app.status.probeAll(config);
   for (const r of results) log(`[${r.status === 'ok' ? 'INFO' : 'WARN'}] ${r.modelId}: ${r.status} — ${r.message}`);
@@ -63,7 +63,7 @@ async function doctor(): Promise<number> {
       if (r.status !== 'ok' && used) bad++;
       process.stdout.write(`${mark} ${r.modelId}: ${r.message}${r.hint ? `\n     直し方: ${r.hint}` : ''}\n`);
     }
-    if (!config.models.length) { process.stdout.write('NG  モデルがまだ設定されていません（画面の設定の「モデル」で足してください）\n'); bad++; }
+    if (!config.models.length) { process.stdout.write('NG  モデルがまだ設定されていません（画面の「はじめの設定」で足してください）\n'); bad++; }
     else if (!config.routing.chat.some(id => app.status.usable(id))) { process.stdout.write('NG  チャットで使えるモデルがありません\n'); bad++; }
     return bad ? 1 : 0;
   } finally { app.close(); }

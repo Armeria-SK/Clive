@@ -22,6 +22,8 @@ import { chatHash, pageBehind, parseRoute, type Route } from './routes.ts';
 import { Runs } from './Runs.tsx';
 import { serverText, warningText } from './server-text.ts';
 import { InertContext } from './inert.ts';
+import { Onboarding } from './Onboarding.tsx';
+import { markSetupShown, OPEN_SETUP_EVENT, resumeStep, wasSetupShown, type OnboardingState, type StepId } from './onboarding.ts';
 import { Settings } from './Settings.tsx';
 import type { KeptEdits } from './settings/keep.ts';
 import { Sidebar } from './Sidebar.tsx';
@@ -74,6 +76,10 @@ export function App() {
   const taskStatus = useRef(new Map<string, string>());
   const lastChatHash = useRef('#/');
   const behindSettings = useRef<Route | null>(null);
+  const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupStart, setSetupStart] = useState<StepId>('language');
+  const setupChecked = useRef(false);
   const keptSettings = useRef<KeptEdits | null>(null);
   const taskConversations = useRef(new Map<string, string>());
 
@@ -142,11 +148,35 @@ export function App() {
   const shown = pageBehind(route, behindSettings.current);
   const settingsOpen = route.page === 'settings';
   const settingsExit = useExit(settingsOpen, 220);
-  const settingsCovers = settingsExit.mounted;
+  const setupExit = useExit(setupOpen, 220);
+  const settingsCovers = settingsExit.mounted || setupExit.mounted;
   const closeSettings = useCallback(() => {
     if (behindSettings.current) history.back();
     else location.replace('#/');
   }, []);
+  // はじめの設定。まだ終わっていなければ、最初の 1 回だけ自動で開く（あとで → 左の一覧の上の帯から続けられる）。すでに使っているデータには出ない（サーバーが決める）
+  const refreshOnboarding = useCallback(() => { void api.onboarding().then(setOnboarding).catch(() => undefined); }, []);
+  const openSetupAt = useCallback((step: StepId) => { setSetupStart(step); setSetupOpen(true); markSetupShown(); }, []);
+  useEffect(() => { refreshOnboarding(); }, [refreshOnboarding]);
+  useEffect(() => {
+    if (!onboarding || setupChecked.current) return;
+    setupChecked.current = true;
+    if (!onboarding.done && !wasSetupShown()) openSetupAt(resumeStep(onboarding.steps));
+  }, [onboarding, openSetupAt]);
+  const onboardingRef = useRef(onboarding); onboardingRef.current = onboarding;
+  useEffect(() => {
+    // モデルが無いときの札のボタンなど、画面のどこからでも開ける。終わっている人には、モデルの手順から
+    const on = () => { const state = onboardingRef.current; openSetupAt(state && !state.done ? resumeStep(state.steps) : 'model'); };
+    addEventListener(OPEN_SETUP_EVENT, on);
+    return () => removeEventListener(OPEN_SETUP_EVENT, on);
+  }, [openSetupAt]);
+  const rerunSetup = useCallback(() => { closeSettings(); openSetupAt('language'); }, [closeSettings, openSetupAt]);
+  const finishSetup = useCallback((conversationId: string | null) => {
+    setSetupOpen(false);
+    refreshOnboarding(); refreshMeta(); refreshList();
+    if (conversationId) location.hash = chatHash(conversationId);
+  }, [refreshOnboarding, refreshMeta, refreshList]);
+  const laterSetup = useCallback(() => { setSetupOpen(false); refreshOnboarding(); refreshMeta(); }, [refreshOnboarding, refreshMeta]);
   const current = shown.page === 'chat' ? shown.conversationId : null;
   const tabState = useTabs(shown, conversations, conversationsLoaded);
   useEffect(() => { if (route.page === 'chat') lastChatHash.current = chatHash(route.conversationId); }, [route]);
@@ -424,6 +454,7 @@ export function App() {
           mode={mode} drawerOpen={drawerOpen} route={shown} profile={profile} presence={presence}
           conversations={conversations} conversationsLoaded={conversationsLoaded} drafts={drafts} approvals={approvals}
           waitingCount={waiting.size} restartRequired={restartRequired}
+          setupPending={onboarding !== null && !onboarding.done && !setupOpen} onSetup={() => openSetupAt(onboarding ? resumeStep(onboarding.steps) : 'language')}
           onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
         />
         {narrow && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
@@ -437,7 +468,7 @@ export function App() {
                 panelOpen={panelOpen} onClose={tabState.close} onNewChat={tabState.openNewChat} onTogglePanel={togglePanel}
               />
             )}
-          <LanguagePrompt />
+          <LanguagePrompt suppressed={onboarding !== null && !onboarding.done} />
           <div className="content" key={viewKey}>
             {shown.page === 'chat' && (
               <Chat
@@ -489,7 +520,8 @@ export function App() {
         open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
         onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
-      {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} kept={keptSettings} />}
+      {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} kept={keptSettings} onRerunSetup={rerunSetup} />}
+      {setupExit.mounted && <Onboarding leaving={setupExit.leaving} start={setupStart} profile={profile} onProfile={setProfile} onLater={laterSetup} onFinished={finishSetup} />}
       <InertContext.Provider value={settingsCovers}><NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} /></InertContext.Provider>
       <ToastHost mode={mode} />
       <Tooltip disabled={narrow} />

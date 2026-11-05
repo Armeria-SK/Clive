@@ -178,3 +178,8 @@
 .shell[data-mode="narrow"] .set-modal .set-nav { padding: 8px 52px 8px 10px; }
 .shell[data-mode="narrow"] .set-modal .set-inner { padding-top: 22px; }
 .shell[data-mode="narrow"] .set-modal .set-close { top: 6px; right: 6px; background: var(--color-bg); }
+
+/* 設定の「Clive について」: 名前・SOUL.md / USER.md の全文の編集 */
+.set-name-edit { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+textarea.input.set-persona { width: 100%; min-height: 220px; box-sizing: border-box; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.65; resize: vertical; }
+.set-persona-bar { display: flex; align-items: center; gap: 10px; }

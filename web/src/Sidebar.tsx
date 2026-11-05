@@ -23,6 +23,8 @@ interface Props {
   approvals: Approval[];
   waitingCount: number;
   restartRequired: boolean;
+  setupPending: boolean;
+  onSetup: () => void;
   onNavigate: () => void;
   onNewChat: () => void;
   onAvatar: () => void;
@@ -84,6 +86,8 @@ export function Sidebar(props: Props) {
           <span className="side-phrase swap" key={presence.line}>{presence.line}</span>
         </div>
       </div>
+
+      {props.setupPending && <button type="button" className="side-setup" onClick={() => { props.onNavigate(); props.onSetup(); }}><Icon name="sparkles" size={14} />{t('onboarding.band')}</button>}
 
       <nav className="side-nav" aria-label={t('nav.pages')}>
         {withBadges.map(item => {

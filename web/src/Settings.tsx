@@ -26,10 +26,10 @@ function loadSection(): SettingsSection {
 }
 
 
-interface Props { onProfile: (p: Profile) => void; open: boolean; leaving: boolean; onClose: () => void; kept: { current: KeptEdits | null } }
+interface Props { onProfile: (p: Profile) => void; open: boolean; leaving: boolean; onClose: () => void; kept: { current: KeptEdits | null }; onRerunSetup: () => void }
 
 // 設定は、今の画面の上に重ねるモーダル。open が false になったあとも、閉じる動きが終わる（leaving）まで描かれる。
-export function Settings({ onProfile, open, leaving, onClose, kept }: Props) {
+export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup }: Props) {
   const t = useT();
   const [view, setView] = useState<SettingsView | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -156,6 +156,11 @@ export function Settings({ onProfile, open, leaving, onClose, kept }: Props) {
 
   // 元に戻したら、画面の中だけに残っている入力（JSON の欄に書きかけの文字など）も捨てる
   const revert = () => { if (saved) { setDraft(saved); setProblems([]); setConflicted(false); setConfirm(null); setReverts(n => n + 1); } };
+  // 名前は画面に出る名前と SOUL.md の名乗りの両方をサーバーが書く。保存済みと編集中の名前も合わせる（合わせないと、次の保存で元に戻る）
+  const renamed = (profile: Profile) => {
+    const rename = (config: Config | null) => (config ? { ...config, profile: { ...config.profile, name: profile.name } } : config);
+    setSaved(rename); setDraft(rename); onProfile(profile);
+  };
   const goProblem = (problem: Problem) => {
     if (problem.section) setSection(problem.section);
     if (problem.modelId) setSelectedModel(problem.modelId);
@@ -265,6 +270,7 @@ export function Settings({ onProfile, open, leaving, onClose, kept }: Props) {
               models={models} probing={probing} onProbe={() => void probe()}
               selectedModel={selectedModel} onSelectModel={setSelectedModel} selectedProvider={selectedProvider} onSelectProvider={setSelectedProvider}
               apiKeys={view.apiKeys} configPath={view.configPath} hasConfigError={Boolean(view.configError)} lastSavedAt={lastSavedAt}
+              onNameSaved={renamed} onRerunSetup={onRerunSetup}
             />
           </div>
         </div>

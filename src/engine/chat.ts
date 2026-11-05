@@ -17,7 +17,7 @@ import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import type { RunBus } from './bus.ts';
-import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, contextAvailable } from './context-budget.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable } from './context-budget.ts';
 import { ContextOverflow, fitMessages } from './fit.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
@@ -178,6 +178,17 @@ export class ChatEngine {
   // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
   // 容量が分かるものの available のいちばん小さい値の 12%。容量が分かるモデルが無ければ undefined（予算なし = 全部入れる。0 にはしない）。
   memoryBudget(): number | undefined {
+    const smallest = this.#smallestAvailable();
+    return smallest === undefined ? undefined : Math.floor(smallest * MEMORY_BUDGET_RATIO);
+  }
+
+  // SOUL.md と USER.md（固定する system に入る）の大きさの目安。いちばん小さい使えるモデルの available の 10%（記憶の予算とは別）。
+  personaBudget(): number | undefined {
+    const smallest = this.#smallestAvailable();
+    return smallest === undefined ? undefined : Math.floor(smallest * PERSONA_BUDGET_RATIO);
+  }
+
+  #smallestAvailable(): number | undefined {
     const config = this.#d.config();
     const ids = new Set([...candidateModelIds(config, 'chat'), ...candidateModelIds(config, 'background')]);
     let smallest: number | undefined;
@@ -189,7 +200,7 @@ export class ChatEngine {
       const available = contextAvailable(capacity, model);
       if (available > 0) smallest = smallest === undefined ? available : Math.min(smallest, available);
     }
-    return smallest === undefined ? undefined : Math.floor(smallest * MEMORY_BUDGET_RATIO);
+    return smallest;
   }
 
   #preemptFor(routes: Route[]): void {

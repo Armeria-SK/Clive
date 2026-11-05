@@ -121,7 +121,7 @@
     "problem.unchecked": "まだ確認していません",
     "problem.hint_suffix": "（{hint}）",
     "problem.line": "・{id}: {message}{hintPart}",
-    "problem.none": "・モデルがまだ設定されていません（設定の「モデル」で足してください）",
+    "problem.none": "・モデルがまだ設定されていません（画面の「はじめの設定」で足してください）",
     "no_usable": "使えるモデルがないため送信しませんでした。設定画面で確認してください。\n{lines}",
     "tool.invalid_streak": "モデルが正しい形でツールを呼べませんでした（{count} 回続けて）。ツールに強いモデルに替えるか、toolMode を json_fallback にしてください",
     "tool.invalid_streak_hint": "models[].toolMode を json_fallback にするか、maxTools で数を絞ってください",
@@ -431,6 +431,8 @@
     "bad_book": "book は user か notes にしてください",
     "memory_deleted_note": "画面から削除",
     "unknown_language": "言語「{language}」の初期値はありません（{values}）",
+    "persona_unsafe": "このファイルはリンクなどで、通常のファイルではないので書き換えません（{file}）",
+    "persona_empty": "書き込む項目がありません（userName・callMe・botName・style・styleNote のどれかを送ってください）",
     "internal": "内部エラーが発生しました（ログを確認してください）"
   }
 }

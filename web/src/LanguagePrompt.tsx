@@ -3,11 +3,12 @@ import { getLanguage, getLanguagePreference, getSettingsApplied, useT } from './
 import { loadPromptAnswer, savePromptAnswer, saveLanguage, shouldAskLanguage } from './language.ts';
 import { toast } from './toast.tsx';
 
-export function LanguagePrompt() {
+export function LanguagePrompt({ suppressed = false }: { suppressed?: boolean }) {
   const t = useT();
   const [answered, setAnswered] = useState(() => loadPromptAnswer() !== null);
   const [busy, setBusy] = useState(false);
   const screen = getLanguage();
+  if (suppressed) return null;
   if (!shouldAskLanguage({ serverLanguage: getLanguagePreference(), screenLanguage: screen, answered, loaded: getSettingsApplied() })) return null;
 
   const decline = () => { savePromptAnswer('no'); setAnswered(true); };

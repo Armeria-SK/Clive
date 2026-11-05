@@ -1,5 +1,7 @@
 import type { ModelView } from '../api.ts';
 import { MemorySection, ToolsSection, WorkerSection } from './BehaviorSections.tsx';
+import type { Profile } from '../api.ts';
+import { AboutSection } from './AboutSection.tsx';
 import { LookSection } from './LookSection.tsx';
 import { KeysSection, ModelsSection, ProvidersSection } from './ModelsSection.tsx';
 import type { SettingsSection } from './model.ts';
@@ -19,6 +21,8 @@ export interface SectionViewProps extends SectionProps {
   configPath: string;
   hasConfigError: boolean;
   lastSavedAt: number | null;
+  onNameSaved: (profile: Profile) => void;
+  onRerunSetup: () => void;
 }
 
 export function SectionView(props: SectionViewProps) {
@@ -32,6 +36,7 @@ export function SectionView(props: SectionViewProps) {
     case 'tools': return <ToolsSection {...base} />;
     case 'worker': return <WorkerSection {...base} />;
     case 'memory': return <MemorySection />;
+    case 'about': return <AboutSection profileName={String((props.saved.profile as { name?: string } | undefined)?.name ?? '')} onNameSaved={props.onNameSaved} onRerunSetup={props.onRerunSetup} />;
     case 'look': return <LookSection {...base} />;
     case 'server': return <ServerSection {...base} />;
     case 'file': return <FileSection {...base} configPath={props.configPath} hasConfigError={props.hasConfigError} lastSavedAt={props.lastSavedAt} />;

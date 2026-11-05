@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { openSetup } from './onboarding.ts';
 import type { Message, Profile } from './api.ts';
 import { Avatar } from './Avatar.tsx';
 import { chatTime, firstLine, toolIcon, type ContextNumbers } from './chat-logic.ts';
@@ -267,9 +268,6 @@ export function PreSendCard({ message, hint, numbers }: PreSendProps) {
   );
 }
 
-// 設定の開く節は sessionStorage の同じキーで渡す（Settings.tsx の SECTION_KEY と同じ値）
-const openModelSettings = () => { try { sessionStorage.setItem('clive.settingsSection', 'models'); } catch { } };
-
 export function SendErrorCard({ message, hint, setup = false }: { message: string; hint: string | null; setup?: boolean }) {
   const t = useT();
   return (
@@ -284,7 +282,7 @@ export function SendErrorCard({ message, hint, setup = false }: { message: strin
       </div>
       <div className="chat-actions">
         {setup
-          ? <a className="btn btn-primary" href="#/settings" onClick={openModelSettings}><Icon name="sliders" size={13} />{t('chat.send.setupModel')}</a>
+          ? <button type="button" className="btn btn-primary" onClick={openSetup}><Icon name="sparkles" size={13} />{t('chat.send.setupModel')}</button>
           : <a className="btn btn-secondary" href="#/settings"><Icon name="sliders" size={13} />{t('chat.settings')}</a>}
       </div>
     </div>

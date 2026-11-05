@@ -4,7 +4,7 @@ import type { PlainKey } from '../i18n/index.ts';
 
 export type Config = Record<string, any>;
 
-export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'worker' | 'memory' | 'look' | 'server' | 'file';
+export type SettingsSection = 'models' | 'providers' | 'keys' | 'tools' | 'worker' | 'memory' | 'about' | 'look' | 'server' | 'file';
 
 export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArray<{ id: SettingsSection; label: PlainKey; desc: PlainKey }> }> = [
   { label: 'settings.group.model', items: [
@@ -18,6 +18,7 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: PlainKey; items: ReadonlyArr
     { id: 'memory', label: 'settings.section.memory', desc: 'settings.desc.memory' },
   ] },
   { label: 'settings.group.clive', items: [
+    { id: 'about', label: 'settings.section.about', desc: 'settings.desc.about' },
     { id: 'look', label: 'settings.section.look', desc: 'settings.desc.look' },
   ] },
   { label: 'settings.group.system', items: [

@@ -15,6 +15,7 @@ import { httpText } from '../shared/messages/http.ts';
 import { domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
+import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { registerReviewRoutes } from './routes-review.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
 import { LiveStreams } from './sse.ts';
@@ -239,6 +240,8 @@ export function createWebServer(app: App): WebServer {
   registerTaskRoutes(router, app);
   // ── スキル・レビュー・好奇心・振り返り ──
   registerReviewRoutes(router, app);
+  // ── はじめの設定・名前と話し方（SOUL.md / USER.md）・.env の読み直し ──
+  registerOnboardingRoutes(router, app);
 
   // ── 設定とモデル ──
   router.add('GET', '/api/settings', ({ res }) => sendJson(res, 200, settingsView(app)));

@@ -35,9 +35,9 @@ function sample(): Config {
   };
 }
 
-test('設定の節: 9 つ・4 グループで、名前と説明が ja にも en にもある', () => {
+test('設定の節: 10 つ・4 グループで、名前と説明が ja にも en にもある', () => {
   assert.equal(SECTION_GROUPS.length, 4);
-  assert.deepEqual([...SECTION_IDS], ['models', 'providers', 'keys', 'tools', 'worker', 'memory', 'look', 'server', 'file']);
+  assert.deepEqual([...SECTION_IDS], ['models', 'providers', 'keys', 'tools', 'worker', 'memory', 'about', 'look', 'server', 'file']);
   assert.equal(new Set(SECTION_IDS).size, SECTION_IDS.length);
   for (const group of SECTION_GROUPS) {
     for (const key of [group.label, ...group.items.flatMap(i => [i.label, i.desc])]) {

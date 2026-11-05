@@ -9,7 +9,7 @@ import { LANGUAGES, useT, type LanguagePreference } from '../i18n/index.ts';
 import { configWithLanguage } from '../language.ts';
 import { setThemeMode, type ThemeMode } from '../theme.ts';
 import { toast } from '../toast.tsx';
-import { ColorField, FieldRow, SegField, TextField } from './fields.tsx';
+import { ColorField, FieldRow, SegField } from './fields.tsx';
 import { updateAt } from './model.ts';
 import { differs, errorFor, type SectionProps } from './types.ts';
 
@@ -75,9 +75,6 @@ export function LookSection({ draft, saved, update, problems }: SectionProps) {
       </div>
 
       <div className="set-rows">
-        <FieldRow label={t('settings.look.name')} changed={changed('name')} path="profile.name" error={errorFor(problems, 'profile.name')}>
-          <TextField value={profile.name} label={t('settings.look.name')} onChange={v => set({ name: v })} />
-        </FieldRow>
         <FieldRow label={t('settings.look.color')} desc={t('settings.look.colorDesc')} changed={changed('color')} path="profile.color" error={errorFor(problems, 'profile.color')}>
           <ColorField value={profile.color} fallback={DEFAULT_COLOR} label={t('settings.look.color')} onChange={v => set({ color: v })} />
         </FieldRow>
