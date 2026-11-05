@@ -138,7 +138,7 @@
     "warn.context_trimmed": "コンテキストに収めるため、古い発言 {count} 件をこの返事の材料から外しました",
     "warn.partial_discarded": "返事の途中で失敗したため、途中までの内容は保存しませんでした",
     "warn.retrying": "{message}。{seconds} 秒後に再試行します（{attempt}/{retries}）",
-    "warn.compacted": "会話が長くなったため、古い発言 {count} 件を要約しました（原文は残っていて、検索や history_read で読めます）",
+    "warn.compacted": "会話が長くなったため、古い発言 {count} 件を要約しました（要約は会話の「…」メニューから読めます。原文は残っていて、記憶の「過去の会話を探す」で探せます）",
     "warn.compaction_failed": "古い発言の要約に失敗したため、要約せずに外して続けます",
     "warn.server_truncation": "サーバーが受け取った入力（{actual} トークン）が見積もり（{estimate}）より大幅に少なく、サーバー側で切り捨てられた可能性があります",
     "truncation.disable": "{message}（{strikes} 回連続）。サーバー側のコンテキスト長を確認してから、設定画面で確認し直してください",

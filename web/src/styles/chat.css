@@ -206,6 +206,7 @@
 .chat-dialog-list { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .chat-dialog-path { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .chat-dialog-path .tag { padding: 1px 8px; font-size: 10.5px; }
+.summary-body { max-height: min(50vh, 420px); margin: 10px 0; padding: 4px 14px; overflow-y: auto; border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: var(--color-surface); }
 .chat-dialog-text { margin: 0; font-size: 14px; color: var(--color-text-muted); overflow-wrap: anywhere; }
 .chat-dialog-actions { flex-wrap: wrap; margin-top: 4px; }
 @media (max-width: 759px) {

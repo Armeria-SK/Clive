@@ -9,6 +9,7 @@ import { useContextUsage } from './use-context-usage.ts';
 import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
+import { mergeNotice } from './chat-logic.ts';
 import { LanguagePrompt } from './LanguagePrompt.tsx';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
@@ -264,7 +265,7 @@ export function App() {
     if (change.kind === 'model') setEndRevision(n => n + 1);
   }, [refreshList, tabState.close, tabState.openChat]);
   const addNotice = (conversationId: string, notice: RunNotice) =>
-    setNotices(state => ({ ...state, [conversationId]: [...(state[conversationId] ?? []), notice].slice(-8) }));
+    setNotices(state => ({ ...state, [conversationId]: mergeNotice(state[conversationId] ?? [], notice) }));
   const bump = (conversationId: string) => setRevisions(state => ({ ...state, [conversationId]: (state[conversationId] ?? 0) + 1 }));
   const approvalTarget = useCallback((a: Pick<Approval, 'conversationId' | 'runId'>) => approvalTargetHash(a, runContext()), []);
 
@@ -284,10 +285,10 @@ export function App() {
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, text: d.text + e.text } : d));
         break;
       case 'warning':
-        if (e.code !== 'compacted') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: warningText(e, getLanguage()) });
+        if (e.code !== 'compacted') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: warningText(e, getLanguage()), ...(e.code === 'context_trimmed' ? { key: 'context_trimmed' } : {}) });
         break;
       case 'compaction':
-        addNotice(e.conversationId, { runId: e.runId, kind: 'compaction', message: t('notice.compacted', e.summarized) });
+        addNotice(e.conversationId, { runId: e.runId, kind: 'compaction', key: 'compaction', message: t('notice.compacted', e.summarized) });
         break;
       case 'message.saved':
         bump(e.conversationId);

@@ -47,6 +47,8 @@ export function iterationLimit(configured: number, kind: RunKind): number {
   return kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
 }
 const COMPACT_MIN_MESSAGES = 4;
+// 1 回の実行で要約を重ねられる回数。外す発言が増えるたびに要約し直すが、無限には繰り返さない
+const MAX_COMPACTIONS_PER_RUN = 5;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
 
 export interface ChatEngineDeps {
@@ -97,6 +99,9 @@ export function candidateModelIds(config: AppConfig, route: 'chat' | 'background
   const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
   return preferred.length ? [...preferred] : config.models.map(m => m.id);
 }
+
+// 1 回の実行の要約の状態: 要約した回数・失敗したか（失敗したら外すだけ）・要約した発言の合計・「外しました」で最後に知らせた件数
+interface CompactionState { count: number; failed: boolean; summarized: number; trimmedShown: number }
 
 type Failure = { kind: EngineErrorKind; message: string; code?: string; params?: MessageParams; retryable: boolean; detail?: ContextDetail; route?: Route; upstream?: string };
 
@@ -376,7 +381,7 @@ export class ChatEngine {
     };
 
     const maxIterations = iterationLimit(config.tools.maxIterations, kind);
-    const compaction = { done: false };
+    const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort });
       if (!call.ok) {
@@ -488,7 +493,7 @@ export class ChatEngine {
     }
   }
 
-  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: { done: boolean }; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined }): Promise<CallResult> {
+  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: CompactionState; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined }): Promise<CallResult> {
     const d = this.#d;
     const sleep = d.sleep ?? abortableSleep;
     const retries = d.retriesPerModel ?? d.config().routing.retriesPerModel;
@@ -520,14 +525,27 @@ export class ChatEngine {
             detail: { reason: 'prompt_exceeds', measured: available, required: error.required, hint: engineText(language, 'hint.prompt_exceeds') } };
           break;
         }
-        // 外す発言が多ければ、外す部分を要約してから組み立て直す（1回の実行で1回まで。要約に失敗したら外すだけにする）
-        if (fitted.removed >= COMPACT_MIN_MESSAGES && !fallbackMode && !p.compaction.done) {
-          p.compaction.done = true;
-          const ok = await this.#compact({ route, adapter, runId: p.runId, conversationId: p.conversationId, removed: stored.slice(0, fitted.removed), previous: conversation?.summary ?? null, capacity, signal: p.signal });
-          if (ok) { if (!p.flags.includes('compacted')) p.flags.push('compacted'); attempt--; continue; }
+        // 外す発言が多ければ、外す部分を前の要約に足して要約し直してから組み立て直す（同じ実行の中でも、外す発言が増えたらまた。
+        // 1 回の実行で MAX_COMPACTIONS_PER_RUN 回まで。要約に失敗したら、その実行は外すだけにして、要約を呼び続けない）
+        if (fitted.removed >= COMPACT_MIN_MESSAGES && !fallbackMode && !p.compaction.failed && p.compaction.count < MAX_COMPACTIONS_PER_RUN) {
+          p.compaction.count++;
+          const removed = stored.slice(0, fitted.removed);
+          const ok = await this.#compact({ route, adapter, runId: p.runId, conversationId: p.conversationId, removed, previous: conversation?.summary ?? null, capacity, signal: p.signal });
+          if (ok) {
+            // お知らせは 1 回の実行で 1 回ずつ。件数は、この実行で要約した発言の合計に更新する（画面は同じお知らせを置き換える）
+            p.compaction.summarized += removed.length;
+            d.bus.publish({ type: 'compaction', runId: p.runId, conversationId: p.conversationId, summarized: p.compaction.summarized });
+            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'compacted', message: engineText(language, 'warn.compacted', { count: p.compaction.summarized }), params: { count: p.compaction.summarized } });
+            if (!p.flags.includes('compacted')) p.flags.push('compacted');
+            attempt--; continue;
+          }
+          p.compaction.failed = true;
         }
         if (fitted.removed > 0) {
-          d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'context_trimmed', message: engineText(language, 'warn.context_trimmed', { count: fitted.removed }), params: { count: fitted.removed } });
+          if (p.compaction.trimmedShown !== fitted.removed) {
+            p.compaction.trimmedShown = fitted.removed;
+            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'context_trimmed', message: engineText(language, 'warn.context_trimmed', { count: fitted.removed }), params: { count: fitted.removed } });
+          }
           if (!p.flags.includes('context_trimmed')) p.flags.push('context_trimmed');
         }
 
@@ -665,8 +683,6 @@ export class ChatEngine {
       })) if (event.type === 'text') text += event.delta;
       if (!text.trim()) return false;
       d.conversations.setSummary(c.conversationId, text.trim(), c.removed.at(-1)!.id);
-      d.bus.publish({ type: 'compaction', runId: c.runId, conversationId: c.conversationId, summarized: c.removed.length });
-      d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compacted', message: engineText(language, 'warn.compacted', { count: c.removed.length }), params: { count: c.removed.length } });
       return true;
     } catch {
       if (c.signal.aborted) return false;

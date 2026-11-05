@@ -129,6 +129,12 @@ export function createWebServer(app: App): WebServer {
     if (body.archived === false) app.conversations.unarchive(id);
     sendJson(res, 200, { conversation: app.conversations.get(id), ...(effortReset ? { effortReset: true } : {}) });
   });
+  // 要約（読むだけ）。要約が無い会話は summary が null
+  router.add('GET', '/api/conversations/:id/summary', ({ res, params }) => {
+    const id = params[0]!;
+    if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
+    sendJson(res, 200, app.conversations.summaryOf(id));
+  });
   router.add('GET', '/api/conversations/:id/messages', ({ res, params }) => {
     const id = params[0]!;
     const conversation = app.conversations.get(id);

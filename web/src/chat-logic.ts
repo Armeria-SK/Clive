@@ -207,6 +207,7 @@ export const SLASH_COMMANDS = [
   { name: 'stop', desc: 'slash.stop' },
   { name: 'rename', desc: 'slash.rename' },
   { name: 'archive', desc: 'slash.archive' },
+  { name: 'summary', desc: 'slash.summary' },
 ] as const satisfies ReadonlyArray<{ name: string; desc: PlainKey }>;
 
 export type SlashCommand = (typeof SLASH_COMMANDS)[number];
@@ -216,6 +217,14 @@ export function slashMatches(input: string): SlashCommand[] {
   if (!input.startsWith('/')) return [];
   const query = input.slice(1).toLowerCase();
   return SLASH_COMMANDS.filter(c => c.name.startsWith(query));
+}
+
+// 実行ごとのお知らせの並び。key が同じ（同じ実行の同じ種類）お知らせは、並べずに最新の内容で置き換える
+// （要約した件数・外した件数が増えるたびに、同じお知らせが並ばないように）。max 件を超えたら古いものから落とす
+export function mergeNotice<T extends { runId: string; key?: string | undefined }>(list: readonly T[], notice: T, max = 8): T[] {
+  const at = notice.key === undefined ? -1 : list.findIndex(n => n.runId === notice.runId && n.key === notice.key);
+  const next = at >= 0 ? list.map((n, i) => (i === at ? notice : n)) : [...list, notice];
+  return next.slice(-max);
 }
 
 export function renameTitleOf(input: string): string | null {

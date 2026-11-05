@@ -18,6 +18,9 @@ export interface ConversationRow {
   effort: string | null;
 }
 
+// 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
+export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary'> & { has_summary: boolean };
+
 export interface StoredMessage {
   id: number;
   conversation_id: string;
@@ -50,9 +53,25 @@ export class Conversations {
     return this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as ConversationRow | undefined;
   }
 
-  list(limit = 100): ConversationRow[] {
-    return this.db.prepare(`SELECT * FROM conversations WHERE archived = 0 AND kind = 'chat' ORDER BY last_message_at DESC LIMIT ?`)
-      .all(limit) as unknown as ConversationRow[];
+  // チャットの会話の一覧（新しい順）。archived: true でアーカイブした会話。query は題の部分一致（大文字小文字を区別しない）
+  list(limit = 100, options: { archived?: boolean; query?: string } = {}): ConversationListItem[] {
+    const query = options.query?.trim();
+    const like = query ? `%${query.replace(/[!%_]/gu, '!$&')}%` : null;
+    const rows = this.db.prepare(`
+      SELECT id, kind, title, archived, created_at, last_message_at, summary_upto, model_id, effort,
+        (summary IS NOT NULL AND summary != '') AS has_summary
+      FROM conversations WHERE archived = ? AND kind = 'chat'${like ? " AND title LIKE ? ESCAPE '!'" : ''}
+      ORDER BY last_message_at DESC LIMIT ?
+    `).all(...[options.archived ? 1 : 0, ...(like ? [like] : []), limit]) as unknown as Array<Omit<ConversationListItem, 'has_summary'> & { has_summary: number }>;
+    return rows.map(row => ({ ...row, has_summary: row.has_summary === 1 }));
+  }
+
+  // 会話の要約（全文）と、どこまでの発言を要約したか・要約した発言の件数
+  summaryOf(id: string): { summary: string | null; upto: number | null; summarizedMessages: number } {
+    const row = this.get(id);
+    const upto = row?.summary_upto ?? null;
+    const count = upto === null ? 0 : Number((this.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND id <= ?').get(id, upto) as { n: number }).n);
+    return { summary: row?.summary?.trim() ? row.summary : null, upto: row?.summary?.trim() ? upto : null, summarizedMessages: row?.summary?.trim() ? count : 0 };
   }
 
   // 無ければ空の会話を作る（最初の発言の前に、選んだモデルを覚えるため）

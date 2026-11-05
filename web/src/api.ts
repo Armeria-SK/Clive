@@ -1,8 +1,12 @@
 import { getLanguage } from './i18n/state.ts';
 import { errorBodyText } from './server-text.ts';
 
+// 会話の要約（読むだけ）。要約が無ければ summary は null
+export interface ConversationSummary { summary: string | null; upto: number | null; summarizedMessages: number }
 export interface Conversation {
   id: string; title: string | null; created_at: number; last_message_at: number;
+  // 要約があるか（全文は api.summary で読む）
+  has_summary?: boolean;
   // 会話で選んだモデルと考える深さ（null は自動・モデルの既定）
   model_id?: string | null; effort?: string | null;
 }
@@ -133,6 +137,7 @@ export const api = {
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),
   messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
+  summary: (id: string) => call<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/summary`),
   contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   decide: (id: string, decision: 'once' | 'conversation' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),

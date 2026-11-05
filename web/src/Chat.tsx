@@ -8,6 +8,7 @@ import {
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import { ModelMenu, OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
+import { SummaryDialog } from './SummaryDialog.tsx';
 import {
   AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
 } from './ChatMessages.tsx';
@@ -27,6 +28,8 @@ export interface RunNotice {
   hint?: string | undefined;
   retryable?: boolean;
   eventId?: number;
+  // 同じ実行の同じ key のお知らせは、並べずに置き換える（要約した・外した件数の更新）
+  key?: string | undefined;
   code?: string | undefined;
   errorKind?: string | undefined;
   measured?: number | undefined;
@@ -100,6 +103,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   const [modelId, setModelId] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const thread = useRef<HTMLDivElement>(null);
@@ -296,6 +300,9 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       case 'archive':
         if (conversationId) setConfirmArchive(true); else toast({ kind: 'info', icon: 'alert', title: t('chat.needsChat') });
         return;
+      case 'summary':
+        if (conversationId) setSummaryOpen(true); else toast({ kind: 'info', icon: 'alert', title: t('chat.needsChat') });
+        return;
     }
   }
 
@@ -379,6 +386,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
           />
         </div>
       </div>
+      {summaryOpen && conversationId && <SummaryDialog conversationId={conversationId} title={title} onClose={() => setSummaryOpen(false)} />}
       {confirmArchive && (
         <ChatDialog
           title={t('chat.archive.title')} onClose={() => setConfirmArchive(false)}
