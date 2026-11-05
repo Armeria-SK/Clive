@@ -6,7 +6,7 @@ import { TaskError, taskView, type Task } from '../tasks/store.ts';
 import { languageOf } from '../shared/language.ts';
 import { approvalPublic } from '../tools/approvals.ts';
 import { taskText } from '../shared/messages/tasks.ts';
-import { domainProblem, HttpProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
+import { configProblem, domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
 const MOTIONS = ['auto', 'none', 'float', 'sway', 'pulse'] as const;
 
@@ -225,7 +225,7 @@ export function registerTaskRoutes(router: Router, app: App): void {
       const saved = await app.applyConfig({ ...config, profile });
       sendJson(res, 200, { ...saved.profile, shapes: AVATAR_SHAPES, motions: MOTIONS });
     } catch (error) {
-      if (error instanceof ConfigError) throw new HttpProblem(400, { error: 'invalid_config', message: error.message.split('\n')[0], problems: error.problems });
+      if (error instanceof ConfigError) throw configProblem(error);
       throw error;
     }
   });

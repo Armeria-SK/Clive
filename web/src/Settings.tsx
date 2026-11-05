@@ -10,7 +10,7 @@ import { AccessConfirm } from './settings/AccessConfirm.tsx';
 import { accessKey, accessWidening, type Access } from './settings/access.ts';
 import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merge.ts';
 import {
-  blockUnload, closeAction, countChanges, isSection, parseProblem, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
+  blockUnload, closeAction, countChanges, isSection, parseProblem, problemsOf, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
 import { editsToKeep, restoreKept, type KeptEdits } from './settings/keep.ts';
 import { SectionView } from './settings/SectionView.tsx';
@@ -138,8 +138,7 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
       setLastSavedAt(Date.now());
       toast({ kind: 'done', icon: 'check', title: t('settings.saved') });
     } catch (error) {
-      const texts = error instanceof ApiError ? (error.body?.problems?.length ? error.body.problems as string[] : [error.message]) : [t('settings.saveFailed')];
-      setProblems(texts.map(text => parseProblem(text, draft)));
+      setProblems(error instanceof ApiError ? problemsOf(error.body, error.message, draft) : problemsOf(undefined, t('settings.saveFailed'), draft));
     } finally { setBusy(false); }
   }
   useSaveShortcut(() => { if (!confirm) void save(); });

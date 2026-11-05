@@ -12,7 +12,7 @@ import { searchHistory } from '../memory/history.ts';
 import { MemoryError, planBooks } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
 import { httpText } from '../shared/messages/http.ts';
-import { domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
+import { configProblem, domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
@@ -38,7 +38,7 @@ function settingsView(app: App) {
   return {
     config,
     apiKeys: Object.fromEntries(keys.map(k => [k, Boolean(env[k]?.trim())])),
-    configError: app.configStore.lastError ? { message: app.configStore.lastError.message, problems: app.configStore.lastError.problems } : null,
+    configError: app.configStore.lastError ? { message: app.configStore.lastError.message, problems: app.configStore.lastError.problems, issues: app.configStore.lastError.issues } : null,
     restartRequired: app.restartRequired(),
     configPath: app.configStore.path,
   };
@@ -260,7 +260,7 @@ export function createWebServer(app: App): WebServer {
     let next;
     try { next = parseConfig(Value.Clone(body.config)); }
     catch (error) {
-      if (error instanceof ConfigError) throw new HttpProblem(400, { error: 'invalid_config', message: error.message.split('\n')[0], problems: error.problems });
+      if (error instanceof ConfigError) throw configProblem(error);
       throw error;
     }
     await app.applyConfig(next);

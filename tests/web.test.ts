@@ -272,3 +272,27 @@ test('API: 会話のアーカイブは PATCH の archived で戻せる。true �
   assert.equal((await patch('hide', { title: '題だけ変える' })).status, 200, 'archived を送らなければ今まで通り');
   assert.equal(s.app.conversations.get('hide')!.title, '題だけ変える');
 });
+
+test('API: 設定の問題は文（problems）のほかに、ID で書いた場所つきの issues でも返す（保存の 400 と、壊れた設定の GET）', async t => {
+  const s = await startApp(t);
+  const view = await (await s.api('/api/settings')).json() as any;
+  assert.equal(view.configError, null);
+
+  const unknownRoute = await s.api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: { ...view.config, routing: { ...view.config.routing, chat: ['nope'] } } }) });
+  assert.equal(unknownRoute.status, 400);
+  const first = (await unknownRoute.json()) as any;
+  assert.equal(first.error, 'invalid_config');
+  assert.deepEqual(first.issues, [{ path: 'routing.chat', message: 'モデル「nope」がありません' }]);
+  assert.deepEqual(first.problems, ['routing.chat: モデル「nope」がありません'], '文は今までと同じ');
+
+  const badShape = structuredClone(view.config);
+  badShape.models[0].contextLength = 'many';
+  const second = (await (await s.api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: badShape }) })).json()) as any;
+  assert.ok(second.issues.some((i: any) => i.path === 'models.m.contextLength'), '番号ではなくモデルの ID で返す');
+  assert.ok(second.problems.some((p: string) => p.startsWith('/models/0/contextLength: ')), '文の側は番号のまま');
+
+  writeFileSync(s.app.paths.config, JSON.stringify({ ...view.config, routing: { ...view.config.routing, background: ['ghost'] } }));
+  const broken = (await (await s.api('/api/settings')).json()) as any;
+  assert.deepEqual(broken.configError.issues, [{ path: 'routing.background', message: 'モデル「ghost」がありません' }]);
+  assert.deepEqual(broken.configError.problems, ['routing.background: モデル「ghost」がありません']);
+});
