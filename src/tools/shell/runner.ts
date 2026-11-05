@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, statSync, type WriteStream } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { isSensitiveName } from '../../shared/redaction.ts';
 
 const WINDOWS = process.platform === 'win32';
@@ -12,6 +12,12 @@ const BASE_ENV = [
   'USER', 'USERNAME', 'LOGNAME', 'SHELL', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'XDG_RUNTIME_DIR',
 ];
 
+// PATH の空・'.'・相対の項目は、シェルでは「いまいる場所」を指す（cd のあとはその先）。許可の一覧は最初の場所で実体を調べるので、cd で動いた先に置いたものを見逃す。
+// 子の PATH からは、絶対パスの項目だけを残す（Windows の引用符つきの項目は引用符を外す）
+export function absolutePathEntries(value: string): string {
+  return value.split(delimiter).map(entry => (WINDOWS ? entry.replace(/^"(.*)"$/u, '$1') : entry)).filter(entry => entry !== '' && isAbsolute(entry)).join(delimiter);
+}
+
 export function scrubEnv(extraAllow: readonly string[] = [], source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const allow = new Set([...BASE_ENV, ...extraAllow].map(k => (WINDOWS ? k.toUpperCase() : k)));
   const out: Record<string, string> = {};
@@ -19,7 +25,7 @@ export function scrubEnv(extraAllow: readonly string[] = [], source: NodeJS.Proc
     if (value === undefined) continue;
     if (!allow.has(WINDOWS ? key.toUpperCase() : key)) continue;
     if (isSensitiveName(key) || /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/iu.test(key)) continue;
-    out[key] = value;
+    out[key] = key.toUpperCase() === 'PATH' ? absolutePathEntries(value) : value;
   }
   return out;
 }

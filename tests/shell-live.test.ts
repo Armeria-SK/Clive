@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
 import { parseConfig } from '../src/config/store.ts';
@@ -302,5 +302,29 @@ for (const shell of ['powershell', 'bash'] as const) {
     assert.deepEqual(existsSync(left) ? readdirSync(left) : [], [], '置き場所が残っている');
     // コマンドレベルの上書き（リポジトリの設定より優先）が、実際の実行に渡っている
     assert.match((await s.call('git config --get core.fsmonitor')).output.content, /^false$/mu);
+  });
+}
+
+// 審査の指摘: 子の PATH の '.'・空・相対の項目は、本物のシェルでは cd のあとの場所を指す。許可の一覧は最初の場所で調べるので、cd で動いた先に置いた git を見逃した
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: PATH に '.' があっても、cd で動いた先に置いた git は動かない`, { skip: !available && 'シェルが無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const marker = join(root, 'marker');
+    const ps = shell === 'powershell';
+    // cd で動いた先 sub に、名前が git の偽物を置く
+    if (ps) writeFileSync(join(root, 'sub', 'git.cmd'), `@echo off\r\necho ran> "${marker}"\r\n`);
+    else writeFileSync(join(root, 'sub', 'git'), `#!/bin/sh\necho ran > "${marker.replaceAll('\\', '/')}"\n`, { mode: 0o755 });
+    const key = Object.keys(process.env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH';
+    const saved = process.env[key];
+    const places = ['.', '', 'sub', join('..', 'x')];
+    process.env[key] = `${places.join(delimiter)}${delimiter}${saved ?? ''}`;
+    try {
+      await s.call(ps ? 'cd sub; git --version' : 'cd sub && git --version');
+    } finally {
+      if (saved === undefined) delete process.env[key]; else process.env[key] = saved;
+    }
+    assert.equal(existsSync(marker), false, 'PATH の . が cd の先を指して、置いた git が動いた');
   });
 }

@@ -15,7 +15,7 @@ import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
-import { resolveShell, runProcess, scrubEnv } from '../src/tools/shell/runner.ts';
+import { findExecutable, resolveShell, runProcess, scrubEnv } from '../src/tools/shell/runner.ts';
 import type { ToolContext } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
@@ -311,6 +311,31 @@ test('V5: スキルのフォルダと .git への書き込みは、シェルな�
   assert.equal((await s.call('file_read', { path: 'skills/ok/SKILL.md' })).decision, 'allow');
   assert.equal((await s.call('file_read', { path: 'proj/.git/config' })).decision, 'allow');
   assert.equal((await s.call('file_list', { path: 'skills' })).decision, 'allow');
+});
+
+// 審査の指摘: PATH の空・'.'・相対の項目は、シェルでは「いまいる場所」（cd のあとはその先）を指す。許可の一覧は最初の場所で実体を調べるので、cd で動いた先に置いたものを見逃していた
+test('scrubEnv: 子の PATH から、空・.・相対の項目を除く。絶対パスの項目は順序のまま残す', () => {
+  const win = process.platform === 'win32';
+  const abs = win ? ['C:\\Windows\\system32', 'C:\\Program Files\\Git\\cmd', '\\\\server\\share\\bin'] : ['/usr/bin', '/opt/my bin', '/usr/local/bin'];
+  const raw = ['', '.', 'bin', `.${win ? '\\' : '/'}bin`, '..', abs[0], '~/bin', win ? 'C:rel' : 'a/b', abs[1], '', abs[2], '..\\x'].join(delimiter);
+  const want = abs.join(delimiter);
+  assert.equal(scrubEnv([], { PATH: raw, HOME: '/h', USERPROFILE: 'C:\\Users\\u' }).PATH, want);
+  assert.equal(scrubEnv([], { PATH: raw, HOME: '/h' }).HOME, '/h', '別の変数はそのまま');
+  if (win) {
+    assert.equal(scrubEnv([], { Path: raw }).Path, want, 'Windows の Path');
+    assert.equal(scrubEnv([], { PATH: `"${abs[1]}"${delimiter}"rel"` }).PATH, abs[1], '引用符つきの絶対パスは引用符を外して残し、相対は除く');
+  }
+  assert.equal(scrubEnv([], { PATH: '.' }).PATH, '');
+  assert.equal(scrubEnv([], { PATH: '' }).PATH, '');
+});
+
+test('findExecutable: PATH の . から、いまいる場所の実行ファイルを見つけない（scrubEnv を通したあと）', t => {
+  const dir = tempDir(t);
+  const name = process.platform === 'win32' ? 'tool.exe' : 'tool';
+  writeFileSync(join(dir, name), '', { mode: 0o755 });
+  const raw = `.${delimiter}${delimiter}rel${delimiter}${process.platform === 'win32' ? 'C:\\Windows\\system32' : '/usr/bin'}`;
+  assert.equal(findExecutable('tool', { PATH: raw }, dir) !== undefined, true, '前提: そのままの PATH だと、いまいる場所の実行ファイルが見つかる');
+  assert.equal(findExecutable('tool', scrubEnv([], { PATH: raw }), dir), undefined);
 });
 
 test('V5: シェルでも、スキルのフォルダと .git への書き込み・読むだけでないコマンドは確かめになる。読むだけは通す', async t => {
