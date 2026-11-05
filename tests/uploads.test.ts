@@ -10,6 +10,10 @@ import { attachmentBlock, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from
 import { createWebServer } from '../src/web/server.ts';
 import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
+// 画面が決める会話の id は UUID（まだ無い会話への最初の発言は、この形だけ受け付ける）
+const C1 = '00000000-0000-4000-8000-000000000001';
+const C2 = '00000000-0000-4000-8000-000000000002';
+
 export function tinyPdf(text: string): Buffer {
   const content = `BT /F1 12 Tf 10 100 Td (${text}) Tj ET`;
   return Buffer.from([
@@ -90,7 +94,7 @@ test('API: 添付して送ると、中身はデータとしてモデルに渡り
   const up = await s.upload('議事録.pdf', tinyPdf('Meeting notes: ship on Friday'), 'application/pdf');
   assert.equal(up.status, 201);
   s.adapter().scripts.push(toolCall('file_write', { path: 'summary.md', content: 'ship on Friday' }), reply('まとめました'));
-  const sent = await s.post('/api/conversations/c1/messages', { text: 'これをまとめて', attachments: [up.body.upload.id] });
+  const sent = await s.post(`/api/conversations/${C1}/messages`, { text: 'これをまとめて', attachments: [up.body.upload.id] });
   assert.equal(sent.status, 202);
   for (let i = 0; i < 300 && !s.events.some(e => e.type === 'approval.requested'); i++) await new Promise(r => setTimeout(r, 10));
   const requested = s.events.find(e => e.type === 'approval.requested') as Extract<RunEvent, { type: 'approval.requested' }>;
@@ -100,10 +104,10 @@ test('API: 添付して送ると、中身はデータとしてモデルに渡り
   await s.app.engine.wait(sent.body.runId);
   const toModel = String(s.adapter().calls[0]!.messages.at(-1)?.content);
   assert.match(toModel, /これをまとめて[\s\S]*<<<添付ファイル: 議事録\.pdf（PDF・1 ページ）>>>[\s\S]*ship on Friday/u);
-  const view = await (await fetch(`${s.origin}/api/conversations/c1/messages`, { headers: { Origin: s.origin } })).json() as any;
+  const view = await (await fetch(`${s.origin}/api/conversations/${C1}/messages`, { headers: { Origin: s.origin } })).json() as any;
   const user = view.messages.find((m: any) => m.role === 'user');
   assert.equal(user.text, 'これをまとめて');
-  assert.equal(s.app.conversations.get('c1')!.title, 'これをまとめて', 'タイトルに添付の中身を入れない');
+  assert.equal(s.app.conversations.get(C1)!.title, 'これをまとめて', 'タイトルに添付の中身を入れない');
   assert.deepEqual(user.attachments.map((a: any) => [a.name, a.kind]), [['議事録.pdf', 'pdf']]);
 });
 
@@ -111,10 +115,10 @@ test('API: 画像は画像を読めるモデルにだけ渡す。大きすぎる
   const s = await setup(t);
   const img = await s.upload('a.png', PNG, 'image/png');
   assert.equal(img.body.upload.kind, 'image');
-  const refused = await s.post('/api/conversations/c1/messages', { text: '見て', attachments: [img.body.upload.id] });
+  const refused = await s.post(`/api/conversations/${C1}/messages`, { text: '見て', attachments: [img.body.upload.id] });
   assert.equal(refused.status, 409);
   assert.match(refused.body.message, /画像を読めるモデル/u);
-  assert.equal((await s.post('/api/conversations/c1/messages', { text: 'x', attachments: ['nope'] })).status, 400);
+  assert.equal((await s.post(`/api/conversations/${C1}/messages`, { text: 'x', attachments: ['nope'] })).status, 400);
   assert.equal((await s.upload('big.txt', Buffer.alloc(MAX_UPLOAD_BYTES + 1, 0x61), 'text/plain')).status, 413);
 });
 
@@ -122,7 +126,7 @@ test('API: 画像を読めるモデルなら、画像として渡す', async t =
   const s = await setup(t, { vision: true });
   const img = await s.upload('a.png', PNG, 'image/png');
   s.adapter().scripts.push(reply('小さな画像です'));
-  const sent = await s.post('/api/conversations/c1/messages', { attachments: [img.body.upload.id] });
+  const sent = await s.post(`/api/conversations/${C1}/messages`, { attachments: [img.body.upload.id] });
   assert.equal(sent.status, 202);
   await s.app.engine.wait(sent.body.runId);
   const last = s.adapter().calls[0]!.messages.at(-1) as { content: string; images?: Array<{ mediaType: string; data: string }> };
@@ -135,14 +139,14 @@ test('API: 順番（routing.chat）が空でも、エンジンと同じ候補（
   const s = await setup(t, { vision: true }, c => { c.routing = { chat: [], background: [], retriesPerModel: 0 }; });
   const img = await s.upload('a.png', PNG, 'image/png');
   s.adapter().scripts.push(reply('見えました'));
-  const sent = await s.post('/api/conversations/c1/messages', { text: '見て', attachments: [img.body.upload.id] });
+  const sent = await s.post(`/api/conversations/${C1}/messages`, { text: '見て', attachments: [img.body.upload.id] });
   assert.equal(sent.status, 202, JSON.stringify(sent.body));
   await s.app.engine.wait(sent.body.runId);
   const last = s.adapter().calls[0]!.messages.at(-1) as { images?: unknown[] };
   assert.equal(last.images?.length, 1);
   const blind = await setup(t, { vision: false }, c => { c.routing = { chat: [], background: [], retriesPerModel: 0 }; });
   const img2 = await blind.upload('a.png', PNG, 'image/png');
-  const refused = await blind.post('/api/conversations/c1/messages', { text: '見て', attachments: [img2.body.upload.id] });
+  const refused = await blind.post(`/api/conversations/${C1}/messages`, { text: '見て', attachments: [img2.body.upload.id] });
   assert.equal(refused.status, 409);
   assert.equal(refused.body.code, 'http.no_vision', '画像を読めるモデルが無ければ、順番が空でも今までどおり断る');
 });
@@ -150,15 +154,15 @@ test('API: 順番（routing.chat）が空でも、エンジンと同じ候補（
 test('API: モデルが 0 個のとき、画像つきの送信は no_vision ではなく「モデルを設定する」案内（engine.no_usable）に着く', async t => {
   const s = await setup(t, {}, c => { c.models = []; c.routing = { chat: [], background: [], retriesPerModel: 0 }; });
   const img = await s.upload('a.png', PNG, 'image/png');
-  const sent = await s.post('/api/conversations/c1/messages', { text: '見て', attachments: [img.body.upload.id] });
+  const sent = await s.post(`/api/conversations/${C1}/messages`, { text: '見て', attachments: [img.body.upload.id] });
   assert.equal(sent.status, 409);
   assert.equal(sent.body.errorCode, 'engine.no_usable');
   assert.deepEqual(sent.body.problems, []);
-  assert.equal(s.app.conversations.messages('c1').length, 0, '発言は保存しない');
-  const plain = await s.post('/api/conversations/c2/messages', { text: 'やあ' });
+  assert.equal(s.app.conversations.messages(C1).length, 0, '発言は保存しない');
+  const plain = await s.post(`/api/conversations/${C2}/messages`, { text: 'やあ' });
   assert.equal(plain.status, 409);
   assert.equal(plain.body.errorCode, 'engine.no_usable');
-  assert.equal(s.app.conversations.get('c1'), undefined, '断った送信は、空の会話を残さない');
-  assert.equal(s.app.conversations.get('c2'), undefined);
+  assert.equal(s.app.conversations.get(C1), undefined, '断った送信は、空の会話を残さない');
+  assert.equal(s.app.conversations.get(C2), undefined);
   assert.deepEqual(s.app.conversations.list(), []);
 });

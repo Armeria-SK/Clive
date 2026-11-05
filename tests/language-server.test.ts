@@ -541,17 +541,17 @@ test('API: 添付だけの発言の目印と、記憶の削除の理由は設定
     const pick = <T>(ja: T, en: T): T => (language === 'ja' ? ja : en);
     const uploaded = await (await s.api('/api/uploads?name=a.txt', { method: 'POST', body: 'file body', headers: { 'Content-Type': 'text/plain' } })).json() as any;
     s.adapter().scripts.push(reply('ok'));
-    const sent = await s.post('/api/conversations/c1/messages', { text: '', attachments: [uploaded.upload.id] });
+    const sent = await s.post(`/api/conversations/00000000-0000-4000-8000-000000000001/messages`, { text: '', attachments: [uploaded.upload.id] });
     assert.equal(sent.status, 202);
     await s.app.engine.wait(((await sent.json()) as any).runId);
-    const stored = s.app.conversations.messages('c1')[0]!.message;
+    const stored = s.app.conversations.messages('00000000-0000-4000-8000-000000000001')[0]!.message;
     assert.equal(stored.role, 'user');
     if (stored.role === 'user') {
       assert.ok(stored.content.startsWith(pick('（ファイルを添付しました）\n\n<<<添付ファイル: a.txt（テキスト）>>>', '(A file was attached)\n\n<<<Attachment: a.txt（text）>>>')), stored.content);
       assert.ok(stored.content.endsWith(pick('<<<添付ファイルここまで>>>', '<<<End of attachment>>>')));
     }
-    assert.equal(s.app.conversations.get('c1')!.title, 'a.txt', '添付の目印は題にしない');
-    const history = await (await s.api('/api/conversations/c1/messages')).json() as any;
+    assert.equal(s.app.conversations.get('00000000-0000-4000-8000-000000000001')!.title, 'a.txt', '添付の目印は題にしない');
+    const history = await (await s.api(`/api/conversations/00000000-0000-4000-8000-000000000001/messages`)).json() as any;
     assert.equal(history.messages[0].text, pick('（ファイルを添付しました）', '(A file was attached)'), '画面には囲みの中身を出さない');
 
     const memory = await (await s.post('/api/memories', { book: 'user', content: 'tea' })).json() as any;

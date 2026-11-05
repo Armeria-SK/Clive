@@ -1,4 +1,4 @@
-import { copyFileSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWriteFile } from '../config/store.ts';
 import { LANGUAGES, type Language } from '../config/schema.ts';
@@ -117,8 +117,15 @@ function setUserLines(lf: string, language: Language, values: { name?: string | 
   return setSectionBody(lf, 'userBasic', language, keep.join('\n'));
 }
 
-const cleanLine = (value: string): string => value.replace(/[\r\n\t]+/gu, ' ').replace(/ {2,}/gu, ' ').trim();
-const cleanBlock = (value: string): string => value.replace(/\r\n/gu, '\n').split('\n').map(line => (line.startsWith('#') ? `\\${line}` : line)).join('\n').trim();
+const oneLine = (value: string): string => value.replace(/[\r\n\t]+/gu, ' ').replace(/ {2,}/gu, ' ').trim();
+// 名前の先頭の # は見出しになりうるので、受け付けない（route が 400 にする）。ここでも念のため印を付ける。
+export const startsWithHash = (value: string): boolean => oneLine(value).startsWith('#');
+const cleanLine = (value: string): string => { const text = oneLine(value); return text.startsWith('#') ? `\\${text}` : text; };
+// 自由な文の、見出しになる行（先頭の 3 字までの空白 + #）と、直前の行を見出しにする下線（= か - だけの行）には印を付ける。
+const HEADING_LINE = /^(\s{0,3})#/u;
+const SETEXT_LINE = /^(\s{0,3})(?:=+|-+)\s*$/u;
+const cleanBlock = (value: string): string => value.replace(/\r\n/gu, '\n').split('\n')
+  .map(line => (HEADING_LINE.test(line) ? line.replace(HEADING_LINE, '$1\\#') : SETEXT_LINE.test(line) ? line.replace(/^(\s{0,3})/u, '$1\\') : line)).join('\n').trim();
 
 export function styleText(style: Style, language: Language): string {
   return style === 'none' ? '' : STYLE_TEXT[style][language];
@@ -179,9 +186,17 @@ export function writePersonaFile(paths: AppPaths, name: PersonaFile, content: st
       const dir = join(paths.backups, 'persona');
       mkdirSync(dir, { recursive: true });
       copyFileSync(target, join(dir, `${name}.${new Date(now).toISOString().replace(/[:.]/gu, '-')}.bak`));
+      pruneBackups(dir, name);
     }
     atomicWriteFile(target, content);
   }
+}
+
+// 書く前の控えは、ファイルごとに新しいものから 20 個まで残す（古いものから消す。時刻の並びは文字の並びと同じ）。
+export const PERSONA_BACKUPS_KEPT = 20;
+function pruneBackups(dir: string, name: PersonaFile): void {
+  const files = readdirSync(dir).filter(file => file.startsWith(`${name}.`) && file.endsWith('.bak')).sort();
+  for (const file of files.slice(0, Math.max(0, files.length - PERSONA_BACKUPS_KEPT))) unlinkSync(join(dir, file));
 }
 
 const normalized = (text: string): string => toLf(text).trim();

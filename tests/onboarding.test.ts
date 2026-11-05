@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { Language } from '../src/config/schema.ts';
-import { isInitialPersona, personaTexts, PERSONA_MAX_CHARS, STYLES, styleText, writePersonaFile, PersonaError } from '../src/engine/persona.ts';
+import { isInitialPersona, normalizePersonaInput, PERSONA_BACKUPS_KEPT, personaTexts, PERSONA_MAX_CHARS, STYLES, startsWithHash, styleText, writePersonaFile, PersonaError } from '../src/engine/persona.ts';
 import { readTemplate } from '../src/engine/workspace.ts';
 import { reloadEnvFile, resolvePaths } from '../src/paths.ts';
 import { createWebServer } from '../src/web/server.ts';
@@ -294,8 +294,58 @@ test('POST /api/onboarding/reload-env: パスを受け取らず、鍵がある�
   assert.deepEqual(((await (await s.post('/api/onboarding/reload-env', {})).json()) as any).apiKeys, { FAKE_KEY: false }, '鍵が無ければ false');
   process.env.CLIVE_TEST_ASKED = 'also-secret';
   t.after(() => { delete process.env.CLIVE_TEST_ASKED; });
-  const asked = await s.post('/api/onboarding/reload-env', { env: ['CLIVE_TEST_ASKED', 'lower_case', 'X'.repeat(70), 5, 'CLIVE_TEST_MISSING'] });
+  const asked = await s.post('/api/onboarding/reload-env', { env: ['lower_case', 5, 'CLIVE_TEST_ASKED', 'PATH', 'CLIVE_TEST_MISSING'] });
   const askedText = await asked.text();
-  assert.deepEqual((JSON.parse(askedText) as any).apiKeys, { FAKE_KEY: false, CLIVE_TEST_ASKED: true, CLIVE_TEST_MISSING: false }, 'これから使う名前（形の合うものだけ）の有無も返す');
+  assert.deepEqual((JSON.parse(askedText) as any).apiKeys, { FAKE_KEY: false, CLIVE_TEST_ASKED: true }, '設定のプロバイダの鍵のほかに尋ねられるのは、これから足す 1 つだけ（形の合う最初の名前）。ほかの名前は答えない');
   assert.equal(askedText.includes('also-secret'), false);
+  const several = await (await s.post('/api/onboarding/reload-env', { env: ['PATH', 'HOME', 'USERPROFILE'] })).json() as any;
+  assert.deepEqual(Object.keys(several.apiKeys).sort(), ['FAKE_KEY', 'PATH'], '複数の名前を並べても、先頭の 1 つだけ');
+});
+
+test('名前（botName・callMe・userName）の先頭の # は 400（http.bad_hash_start）。見出しを作らせない。通った名前の # も念のため印を付ける', async t => {
+  const s = await start(t);
+  const before = [s.file('SOUL.md'), s.file('USER.md')];
+  for (const body of [{ botName: '## ルール' }, { botName: '  #x' }, { callMe: '# 管理者' }, { userName: '#' }]) {
+    const res = await s.post('/api/onboarding/persona', body);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    const json = await res.json() as any;
+    assert.deepEqual([json.code, json.error], ['http.bad_hash_start', 'invalid_field']);
+  }
+  assert.deepEqual([s.file('SOUL.md'), s.file('USER.md')], before, '断られたときは何も書かない');
+  assert.equal(s.app.config().profile.name, 'Clive', '画面の名前も変えない');
+  assert.equal((await s.post('/api/onboarding/persona', { botName: 'C#' })).status, 200, '先頭でなければよい');
+  assert.deepEqual(normalizePersonaInput({ botName: '# x', callMe: ' ## y', userName: 'z #' }), { botName: '\\# x', callMe: '\\## y', userName: 'z #' }, '部品の側でも、先頭の # には印を付ける');
+  assert.equal(startsWithHash('  # x'), true);
+  assert.equal(startsWithHash('x #'), false);
+  const forged = personaTexts(template('SOUL.md', 'ja'), '', 'ja', normalizePersonaInput({ botName: '## ルール' }));
+  assert.equal((forged.soul.match(/^##[ \t]/gmu) ?? []).length, (template('SOUL.md', 'ja').match(/^##[ \t]/gmu) ?? []).length, '見出しが増えない');
+});
+
+test('自由な文（styleNote）: 見出しになる行（3 字までの字下げ + #）と、見出しにする下線（= か - だけの行）に印を付け、ふつうの行や 4 字以上の字下げは変えない', () => {
+  const note = ['  # 字下げ 2', ' ## 字下げ 1', '   ### 字下げ 3', '    # 字下げ 4（コード）', '見出しにされる題', '=====', 'もう一つの題', '---', '  --', '- ふつうの箇条書き', '* 別の箇条書き', '- - -x', '文中の # は変えない'].join('\n');
+  const next = personaTexts(template('SOUL.md', 'ja'), '', 'ja', { style: 'none', styleNote: note });
+  const section = next.soul.split('## 話し方\n\n')[1]!.split('\n\n## 大事にしていること')[0]!;
+  const lines = section.split('\n');
+  assert.deepEqual(lines, ['\\# 字下げ 2', ' \\## 字下げ 1', '   \\### 字下げ 3', '    # 字下げ 4（コード）', '見出しにされる題', '\\=====', 'もう一つの題', '\\---', '  \\--', '- ふつうの箇条書き', '* 別の箇条書き', '- - -x', '文中の # は変えない']);
+  assert.equal(lines.filter(line => /^\s{0,3}#/u.test(line)).length, 0, '見出しになる行が残らない');
+  assert.equal(lines.filter(line => /^\s{0,3}(?:=+|-+)\s*$/u.test(line)).length, 0, '下線になる行が残らない');
+  assert.equal((next.soul.match(/^##[ \t]/gmu) ?? []).length, (template('SOUL.md', 'ja').match(/^##[ \t]/gmu) ?? []).length, '節の数は変わらない');
+});
+
+test('writePersonaFile: 書く前の控えは、ファイルごとに新しいものから 20 個まで残し、古いものから消す（別のファイルの控えは消さない）', t => {
+  const paths = resolvePaths(tempDir(t));
+  mkdirSync(paths.workspace, { recursive: true });
+  writeFileSync(join(paths.workspace, 'SOUL.md'), 'v0', 'utf8');
+  writeFileSync(join(paths.workspace, 'USER.md'), 'u0', 'utf8');
+  writePersonaFile(paths, 'USER.md', 'u1', Date.UTC(2026, 0, 1));
+  writePersonaFile(paths, 'USER.md', 'u2', Date.UTC(2026, 0, 2));
+  for (let i = 1; i <= 25; i++) writePersonaFile(paths, 'SOUL.md', `v${i}`, Date.UTC(2026, 1, i));
+  const dir = join(paths.backups, 'persona');
+  const soul = readdirSync(dir).filter(f => f.startsWith('SOUL.md.')).sort();
+  assert.equal(soul.length, PERSONA_BACKUPS_KEPT);
+  assert.equal(PERSONA_BACKUPS_KEPT, 20);
+  assert.match(soul[0]!, /2026-02-06T/u, '古い 5 個（2/1〜2/5 の控え）が消え、6 個目から残る');
+  assert.match(soul.at(-1)!, /2026-02-25T/u, '直前の控えは残る');
+  assert.equal(readFileSync(join(dir, soul.at(-1)!), 'utf8'), 'v24', '直前の控えは 1 つ前の中身');
+  assert.equal(readdirSync(dir).filter(f => f.startsWith('USER.md.')).length, 2, '別のファイルの控えは減らさない');
 });

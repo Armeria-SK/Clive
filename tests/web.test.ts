@@ -102,16 +102,16 @@ test('API: 発言を送ると返事が SSE で流れ、保存される', async t
 
 test('API: 使えるモデルが無ければ 409 で理由と直し方を返し、発言は保存しない', async t => {
   const s = await startApp(t, [{ id: 'small', provider: 'fake', model: 'x', contextLength: 4096, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }]);
-  const sent = await s.api('/api/conversations/c1/messages', { method: 'POST', body: JSON.stringify({ text: 'やあ' }) });
+  const sent = await s.api('/api/conversations/00000000-0000-4000-8000-0000000000c1/messages', { method: 'POST', body: JSON.stringify({ text: 'やあ' }) });
   assert.equal(sent.status, 409);
   const body = await sent.json() as any;
   assert.equal(body.errorKind, 'context_overflow');
   assert.match(body.errorMessage, /送信しませんでした/);
   const models = await (await s.api('/api/models')).json() as any;
   assert.equal(models.models[0].probe.status, 'too_small');
-  assert.equal(s.app.conversations.messages('c1').length, 0);
-  assert.equal(s.app.conversations.get('c1'), undefined, '断った送信は、空の会話を残さない');
-  const created = await s.api('/api/conversations/c9/messages', { method: 'POST', body: JSON.stringify({ text: 'もう一度' }) });
+  assert.equal(s.app.conversations.messages('00000000-0000-4000-8000-0000000000c1').length, 0);
+  assert.equal(s.app.conversations.get('00000000-0000-4000-8000-0000000000c1'), undefined, '断った送信は、空の会話を残さない');
+  const created = await s.api('/api/conversations/00000000-0000-4000-8000-0000000000c9/messages', { method: 'POST', body: JSON.stringify({ text: 'もう一度' }) });
   assert.equal(created.status, 409);
   assert.deepEqual(s.app.conversations.list(), []);
 });
@@ -169,14 +169,44 @@ test('API: ほかのサイトからの書き込みは 403', async t => {
 test('API: 作っていない会話の id に最初の発言を送ると、受け付けたときだけ会話ができる（断られたときは残らない）', async t => {
   const s = await startApp(t);
   s.adapter().scripts.push(reply('はじめまして'));
-  const sent = await s.api('/api/conversations/fresh1/messages', { method: 'POST', body: JSON.stringify({ text: 'はじめまして' }) });
+  const sent = await s.api('/api/conversations/00000000-0000-4000-8000-00000000f001/messages', { method: 'POST', body: JSON.stringify({ text: 'はじめまして' }) });
   assert.equal(sent.status, 202);
   await s.app.engine.wait(((await sent.json()) as any).runId);
-  const row = s.app.conversations.get('fresh1')!;
+  const row = s.app.conversations.get('00000000-0000-4000-8000-00000000f001')!;
   assert.deepEqual([row.kind, row.title], ['chat', 'はじめまして']);
-  assert.deepEqual(s.app.conversations.list().map(c => c.id), ['fresh1']);
-  assert.deepEqual(s.app.conversations.messages('fresh1').map(m => m.role), ['user', 'assistant']);
-  const refused = await s.api('/api/conversations/fresh2/messages', { method: 'POST', body: JSON.stringify({ text: 'x'.repeat(100_001) }) });
+  assert.deepEqual(s.app.conversations.list().map(c => c.id), ['00000000-0000-4000-8000-00000000f001']);
+  assert.deepEqual(s.app.conversations.messages('00000000-0000-4000-8000-00000000f001').map(m => m.role), ['user', 'assistant']);
+  const refused = await s.api('/api/conversations/00000000-0000-4000-8000-00000000f002/messages', { method: 'POST', body: JSON.stringify({ text: 'x'.repeat(100_001) }) });
   assert.equal(refused.status, 400);
-  assert.equal(s.app.conversations.get('fresh2'), undefined, '入力の誤りで断った送信も、会話を作らない');
+  assert.equal(s.app.conversations.get('00000000-0000-4000-8000-00000000f002'), undefined, '入力の誤りで断った送信も、会話を作らない');
+});
+
+test('API: まだ無い会話への最初の発言は UUID の形の id だけ（400）。タスクや振り返りの会話には、ここから送れない（409）。会話がすでにあれば、どんな id でもよい', async t => {
+  const s = await startApp(t);
+  const send = (id: string) => s.api(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text: 'やあ' }) });
+  for (const id of ['fresh', 'c1', 'x'.repeat(80), '00000000-0000-4000-8000-00000000000', 'g0000000-0000-4000-8000-000000000000']) {
+    const res = await send(id);
+    assert.equal(res.status, 400, id);
+    assert.equal(((await res.json()) as any).code, 'http.invalid_id');
+    assert.equal(s.app.conversations.get(id), undefined, '会話を作らない');
+  }
+  assert.equal(s.app.conversations.list().length, 0);
+
+  s.app.conversations.create({ id: 'task-conv', kind: 'task', title: 'タスクの会話' });
+  const refused = await send('task-conv');
+  assert.equal(refused.status, 409);
+  assert.equal(((await refused.json()) as any).code, 'http.not_chat_conversation');
+  assert.equal(s.app.conversations.messages('task-conv').length, 0, '発言は保存しない');
+
+  s.app.conversations.create({ id: 'old-style', title: '前からある会話' });
+  s.adapter().scripts.push(reply('はい'));
+  const ok = await send('old-style');
+  assert.equal(ok.status, 202, 'すでにある会話には、どんな形の id でも送れる');
+  await s.app.engine.wait(((await ok.json()) as any).runId);
+
+  s.adapter().scripts.push(reply('はい'));
+  const fresh = await send('00000000-0000-4000-8000-0000000000aa');
+  assert.equal(fresh.status, 202, 'UUID の形なら、最初の発言で会話ができる');
+  await s.app.engine.wait(((await fresh.json()) as any).runId);
+  assert.equal(s.app.conversations.get('00000000-0000-4000-8000-0000000000aa')?.kind, 'chat');
 });

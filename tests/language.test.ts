@@ -747,7 +747,7 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
     return chatRequests().at(-1)!.body.messages[0].content as string;
   };
 
-  const first = await speak('c1', 'こんにちは');
+  const first = await speak('00000000-0000-4000-8000-000000000001', 'こんにちは');
   assert.ok(first.startsWith('# Clive の基本ルール'));
   assert.ok(first.includes(JA_DIRECTIVE) && !first.includes(EN_DIRECTIVE));
   assert.equal(lastSent(), 'こんにちは', '言語を変えていない会話の最後の発言には何も足さない');
@@ -755,13 +755,13 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   const view = await (await api('/api/settings')).json() as any;
   assert.equal((await api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: { ...view.config, language: 'en' } }) })).status, 200);
 
-  const second = await speak('c1', 'Hello again');
+  const second = await speak('00000000-0000-4000-8000-000000000001', 'Hello again');
   assert.ok(second.includes(EN_DIRECTIVE) && !second.includes(JA_DIRECTIVE), '同じ会話の次の送信から英語の指示');
   assert.ok(second.startsWith('# Clive の基本ルール'), '会話の途中では固定の system（日本語のルール）は変えない');
   assert.match(lastSent(), /^Hello again\n\n\[System note: the reply language of this conversation is now English\. /u, '言語を変えた会話の最後の発言にだけ一行の注意が付く');
-  assert.equal(((await (await api('/api/conversations/c1/messages')).json()) as any).messages.at(-2).text, 'Hello again', '画面から見える発言には注意が入らない');
+  assert.equal(((await (await api('/api/conversations/00000000-0000-4000-8000-000000000001/messages')).json()) as any).messages.at(-2).text, 'Hello again', '画面から見える発言には注意が入らない');
 
-  const fresh = await speak('c2', 'Hello');
+  const fresh = await speak('00000000-0000-4000-8000-000000000002', 'Hello');
   assert.ok(fresh.startsWith("# Clive's basic rules"), '新しい会話は英語のルールで始まる');
   assert.ok(fresh.includes(EN_DIRECTIVE));
   assert.equal(lastSent(), 'Hello', 'en で始めた新しい会話には何も足さない');
@@ -769,9 +769,9 @@ test('HTTP の経路: 画面と同じ API で言語を en に保存すると、�
   // 日本語に戻したあと: 直前の返事が英語なので、最初の要求にだけ日本語の注意が付く（ルールは日本語のままでも、英語の履歴に引きずられないように）
   const viewBefore = await (await api('/api/settings')).json() as any;
   assert.equal((await api('/api/settings', { method: 'PUT', body: JSON.stringify({ config: { ...viewBefore.config, language: 'ja' } }) })).status, 200);
-  const backToJa = await speak('c1', '👋');
+  const backToJa = await speak('00000000-0000-4000-8000-000000000001', '👋');
   assert.ok(backToJa.includes(JA_DIRECTIVE) && !backToJa.includes(EN_DIRECTIVE));
   assert.match(lastSent(), /^👋\n\n\[システムからの注意: この会話の返事の言語は日本語になりました。/u, '英語で返した直後に日本語へ戻すと、最初の要求にだけ日本語の注意が付く');
-  await speak('c1', '👋');
+  await speak('00000000-0000-4000-8000-000000000001', '👋');
   assert.equal(lastSent(), '👋', '日本語で返したあとは、始めた言語どうしなので付かない');
 });

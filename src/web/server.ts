@@ -22,6 +22,7 @@ import { LiveStreams } from './sse.ts';
 import { serveStatic } from './static.ts';
 
 const MAX_MESSAGE_CHARS = 100_000;
+const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export interface WebServer {
   server: Server;
@@ -143,6 +144,10 @@ export function createWebServer(app: App): WebServer {
     }
     const attachments: AttachmentMeta[] = uploads.map(u => ({ id: u.id, name: u.name, kind: u.kind }));
     const content = [text || engineText(languageOf(app.config()), images.length ? 'attachment.image' : 'attachment.file'), ...blocks].join('\n\n');
+    // 画面が決めた id へ最初の発言を送ると、受け付けたときに会話ができる。作られる id は UUID の形だけ。タスク・振り返りの会話には、ここから送らせない
+    const existing = app.conversations.get(id);
+    if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
+    if (!existing && !CONVERSATION_ID.test(id)) throw problem(400, 'invalid_id', 'invalid_id');
     const outcome = app.engine.send(id, content, images, attachments);
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     sendJson(res, 202, { runId: outcome.runId, messageId: outcome.messageId });

@@ -2,7 +2,7 @@ import type { App } from '../app.ts';
 import { ConfigError } from '../config/store.ts';
 import { estimateTextTokens } from '../engine/tokens.ts';
 import {
-  isInitialPersona, normalizePersonaInput, PERSONA_MAX_CHARS, PersonaError, personaTexts, readPersona, STYLE_NOTE_MAX_CHARS, STYLES, USER_NAME_MAX_CHARS, NAME_MAX_CHARS,
+  isInitialPersona, normalizePersonaInput, startsWithHash, PERSONA_MAX_CHARS, PersonaError, personaTexts, readPersona, STYLE_NOTE_MAX_CHARS, STYLES, USER_NAME_MAX_CHARS, NAME_MAX_CHARS,
   writePersonaFile, type PersonaInput, type Style,
 } from '../engine/persona.ts';
 import { reloadEnvFile } from '../paths.ts';
@@ -59,6 +59,10 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
       if (typeof body.style !== 'string' || !(STYLES as readonly string[]).includes(body.style)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'style', params: { field: 'style', values: STYLES.join(' / ') } });
       raw.style = body.style as Style;
     }
+    for (const field of ['userName', 'callMe', 'botName'] as const) {
+      const value = raw[field];
+      if (value !== undefined && startsWithHash(value)) throw problem(400, 'invalid_field', 'bad_hash_start', { field, params: { field } });
+    }
     const input = normalizePersonaInput(raw);
     if (!Object.keys(input).length) throw problem(400, 'invalid_field', 'persona_empty');
     if (input.botName !== undefined && !input.botName) throw problem(400, 'invalid_field', 'empty_name', { field: 'botName' });
@@ -105,13 +109,13 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
   });
 
   // 起動したあとに .env へ書いた鍵を読み込む。読むのは決まった .env だけ（パスは受け取らない）。返すのは鍵があるかどうかと、起動し直さないと変わらない変数の名前だけ（値は返さない）。
-  // 画面が、これから使う鍵の環境変数の名前（env）も尋ねられる。名前の形（大文字・数字・_）に合わないものは無視し、返すのは有無だけ（設定に書ける apiKeyEnv の有無が /api/settings で分かるのと同じ範囲）。
+  // 画面が、これから足そうとしている鍵の環境変数の名前（env）を 1 つだけ尋ねられる（設定のプロバイダの鍵のほかに、尋ねてよいのはそれだけ）。名前の形（大文字・数字・_）に合わないものは無視し、返すのは有無だけ。
   router.add('POST', '/api/onboarding/reload-env', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
-    const asked = Array.isArray(body.env) ? body.env.filter((k): k is string => typeof k === 'string' && ENV_NAME.test(k)).slice(0, 8) : [];
+    const asked = Array.isArray(body.env) ? body.env.find((k): k is string => typeof k === 'string' && ENV_NAME.test(k)) : undefined;
     const { loaded, notApplied } = reloadEnvFile();
     const config = app.config();
-    const names = [...new Set([...config.providers.map(p => p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)).filter((k): k is string => Boolean(k)), ...asked])];
+    const names = [...new Set([...config.providers.map(p => p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)).filter((k): k is string => Boolean(k)), ...(asked ? [asked] : [])])];
     sendJson(res, 200, { loaded, apiKeys: Object.fromEntries(names.map(k => [k, Boolean(process.env[k]?.trim())])), notApplied: notApplied.filter(k => names.includes(k)) });
   });
 }
