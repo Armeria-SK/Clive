@@ -54,6 +54,7 @@ export const memoryUpdate: ToolDef<{ id: number | string; content: string }> = {
   input: Type.Object({ id: IdArg, content: Type.String({ minLength: 1, maxLength: 600 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
+  escalateOnTaint: true,
   async execute(input, ctx) {
     try {
       const s = services(ctx);
@@ -70,6 +71,7 @@ export const memoryForget: ToolDef<{ id: number | string; reason: string }> = {
   input: Type.Object({ id: IdArg, reason: Type.String({ minLength: 1, maxLength: 300 }) }, { additionalProperties: false }),
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
+  escalateOnTaint: true,
   async execute(input, ctx) {
     try {
       const s = services(ctx);

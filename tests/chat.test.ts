@@ -3,8 +3,8 @@ import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf,
-  restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, chatTime, createDecisionTracker, contextCardOf, firstLine, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
+  restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -305,4 +305,24 @@ test('sendFailureOf: モデルが 1 つも無い 409（problems が空）だけ 
   assert.equal(sendFailureOf(new ApiError(409, broken), 'x', []).noModels, false, 'モデルがあるけれど使えないときは、設定を開くだけ');
   assert.equal(sendFailureOf(new ApiError(409, { error: 'busy', errorCode: 'engine.send.busy', problems: [] }), 'x', []).noModels, false);
   assert.equal(sendFailureOf(new Error('x'), 'x', []).noModels, false);
+});
+
+test('newConversationId / sendTarget: 最初の発言は画面が決めた id へ送り（会話を先に作らない）、断られたあとのやり直しは同じ id を使う', () => {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  assert.match(newConversationId(), uuid, 'ふつうの環境（randomUUID がある）');
+  const insecure = { getRandomValues: (bytes: Uint8Array) => { bytes.fill(255); return bytes; } };
+  assert.match(newConversationId(insecure), uuid, 'http の画面（randomUUID が無い）でも UUID v4 の形になる');
+  assert.equal(newConversationId(insecure), 'ffffffff-ffff-4fff-bfff-ffffffffffff');
+
+  let generated = 0;
+  const generate = () => `new-${++generated}`;
+  const existing = sendTarget('c1', null, generate);
+  assert.deepEqual(existing, { id: 'c1', created: null }, 'もう会話があれば、その id へ送り、id を作らない');
+  assert.equal(generated, 0);
+  const first = sendTarget(null, null, generate);
+  assert.deepEqual(first, { id: 'new-1', created: 'new-1' }, '最初の発言は新しい id へ');
+  const retry = sendTarget(null, first.created, generate);
+  assert.deepEqual(retry, { id: 'new-1', created: 'new-1' }, '断られたあとのやり直しは同じ id');
+  assert.equal(generated, 1, 'やり直しでは作り直さない');
+  assert.deepEqual(sendTarget('c2', 'new-1', generate), { id: 'c2', created: 'new-1' }, '会話に移ったあとは、その会話へ');
 });

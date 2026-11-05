@@ -110,7 +110,6 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   conversations: () => call<{ conversations: Conversation[] }>('/api/conversations'),
-  createConversation: () => call<{ conversation: Conversation }>('/api/conversations', { method: 'POST', body: '{}' }),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),

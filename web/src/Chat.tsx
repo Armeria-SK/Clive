@@ -3,7 +3,7 @@ import { api, ApiError, type Approval, type Message, type ModelView, type Profil
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, toolInputSummary,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, sendTarget, toolInputSummary,
   type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
@@ -205,8 +205,9 @@ export function Chat({ conversationId, profile, modelName, drafts, runStarts, no
     stick.current = true;
     setSending(true); setFailure(null);
     try {
-      let id = conversationId ?? created.current;
-      if (!id) { id = (await api.createConversation()).conversation.id; created.current = id; }
+      const target = sendTarget(conversationId, created.current);
+      const id = target.id;
+      created.current = target.created;
       onClearNotices(id);
       await api.send(id, text, attached.map(a => a.id));
       if (preset === undefined) setInput('');

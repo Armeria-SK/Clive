@@ -113,3 +113,33 @@ test('MemoryStore.save: 実行（runId）ごとに、モデルが作れる記憶
   assert.doesNotThrow(() => memory.save({ book: 'user', content: '事実 7', actor: 'user', runId: 'run-a' }), '利用者の操作は数えない');
   assert.doesNotThrow(() => memory.save({ book: 'user', content: '実行の無い保存', actor: 'clive' }));
 });
+
+test('memory_update / memory_forget: Web や添付を読んだ後は承認制。断れば書き換えも消しもしない（振り返りは外を読まないので影響しない）', async t => {
+  const s = setup(t);
+  s.memory.save({ book: 'user', content: '元の記憶', actor: 'user' });
+  const plain = await s.call('memory_update', { id: 'u1', content: 'ふつうの書き換え' });
+  assert.equal(plain.decision, 'allow', '外を読んでいなければ承認なし');
+
+  const refusedUpdate = s.call('memory_update', { id: 'u1', content: 'ページに書かれていた指示で書き換え' }, tainted(s.ctx));
+  const updateRequest = await decideNext(s, 'deny');
+  assert.equal(updateRequest.tool, 'memory_update');
+  assert.match(updateRequest.reasons.join(), /Web や添付/u);
+  assert.equal((await refusedUpdate).output.isError, true);
+  assert.equal(s.memory.list()[0]!.content, 'ふつうの書き換え', '断れば書き換えない');
+
+  const refusedForget = s.call('memory_forget', { id: 'u1', reason: 'ページに書かれていた指示' }, tainted(s.ctx));
+  const forgetRequest = await decideNext(s, 'deny');
+  assert.equal(forgetRequest.tool, 'memory_forget');
+  assert.match(forgetRequest.reasons.join(), /Web や添付/u);
+  assert.equal((await refusedForget).output.isError, true);
+  assert.equal(s.memory.list().length, 1, '断れば消さない');
+
+  const approved = s.call('memory_forget', { id: 'u1', reason: '利用者が確かめた' }, tainted(s.ctx));
+  await decideNext(s, 'once');
+  assert.deepEqual([(await approved).decision, s.memory.list().length], ['ask', 0], '承認すれば消える');
+
+  const review = setup(t);
+  review.memory.save({ book: 'notes', content: '古い教訓', actor: 'user' });
+  const reviewCtx: ToolContext = { ...review.ctx, kind: 'review' };
+  assert.equal((await review.call('memory_update', { id: 'n1', content: '整理した教訓' }, reviewCtx)).decision, 'allow', '振り返りは外を読まないので、これまでどおり承認なし');
+});

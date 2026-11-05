@@ -98,6 +98,26 @@ export function runOverflowOf(notice: { errorKind?: string | undefined; measured
 
 export interface ChatRunRow { id: string; model_id: string | null; model?: string | null; started_at: number }
 
+type IdSource = { randomUUID?: () => string; getRandomValues: (bytes: Uint8Array) => Uint8Array };
+
+// 新しい会話の id。randomUUID は https か localhost でしか使えないので、http の画面では getRandomValues から UUID（v4）を作る。
+export function newConversationId(source: IdSource = globalThis.crypto): string {
+  if (typeof source.randomUUID === 'function') return source.randomUUID();
+  const bytes = source.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+// 送る先の会話。まだ無い会話（最初の発言）は、画面が id を決めてそこへ送る（サーバーは受け付けたときだけ会話を作る）。
+// 断られたあとのやり直しは、同じ id をもう一度使う。
+export function sendTarget(conversationId: string | null, created: string | null, generate: () => string = newConversationId): { id: string; created: string | null } {
+  if (conversationId) return { id: conversationId, created };
+  const id = created ?? generate();
+  return { id, created: id };
+}
+
 export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
 
 const TOOL_KINDS: ReadonlySet<ChatItemKind> = new Set<ChatItemKind>(['tool', 'run']);
