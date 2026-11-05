@@ -45,6 +45,7 @@ test('コードの訳: 表に無い・コードの形でない・差し込みの
 test('API のエラーの本文: code / params と、返事の 409 の errorCode / errorParams を読む。コードが無ければ null', () => {
   assert.equal(errorBodyText({ error: 'invalid_field', field: 'title', message: '日本語の文', code: 'http.required', params: { field: 'title' } }, 'en'), httpText('en', 'required', { field: 'title' }));
   assert.equal(errorBodyText({ errorKind: 'busy', errorMessage: '日本語の文', errorCode: 'engine.send.busy' }, 'en'), engineText('en', 'send.busy'));
+  assert.equal(errorBodyText({ errorKind: 'internal', errorMessage: '日本語の文', errorCode: 'engine.run.no_provider', errorParams: { id: 'x' } }, 'en'), engineText('en', 'run.no_provider', { id: 'x' }), 'errorParams を読む');
   assert.equal(errorBodyText({ error: 'invalid_field', message: '日本語の文' }, 'en'), null);
   assert.equal(errorBodyText(null, 'en'), null);
   assert.equal(errorBodyText('text', 'en'), null);
