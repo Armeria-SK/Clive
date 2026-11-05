@@ -139,6 +139,9 @@ register(['popd'], (_words, acc) => { acc.cwd = { word: null }; }, true);
 
 // ── jq ──
 const JQ_BOOL = new Set(['-r', '-j', '-c', '-S', '-e', '-n', '-s', '-a', '-M', '-R', '-C', '--tab', '--raw-output', '--join-output', '--compact-output', '--sort-keys', '--exit-status', '--null-input', '--slurp', '--ascii-output', '--monochrome-output', '--raw-input', '--color-output', '--seq']);
+// import・include は、探索の道（-L・~/.jq・プログラムのフォルダ）の .json・.jq を読み込む。読むパスの調べは、プログラムの文の中の名前までは見ない。
+// プログラムにこの語があれば今回だけ（文字列や名前の中の語も止める側に倒す）。-f のプログラムは、分類の時点では中身を確かめられない（同じコマンドの前の文で書かれることもある）ので常に今回だけ
+const JQ_MODULE = /\b(?:import|include)\b/iu;
 register(['jq'], (words, acc, ctx) => {
   const args = words.slice(1);
   const pos: Word[] = [];
@@ -153,9 +156,21 @@ register(['jq'], (words, acc, ctx) => {
     if (t === '--indent') { const v = args[++i]; if (v) checkValue('n', v, acc, 'jq', t, ctx); else formOnce(acc, 'jq', t); continue; }
     if (t === '--arg' || t === '--argjson') { if (!args[i + 1] || !args[i + 2]) formOnce(acc, 'jq', t); i += 2; continue; }
     if (t === '--slurpfile' || t === '--rawfile') { const f = args[i + 2]; if (!args[i + 1] || !f) formOnce(acc, 'jq', t); else acc.read(f); i += 2; continue; }
-    if (t === '-f' || t === '--from-file') { const f = args[++i]; if (f) { acc.read(f); fromFile = true; } else formOnce(acc, 'jq', t); continue; }
+    if (t === '-f' || t === '--from-file') {
+      const f = args[++i];
+      if (f) { acc.read(f); fromFile = true; acc.add('once', 'list.form', { cmd: 'jq', detail: `${t} ${f.text}` }, false); } else formOnce(acc, 'jq', t);
+      continue;
+    }
+    if (t === '--library-path' || t.startsWith('--library-path=') || /^-[^-]*L/u.test(t)) {
+      acc.add('once', 'list.form', { cmd: 'jq', detail: t }, false);
+      const v = t.startsWith('--') ? (t.includes('=') ? undefined : args[++i]) : t.endsWith('L') ? args[++i] : undefined;
+      if (v) acc.read(v);
+      continue;
+    }
     acc.add('once', 'list.flag', { cmd: 'jq', flag: t }, true);
   }
+  const program = fromFile ? undefined : pos[0];
+  if (program && (program.dynamic || JQ_MODULE.test(program.text))) acc.add('once', 'list.form', { cmd: 'jq', detail: program.dynamic ? program.text : 'import / include' }, false);
   for (const w of fromFile ? pos : pos.slice(1)) acc.read(w);
 });
 
