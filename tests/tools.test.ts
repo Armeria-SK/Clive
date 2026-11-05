@@ -278,13 +278,15 @@ test('V8: 道具には、持ち主が「今回だけ」の確かめを許した�
   await decideNext(s, 'conversation');
   await conversation;
   assert.equal((await call('ask')).decidedBy, 'conversation-grant');
-  assert.deepEqual(seen, [{ approvedOnce: false }, { approvedOnce: false }, { approvedOnce: false }, { approvedOnce: false }]);
+  assert.deepEqual(seen.map(i => i?.approvedOnce), [false, false, false, false]);
+  assert.deepEqual(seen.map(i => i?.check), [undefined, undefined, undefined, undefined], '許していない呼び出しに、事前の判定は渡さない');
 
   seen.length = 0;
   const once = call('once');
   await decideNext(s, 'once');
   await once;
-  assert.deepEqual(seen, [{ approvedOnce: true }]);
+  assert.deepEqual(seen.map(i => i?.approvedOnce), [true]);
+  assert.deepEqual(seen[0]?.check, { decision: 'ask', reasons: ['code'], onceOnly: true, askKinds: ['code'] }, '持ち主に見せた事前の判定を渡す');
 
   seen.length = 0;
   const denied = call('once');

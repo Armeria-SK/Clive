@@ -92,7 +92,7 @@ export function shellPreCheck(input: ShellInput, ctx: ToolContext): PreCheck {
   const base = verdict.limits ? [...verdict.reasons, guardText(language, 'code.limits')] : verdict.reasons;
   const reasons = markers.length ? [guardText(language, 'code.self_touch', { markers: markers.join(', ') }), ...base] : base;
   return {
-    decision: verdict.decision, reasons, details, onceOnly: true, askKinds: verdict.askKinds,
+    decision: verdict.decision, reasons, details, onceOnly: true, askKinds: verdict.askKinds, ...(verdict.ownHooksDir ? { ownHooksDir: verdict.ownHooksDir } : {}),
     preview: peeked.map(p => p.preview), bind: sha256(peeked.map(p => p.fingerprint).join('\n')),
   };
 }
@@ -124,7 +124,8 @@ export const shellRun: ToolDef<ShellInput> = {
     const shell = resolveShell(settings.shell);
     const timeoutSec = Math.min(input.timeoutSec ?? settings.timeoutSec, settings.maxTimeoutSec);
     const child = childEnvFor(settings, cwd.cwd, shell.name === 'powershell' || shell.name === 'pwsh');
-    const gitRun = child.gitIsolated ? prepareGitRun({ dataDir: ctx.paths.data, env: child.env, ownerHooks: info?.approvedOnce === true, ...(child.gitExe ? { gitExe: child.gitExe } : {}) }) : undefined;
+    const ownerHooks = info?.approvedOnce === true ? info.check?.ownHooksDir : undefined;
+    const gitRun = child.gitIsolated ? prepareGitRun({ dataDir: ctx.paths.data, env: child.env, ...(ownerHooks ? { ownerHooks } : {}), ...(child.gitExe ? { gitExe: child.gitExe } : {}) }) : undefined;
     let result;
     try {
       result = await runProcess(shell.file, shell.args(input.command), {

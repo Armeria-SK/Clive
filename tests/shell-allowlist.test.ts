@@ -181,7 +181,10 @@ test('git のリポジトリの設定: ふつうでなければ git はすべて
   assert.equal(levelOf('git log --oneline', 'bash', { repo: hookPath }), 'allow');
   assert.equal(levelOf('git commit -m x', 'bash', { repo: hookPath }), 'once');
   assert.equal(levelOf('git push', 'bash', { repo: hookPath }), 'once');
+  assert.ok(keysOf('git commit -m x', 'bash', { repo: hookPath }).includes('once:list.git_hooks_path'), 'core.hooksPath のフックは動かない、と札に書く');
+  assert.equal(keysOf('git commit -m x', 'bash', { repo: hookPath }).includes('once:list.git_hooks'), false);
   const hookFiles = repo({ hooksFiles: true });
+  assert.ok(keysOf('git commit -m x', 'bash', { repo: hookFiles }).includes('once:list.git_hooks'));
   assert.equal(levelOf('git -C sub commit -m x', 'bash', { repo: hookFiles }), 'once');
   assert.equal(levelOf('git add .', 'bash', { repo: hookFiles }), 'once');
   assert.equal(levelOf('git diff', 'bash', { repo: hookFiles }), 'allow');

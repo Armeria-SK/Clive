@@ -254,32 +254,35 @@ test('コマンドレベルの上書き: プログラムを動かす決まった
   assert.equal(new Set(keys).size, keys.length);
 });
 
-// 審査の指摘（深い審査）: フックを毎回空のフォルダへ向けると、持ち主が許したコマンドでも pre-commit や秘密のスキャナーが動かない。許したときだけ、フックの上書きを外す
-test('コマンドレベルの上書き: 持ち主が許したコマンドでは、フックの置き場所の上書きだけを外す。ほかの上書きは同じ', t => {
+// 審査の指摘（深い審査）: フックを毎回空のフォルダへ向けると、持ち主が許したコマンドでも pre-commit や秘密のスキャナーが動かない。
+// 再審査の指摘: 上書きを外して設定に任せると、設定の core.hooksPath（.husky など、確かめなしで書けるファイル）のフックが、見せていないまま動く。外すのでなく、そのリポジトリ自身のフックの置き場所へ向ける
+test('コマンドレベルの上書き: 持ち主が許したコマンドでは、フックの置き場所を、そのリポジトリ自身の .git/hooks へ向ける。ほかの上書きは同じ', t => {
   const root = tempDir(t);
   const home = join(root, 'home');
   mkdirSync(home);
   const env = { HOME: home, USERPROFILE: home };
+  const own = join(root, 'repo', '.git', 'hooks');
   const normal = prepareGitRun({ dataDir: join(root, 'data'), env });
-  const owner = prepareGitRun({ dataDir: join(root, 'data'), env, ownerHooks: true });
-  const normalKeys = overridesOf(normal.env).map(([k]) => k);
+  const owner = prepareGitRun({ dataDir: join(root, 'data'), env, ownerHooks: own });
+  const normalList = overridesOf(normal.env);
   const ownerList = overridesOf(owner.env);
-  assert.equal(normalKeys.includes('core.hooksPath'), true, '許していない実行は、これまでどおりフックの置き場所を上書きする');
-  assert.equal(ownerList.some(([k]) => k === 'core.hooksPath'), false, '許した実行に、フックの置き場所の上書きがある');
-  assert.deepEqual(ownerList.map(([k]) => k), normalKeys.filter(k => k !== 'core.hooksPath'), 'フック以外の上書きは同じ');
+  assert.equal(new Map(normalList).get('core.hooksPath')!.startsWith(dirname(normal.env.GIT_CONFIG_GLOBAL!)), true, '許していない実行は、これまでどおり空のフォルダへ向ける');
+  assert.equal(new Map(ownerList).get('core.hooksPath'), own, '許した実行は、そのリポジトリ自身のフックの置き場所へ向ける');
+  assert.deepEqual(ownerList.filter(([k]) => k !== 'core.hooksPath'), normalList.filter(([k]) => k !== 'core.hooksPath'), 'フック以外の上書きは同じ');
   assert.equal(existsSync(join(dirname(owner.env.GIT_CONFIG_GLOBAL!), 'hooks')), false, '使わない空のフォルダは作らない');
   assert.equal(owner.env.GIT_CONFIG_NOSYSTEM, '1');
   normal.cleanup();
   owner.cleanup();
+  assert.equal(existsSync(own), false, '持ち主のフォルダは、消さない（作りもしない）');
 });
 
-test('本物の git: .git/hooks の pre-commit は、フックの上書きがあると動かず、持ち主が許した実行（ownerHooks）だと動く。拒めば commit も止まる', { skip: !gitAvailable && 'git が無い' }, t => {
+test('本物の git: .git/hooks の pre-commit は、上書きが空のフォルダだと動かず、持ち主が許した実行（ownerHooks）だと動く。設定の core.hooksPath のフックは、許しても動かない。拒めば commit も止まる', { skip: !gitAvailable && 'git が無い' }, t => {
   const root = tempDir(t);
   const home = join(root, 'home');
   const repo = join(root, 'repo');
   mkdirSync(home);
   mkdirSync(repo);
-  const marker = join(root, 'hook-ran');
+  const marker = (name: string): string => join(root, `hook-${name}`);
   const baseEnv: Record<string, string> = {
     ...(process.env as Record<string, string>), HOME: home, USERPROFILE: home, GIT_TERMINAL_PROMPT: '0',
     GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e',
@@ -287,21 +290,36 @@ test('本物の git: .git/hooks の pre-commit は、フックの上書きがあ
   for (const key of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete baseEnv[key];
   const git = (args: string[], env: Record<string, string>) => spawnSync('git', args, { cwd: repo, encoding: 'utf8', env });
   assert.equal(git(['init', '-q'], baseEnv).status, 0);
-  const hook = (exitCode: number): void => writeFileSync(join(repo, '.git', 'hooks', 'pre-commit'), `#!/bin/sh\necho ran >> "${slash(marker)}"\nexit ${exitCode}\n`, { mode: 0o755 });
-  const commit = (ownerHooks: boolean): number | null => {
-    const run = prepareGitRun({ dataDir: join(root, 'data'), env: baseEnv, ownerHooks });
+  const script = (name: string, exitCode: number): string => `#!/bin/sh
+echo ran >> "${slash(marker(name))}"
+exit ${exitCode}
+`;
+  const hook = (exitCode: number): void => writeFileSync(join(repo, '.git', 'hooks', 'pre-commit'), script('own', exitCode), { mode: 0o755 });
+  const own = join(repo, '.git', 'hooks');
+  const commit = (ownerHooks?: string): number | null => {
+    const run = prepareGitRun({ dataDir: join(root, 'data'), env: baseEnv, ...(ownerHooks ? { ownerHooks } : {}) });
     try { return git(['commit', '-q', '--allow-empty', '-m', 'x'], { ...baseEnv, ...run.env }).status; } finally { run.cleanup(); }
   };
   hook(0);
-  assert.equal(commit(false), 0);
-  assert.equal(existsSync(marker), false, '上書きがあるのに、フックが動いた');
-  assert.equal(commit(true), 0);
-  assert.equal(existsSync(marker), true, '持ち主が許した実行で、フックが動かない');
-  rmSync(marker);
+  assert.equal(commit(), 0);
+  assert.equal(existsSync(marker('own')), false, '上書きがあるのに、フックが動いた');
+  assert.equal(commit(own), 0);
+  assert.equal(existsSync(marker('own')), true, '持ち主が許した実行で、フックが動かない');
+  rmSync(marker('own'));
+  // 確かめなしで書ける .husky のフック: 設定の core.hooksPath が指していても、許した実行で動かない。同じコマンドで設定を書き換えても同じ
+  mkdirSync(join(repo, '.husky'));
+  writeFileSync(join(repo, '.husky', 'pre-commit'), script('husky', 0), { mode: 0o755 });
+  assert.equal(git(['config', 'core.hooksPath', '.husky'], baseEnv).status, 0);
+  assert.equal(commit(), 0);
+  assert.equal(commit(own), 0);
+  assert.equal(existsSync(marker('husky')), false, '設定の core.hooksPath のフックが動いた');
+  assert.equal(existsSync(marker('own')), true, '設定が core.hooksPath を指していても、そのリポジトリ自身のフックが動かない');
+  git(['config', '--unset', 'core.hooksPath'], baseEnv);
+  rmSync(marker('own'));
   hook(1);
-  assert.equal(commit(false), 0, '上書きがあるときは、フックが拒んでも関係ない');
-  assert.notEqual(commit(true), 0, 'フックが拒んだのに commit できた');
-  assert.equal(git(['rev-list', '--all', '--count'], baseEnv).stdout.trim(), '3', '最後の commit だけ、フックが止めた');
+  assert.equal(commit(), 0, '上書きがあるときは、フックが拒んでも関係ない');
+  assert.notEqual(commit(own), 0, 'フックが拒んだのに commit できた');
+  assert.equal(git(['rev-list', '--all', '--count'], baseEnv).stdout.trim(), '5', '最後の commit だけ、フックが止めた');
 });
 
 test('コマンドレベルの上書き: ホームの設定の安全な認証の補助は、空にしたあとに足し直す', t => {

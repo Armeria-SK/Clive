@@ -25,8 +25,9 @@ function repoWith(t: { after: (fn: () => void) => void }, config: string): strin
 }
 
 test('ふつうの設定のリポジトリは「ふつう」と読む', t => {
-  const info = inspectRepo(repoWith(t, PLAIN));
-  assert.deepEqual(info, { found: true, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, remotes: ['origin'] });
+  const root = repoWith(t, PLAIN);
+  const info = inspectRepo(root);
+  assert.deepEqual(info, { found: true, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: join(root, '.git', 'hooks'), remotes: ['origin'] });
 });
 
 test('コードを動かせる項目がひとつでもあれば、ふつうでないと読む（項目の名前を返す）', t => {

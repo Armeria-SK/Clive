@@ -138,7 +138,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   // ── 実行 ──
   let output: ToolOutput;
-  try { output = await tool.execute(args, ctx, { approvedOnce }); }
+  try { output = await tool.execute(args, ctx, { approvedOnce, ...(approvedOnce && first ? { check: first } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
   if (tool.effect === 'network') { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 

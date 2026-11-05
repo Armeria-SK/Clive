@@ -53,6 +53,8 @@ export interface ShellVerdict {
   askKinds: Array<'code'>;
   // 見せたファイルのほかに、読み込まれるファイルや入れた部品のコードも動く（札に限界の文を添える）
   limits: boolean;
+  // コマンドの git がすべて、設定に core.hooksPath の無い 1 つのリポジトリのもので、そのリポジトリ自身のフックの置き場所（.git/hooks）。そうでなければ null
+  ownHooksDir: string | null;
 }
 
 const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
@@ -150,10 +152,18 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     add('ask', reason);
     if (!askKinds.includes('code')) askKinds.push('code');
   };
+  // コマンドの git が調べたリポジトリ。持ち主が許したときに、そのリポジトリ自身のフックだけを動かせるかを決める
+  const repoLog: { repos: RepoInfo[]; unsafe: boolean } = { repos: [], unsafe: false };
+  const ownHooksDir = (): string | null => {
+    const found = repoLog.repos.filter(r => r.found);
+    if (repoLog.unsafe || found.length === 0 || found.some(r => r.unreadable || !r.configOk || r.hooksPath || !r.hooksDir)) return null;
+    const dirs = new Set(found.map(r => r.hooksDir));
+    return dirs.size === 1 ? [...dirs][0]! : null;
+  };
   const done = (): ShellVerdict => {
     const onceOnly = askKinds.includes('code') && decision !== 'deny';
     if (onceOnly) explainWithCodeGuard();
-    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0 };
+    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir() };
   };
 
   // 今回だけにした理由を、より分かる文（ファイルのコードを動かします など）と、中身を見せるファイルで補う（判定は変えない）
@@ -201,22 +211,23 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     track.cwd = e.path;
     track.cwds.push(e.path);
   };
-  const unresolvedRepo = (badKey: string): RepoInfo => ({ found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false, remotes: [] });
+  const unresolvedRepo = (badKey: string): RepoInfo => { repoLog.unsafe = true; return { found: true, configOk: false, badKey, unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [] }; };
+  const inspect = (path: string): RepoInfo => { const info = inspectRepo(path); repoLog.repos.push(info); return info; };
   const mergeRepos = (infos: readonly RepoInfo[]): RepoInfo => infos.find(i => i.unreadable) ?? infos.find(i => !i.configOk) ?? {
-    found: infos.some(i => i.found), configOk: true, badKey: '', unreadable: false, hooksPath: infos.some(i => i.hooksPath), hooksFiles: infos.some(i => i.hooksFiles),
+    found: infos.some(i => i.found), configOk: true, badKey: '', unreadable: false, hooksPath: infos.some(i => i.hooksPath), hooksFiles: infos.some(i => i.hooksFiles), hooksDir: infos.find(i => i.found)?.hooksDir ?? '',
     // 宛先の名前は、見つかったすべてのリポジトリにあるものだけ（どれか 1 つでも無ければ、そこでは git がフォルダとして扱う）
     remotes: infos.filter(i => i.found).reduce<readonly string[] | null>((common, i) => (common === null ? i.remotes : common.filter(n => i.remotes.includes(n))), null) ?? [],
   };
   const repoFor = (dashC: string | undefined): RepoInfo => {
     if (!seen.known) return unresolvedRepo('cwd');
-    if (dashC === undefined) return mergeRepos([...new Set(seen.cwds)].map(inspectRepo));
+    if (dashC === undefined) return mergeRepos([...new Set(seen.cwds)].map(inspect));
     const targets = new Set<string>();
     for (const base of seen.cwds) {
       const target = resolveWord({ text: dashC, dynamic: false, glob: false, quoted: false, home: dashC === '~' || dashC.startsWith('~/'), kind: 'plain' }, base, windows, language);
       if (!('path' in target)) return unresolvedRepo('-C');
       targets.add(target.path);
     }
-    return mergeRepos([...targets].map(inspectRepo));
+    return mergeRepos([...targets].map(inspect));
   };
   const toolConfig: MatchCtx['toolConfig'] = tool => {
     if (!seen.known) return { unknownCwd: true };

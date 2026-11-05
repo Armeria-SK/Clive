@@ -184,6 +184,7 @@
     "list.git_remote": "push の宛先「{remote}」は、このリポジトリの設定にある remote の名前ではありません（git はフォルダとして扱い、そのフォルダのフックを動かします）",
     "list.git_old": "この git は古く（2.32 より前）、ホームやシステムの設定のコードを止められません",
     "list.git_hooks": "このリポジトリは、git のフックが動きうります",
+    "list.git_hooks_path": "このリポジトリは core.hooksPath を設定していますが、そのフックは Clive の git では動きません（許しても。.git/hooks のフックだけが、許したときに動きます）",
     "list.git_net": "git の {cmd} は、コードを動かせる引数・雛形・フックがあるので、確かめます",
     "list.git_write": "git の書き込みの操作です（{cmd}）",
     "list.git_push": "リモートへの送信（git push）です",

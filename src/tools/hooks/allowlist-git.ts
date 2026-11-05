@@ -147,7 +147,9 @@ export function runGit(words: Word[], acc: Acc, ctx: MatchCtx): void {
 }
 
 function hooksCheck(sub: string, acc: Acc, repo: ReturnType<MatchCtx['repo']>): boolean {
-  if (repo.hooksPath || repo.hooksFiles) { acc.add('once', 'list.git_hooks', {}, false); return false; }
+  // core.hooksPath があるリポジトリのフックは、Clive の git では動かない（確かめを許しても。git-env.ts）。それでも今回だけにして、そのことを札に書く
+  if (repo.hooksPath) { acc.add('once', 'list.git_hooks_path', {}, false); return false; }
+  if (repo.hooksFiles) { acc.add('once', 'list.git_hooks', {}, false); return false; }
   void sub;
   return true;
 }

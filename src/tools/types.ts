@@ -34,12 +34,16 @@ export interface PreCheck {
   preview?: PreviewFile[];
   // 見せたファイルの中身の指紋。承認のあと実行の前にもう一度判定して、変わっていたら実行しない
   bind?: string;
+  // シェル: コマンドの git がすべて、設定に core.hooksPath の無い 1 つのリポジトリのもので、そのリポジトリ自身のフックの置き場所。許されたときだけ、git のフックをここに向ける
+  ownHooksDir?: string;
 }
 
 // 実行の直前に、パイプラインが道具へ渡す、この 1 回の呼び出しの承認の結果
 export interface ExecuteInfo {
   // 持ち主が、この呼び出しの「今回だけ」の確かめ（コードを動かす確かめ）を許した
   approvedOnce: boolean;
+  // 許したときに持ち主に見せた事前の判定
+  check?: PreCheck;
 }
 
 export interface ToolContext {

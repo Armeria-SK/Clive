@@ -259,7 +259,7 @@ function danglingRemote(entries: readonly ConfigEntry[], remotes: readonly strin
 }
 
 export function inspectRepo(start: string): RepoInfo {
-  const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, remotes: [] };
+  const none: RepoInfo = { found: false, configOk: true, badKey: '', unreadable: false, hooksPath: false, hooksFiles: false, hooksDir: '', remotes: [] };
   const found = findGitDir(start);
   if (!found) return none;
   if (found.broken) return { ...none, found: true, unreadable: true };
@@ -282,6 +282,6 @@ export function inspectRepo(start: string): RepoInfo {
   try { hooksFiles = readdirSync(join(commonDir, 'hooks')).some(name => !name.endsWith('.sample')); } catch { /* hooks フォルダが無い */ }
   return {
     found: true, configOk: bad === null, badKey: bad ?? '', unreadable: false, remotes,
-    hooksPath: entries.some(e => e.key === 'core.hookspath'), hooksFiles,
+    hooksPath: entries.some(e => e.key === 'core.hookspath'), hooksFiles, hooksDir: join(commonDir, 'hooks'),
   };
 }

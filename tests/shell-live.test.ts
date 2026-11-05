@@ -417,6 +417,53 @@ for (const shell of ['powershell', 'bash'] as const) {
   });
 }
 
+// 再審査の指摘: 許したあと、設定の core.hooksPath（.husky など、確かめなしで書けるファイル）のフックが、見せていないまま動いた。許したときに動くのは、そのリポジトリ自身の .git/hooks だけ。
+// 設定が core.hooksPath を指すリポジトリでは、許しても動かない（札にそう書く）。同じコマンドの中で core.hooksPath を書き換えても、.husky のフックは動かない
+for (const shell of ['powershell', 'bash'] as const) {
+  const available = shell === 'powershell' ? psAvailable : bashAvailable;
+  test(`実機（${shell}）: 許しても、設定の core.hooksPath のフックは動かない。同じコマンドで core.hooksPath を書き換えても、.husky のフックは動かず、.git/hooks のフックだけが動く`, { skip: (!available || !gitAvailable) && 'シェルか git が無い' }, async t => {
+    const s = setup(t, shell);
+    const root = s.paths.workspace;
+    const fwd = (p: string): string => p.replaceAll('\\', '/');
+    const repo = join(root, 'hk2');
+    mkdirSync(repo);
+    const git = (...args: string[]) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.name', 'Taro');
+    git('config', 'user.email', 'taro@example.com');
+    const marker = (name: string): string => join(root, `ran-${name}`);
+    const script = (name: string): string => `#!/bin/sh\necho ran >> "${fwd(marker(name))}"\nexit 0\n`;
+    writeFileSync(join(repo, '.git', 'hooks', 'pre-commit'), script('own'), { mode: 0o755 });
+    mkdirSync(join(repo, '.husky'));
+    writeFileSync(join(repo, '.husky', 'pre-commit'), script('husky'), { mode: 0o755 });
+    const ask = async (command: string, reason: RegExp) => {
+      const pending = s.call(command);
+      for (let i = 0; i < 300 && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+      const request = s.approvals.pending()[0];
+      assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
+      assert.equal(request.onceOnly, true);
+      assert.match(request.reasons.join('\n'), reason);
+      s.approvals.decide(request.id, 'once');
+      return pending;
+    };
+    const count = (): number => Number(git('rev-list', '--all', '--count').stdout.trim() || 0);
+    // 設定が .husky を指す: そのフックは、許しても動かない（空のフォルダへ向けたまま）。.git/hooks のフックも、設定に隠れているので動かない
+    git('config', 'core.hooksPath', '.husky');
+    const first = await ask('cd hk2; git commit --allow-empty -q -m x', /core\.hooksPath を設定していますが、そのフックは Clive の git では動きません/u);
+    assert.equal(first.output.isError, false, first.output.content);
+    assert.equal(existsSync(marker('husky')), false, '設定の core.hooksPath のフックが動いた');
+    assert.equal(existsSync(marker('own')), false);
+    assert.equal(count(), 1);
+    // 設定は無い: 同じコマンドの中で .husky を指すように書き換えても、動くのは .git/hooks のフックだけ
+    git('config', '--unset', 'core.hooksPath');
+    const second = await ask('cd hk2; git config core.hooksPath .husky; git commit --allow-empty -q -m y', /フックが動きうります/u);
+    assert.equal(second.output.isError, false, second.output.content);
+    assert.equal(existsSync(marker('husky')), false, '同じコマンドで書き換えた core.hooksPath のフックが動いた');
+    assert.equal(existsSync(marker('own')), true, '.git/hooks のフックが動かない');
+    assert.equal(count(), 2);
+  });
+}
+
 // 審査の指摘: 子の PATH の '.'・空・相対の項目は、本物のシェルでは cd のあとの場所を指す。許可の一覧は最初の場所で調べるので、cd で動いた先に置いた git を見逃した
 for (const shell of ['powershell', 'bash'] as const) {
   const available = shell === 'powershell' ? psAvailable : bashAvailable;
