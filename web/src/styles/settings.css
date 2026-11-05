@@ -41,16 +41,7 @@
 .set-row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .shell[data-mode="mid"] .set-row, .shell[data-mode="narrow"] .set-row { grid-template-columns: minmax(0, 1fr); }
 .shell[data-mode="mid"] .set-row-control, .shell[data-mode="narrow"] .set-row-control { justify-content: flex-start; }
-.shell[data-mode="mid"] .set-tags, .shell[data-mode="narrow"] .set-roots { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 520px; }
-.set-root { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.set-root-icon { display: inline-flex; flex: none; width: 15px; height: 15px; color: var(--color-accent); }
-.set-root-path { flex: 1; min-width: 120px; font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
-.set-root .seg-opt { padding: 3px 10px; font-size: 12px; }
-.set-root-remove { width: 28px; height: 28px; color: inherit; opacity: .6; }
-.set-root-remove:hover { opacity: 1; }
-.set-root-add { display: flex; align-items: center; gap: 8px; }
-.set-root-add .input { flex: 1; min-width: 0; }
-.set-tags { justify-content: flex-start; }
+.shell[data-mode="mid"] .set-tags, .shell[data-mode="narrow"] .set-tags { justify-content: flex-start; }
 
 .set-num-wrap { display: flex; align-items: center; gap: 8px; }
 .set-num { width: 100px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -63,6 +54,15 @@
 .set-range { display: flex; align-items: center; gap: 8px; }
 .set-range .input { width: 120px; }
 .set-range-sep { color: var(--color-text-muted); }
+.set-roots { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 520px; }
+.set-root { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.set-root-icon { display: inline-flex; flex: none; width: 15px; height: 15px; color: var(--color-accent); }
+.set-root-path { flex: 1; min-width: 120px; font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.set-root .seg-opt { padding: 3px 10px; font-size: 12px; }
+.set-root-remove { width: 28px; height: 28px; color: inherit; opacity: .6; }
+.set-root-remove:hover { opacity: 1; }
+.set-root-add { display: flex; align-items: center; gap: 8px; }
+.set-root-add .input { flex: 1; min-width: 0; }
 .set-tags { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; max-width: 400px; }
 .set-tag { gap: 4px; padding: 2px 4px 2px 9px; font-family: var(--font-mono); }
 .set-tag button { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; opacity: .6; cursor: pointer; }
