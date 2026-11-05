@@ -17,8 +17,8 @@ export interface PlacedPath { input: string; path?: string | undefined; placemen
 const MAX_APPROVAL_PATHS = 30;
 
 // 判定そのものは事前判定が済ませている。ここでは見つけたパスを、画面に渡す形に直すだけで、判定には何も足さない。
-// 同じ入力・同じ場所・同じ判定の重なりは 1 行にし、多すぎる分は切る
-export function approvalPaths(found: readonly PlacedPath[]): ApprovalPath[] {
+// 同じ入力・同じ場所・同じ判定の重なりは 1 行にする
+function distinctPaths(found: readonly PlacedPath[]): ApprovalPath[] {
   const out: ApprovalPath[] = [];
   const seen = new Set<string>();
   for (const { input, path, placement } of found) {
@@ -30,9 +30,19 @@ export function approvalPaths(found: readonly PlacedPath[]): ApprovalPath[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(item);
-    if (out.length >= MAX_APPROVAL_PATHS) break;
   }
   return out;
+}
+
+// 画面に出す行: 許可フォルダの外・拒否・判定できないを先に（それぞれ見つけた順）、中はそのあと。多すぎる分は切る
+export function approvalPaths(found: readonly PlacedPath[]): ApprovalPath[] {
+  const all = distinctPaths(found);
+  return [...all.filter(p => p.verdict !== 'in'), ...all.filter(p => p.verdict === 'in')].slice(0, MAX_APPROVAL_PATHS);
+}
+
+// 切って出さなかった行の数
+export function approvalPathsMore(found: readonly PlacedPath[]): number {
+  return Math.max(0, distinctPaths(found).length - MAX_APPROVAL_PATHS);
 }
 
 export interface ApprovalRequest {
@@ -50,6 +60,8 @@ export interface ApprovalRequest {
   preview?: PreviewFile[] | undefined;
   // 見つけたパスごとの判定（details の文と同じものを構造で渡す。無ければ空）
   paths?: ApprovalPath[] | undefined;
+  // paths に入りきらず、切った行の数
+  pathsMore?: number | undefined;
 }
 
 export interface ApprovalView extends ApprovalRequest {
@@ -63,7 +75,7 @@ export interface ApprovalView extends ApprovalRequest {
 export function approvalPublic(v: ApprovalView) {
   return {
     id: v.id, tool: v.tool, title: v.title, body: v.body, cwd: v.cwd, reasons: v.reasons, details: v.details, expiresAt: v.expiresAt,
-    onceOnly: v.onceOnly === true, preview: v.preview ?? [], paths: v.paths ?? [],
+    onceOnly: v.onceOnly === true, preview: v.preview ?? [], paths: v.paths ?? [], pathsMore: v.pathsMore ?? 0,
   };
 }
 

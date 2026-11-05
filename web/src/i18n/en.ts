@@ -160,6 +160,7 @@ export const en: Dict = {
   'context.tip': (used, available, capacity) => `${used} / ${available} (total ${capacity})`,
   'context.over': 'Older parts will be summarized',
   'approval.paths': 'Paths found',
+  'approval.pathsMore': n => `+${n} more`,
   'approval.verdict.inWrite': 'Inside an allowed folder (read and write)',
   'approval.verdict.inRead': 'Inside an allowed folder (read-only)',
   'approval.verdict.out': 'Outside the allowed folders',

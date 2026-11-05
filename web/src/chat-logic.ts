@@ -276,6 +276,9 @@ export function approvalPathKey(path: Pick<ApprovalPathView, 'verdict' | 'mode'>
   }
 }
 
+// サーバーが切って出さなかったパスの行の数（古い応答には無いので 0）
+export const approvalPathsMore = (a: { pathsMore?: number }): number => Math.max(0, Math.floor(a.pathsMore ?? 0));
+
 // 許可フォルダの中は目立たせず、それ以外（外・拒否・判定できない）は縁取りで目立たせる（デザインどおり）
 export const approvalPathTone = (verdict: ApprovalPathView['verdict']): 'neutral' | 'outline' => (verdict === 'in' ? 'neutral' : 'outline');
 

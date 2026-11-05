@@ -7,7 +7,7 @@ import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { ApprovalBroker, approvalPaths, approvalPublic, approvalWire, type ApprovalPath } from '../src/tools/approvals.ts';
+import { ApprovalBroker, approvalPaths, approvalPathsMore, approvalPublic, approvalWire, type ApprovalPath } from '../src/tools/approvals.ts';
 import { fileEdit, fileList, fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellPreCheck, shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -56,12 +56,12 @@ test('シェル: 見つけたパスごとに、許可フォルダの中（読み
   const doc = join(s.paths.data, 'reference', 'doc.md');
   const { view } = await s.asked('shell_run', { command: `cat a.txt; cat ${doc}; cat ../out.txt` });
   assert.deepEqual(view.paths, [
+    { input: '../out.txt', path: outside, verdict: 'out' },
     { input: 'a.txt', path: join(s.ctx.workspace, 'a.txt'), verdict: 'in', mode: 'write' },
     { input: doc, path: doc, verdict: 'in', mode: 'read' },
-    { input: '../out.txt', path: outside, verdict: 'out' },
-  ]);
+  ], '外は先に並べる（中は見つけた順）');
   assert.equal(view.details.length, 3, '文の details も残す');
-  assert.match(view.details[2]!, /許可フォルダの外/u);
+  assert.match(view.details[2]!, /許可フォルダの外/u, 'details は見つけた順のまま');
 });
 
 test('シェル: cd で動いた先からの相対パスは、動いた先で判定する', async t => {
@@ -84,12 +84,48 @@ test('シェル: 同じパスを何度か見つけても 1 行にまとめ、数
     { input: 'a', path: '/w/a', placement: { kind: 'outside' } },
   ]);
   assert.deepEqual(same, [
-    { input: 'a', path: '/w/a', verdict: 'in', mode: 'write' }, { input: './a', path: '/w/a', verdict: 'in', mode: 'write' },
     { input: 'a', path: '/w/a', verdict: 'out' },
-  ], '同じ判定の同じパスは 1 つ。入力の書き方が違うものと判定が違うものは別');
+    { input: 'a', path: '/w/a', verdict: 'in', mode: 'write' }, { input: './a', path: '/w/a', verdict: 'in', mode: 'write' },
+  ], '同じ判定の同じパスは 1 つ。入力の書き方が違うものと判定が違うものは別（外は中より先）');
   const many = approvalPaths(Array.from({ length: 80 }, (_, i) => ({ input: `f${i}`, path: `/w/f${i}`, placement: inside })));
   assert.equal(many.length, 30);
   assert.equal(many[29]!.input, 'f29');
+});
+
+test('シェル: 外・拒否・判定できないは、中より先に並べて、多すぎて切るときも残す。切った数は pathsMore で数える', () => {
+  const inside = { kind: 'inside', mode: 'write', root: '/w' } as const;
+  const found = [
+    ...Array.from({ length: 40 }, (_, i) => ({ input: `in${i}`, path: `/w/in${i}`, placement: inside })),
+    { input: 'out1', path: '/o/out1', placement: { kind: 'outside' } as const },
+    { input: '$v', placement: { kind: 'unresolved', reason: '変数' } as const },
+    { input: 'secret', path: '/w/secret', placement: { kind: 'deny', reason: '秘密' } as const },
+    { input: 'out2', path: '/o/out2', placement: { kind: 'outside' } as const },
+  ];
+  const shown = approvalPaths(found);
+  assert.equal(shown.length, 30);
+  assert.deepEqual(shown.slice(0, 4).map(p => [p.input, p.verdict]), [['out1', 'out'], ['$v', 'unknown'], ['secret', 'deny'], ['out2', 'out']], '危ないものは見つけた順のまま先頭');
+  assert.deepEqual(shown.slice(4, 7).map(p => p.input), ['in0', 'in1', 'in2'], '中は見つけた順');
+  assert.equal(shown.at(-1)!.input, 'in25');
+  assert.equal(approvalPathsMore(found), 14, '44 行のうち 30 行を出す。切った 14 行を数える');
+  assert.equal(approvalPathsMore(found.slice(0, 30)), 0);
+  assert.equal(approvalPathsMore([]), 0);
+  const dup = [...found, ...found];
+  assert.equal(approvalPathsMore(dup), 14, '重なりは 1 行に数える');
+});
+
+test('シェル: 多くのパスを見つけた承認の札は、危ないものを先に出し、切った数を pathsMore で SSE と API の両方に渡す', async t => {
+  const s = await setup(t);
+  const reads = Array.from({ length: 34 }, (_, i) => `cat f${i}.txt`).join('; ');
+  const { view, wire } = await s.asked('shell_run', { command: `${reads}; cat ../out.txt` });
+  assert.equal(view.paths?.length, 30);
+  assert.deepEqual([view.paths![0]!.input, view.paths![0]!.verdict], ['../out.txt', 'out'], '外が先頭');
+  assert.equal(view.pathsMore, 5, '35 行のうち 30 行を出す');
+  assert.equal(approvalPublic(view).pathsMore, 5);
+  assert.equal(wire.pathsMore, 5);
+  const sse = s.events.find(e => e.type === 'approval.requested') as Extract<RunEvent, { type: 'approval.requested' }>;
+  assert.equal((sse.approval as { pathsMore?: number }).pathsMore, 5);
+  const fewer = await s.asked('shell_run', { command: 'cat a.txt; cat ../out.txt' });
+  assert.equal(fewer.wire.pathsMore, 0, '切らなければ 0');
 });
 
 test('すべての判定の種類: 中（読み書き・読むだけ）・外・拒否・判定できない', () => {

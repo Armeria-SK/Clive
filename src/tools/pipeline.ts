@@ -113,7 +113,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
-      cwd: summary.cwd, reasons, details, onceOnly, preview: first?.preview, paths: first?.paths,
+      cwd: summary.cwd, reasons, details, onceOnly, preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore,
     }, ctx.config.tools.shell.approvalTimeoutSec * 1000, ctx.signal);
     approvalId = deps.approvals.pending().find(p => p.inputHash === hash && p.runId === ctx.runId)?.id;
     const outcome = await pending;

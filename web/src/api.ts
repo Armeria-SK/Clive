@@ -14,7 +14,7 @@ export interface ApprovalPreview { path: string; text: string; truncated: boolea
 export interface ApprovalPathView { input: string; path?: string; verdict: 'in' | 'out' | 'deny' | 'unknown'; mode?: 'read' | 'write' }
 export interface Approval {
   id: string; runId: string; conversationId: string; tool: string; title: string; body: string; cwd?: string;
-  reasons: string[]; details: string[]; paths: ApprovalPathView[]; expiresAt: number;
+  reasons: string[]; details: string[]; paths: ApprovalPathView[]; pathsMore?: number; expiresAt: number;
   // コードを動かす確かめ: 毎回確かめる（「この会話では許可」と Enter での許可は無い）。preview は動かすファイルの中身
   onceOnly: boolean; preview: ApprovalPreview[];
 }

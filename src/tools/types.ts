@@ -30,6 +30,7 @@ export interface PreCheck {
   details?: string[];
   // 見つけたパスごとの判定（details と同じ材料を構造で。判定には使わず、承認の札に出すだけ）
   paths?: ApprovalPath[];
+  pathsMore?: number;
   // コードを動かす確かめ（種類 'code'）を含む。会話の許可を越えず、毎回確かめる
   onceOnly?: boolean;
   askKinds?: Array<'code'>;

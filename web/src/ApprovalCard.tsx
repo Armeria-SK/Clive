@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type Approval } from './api.ts';
 import { decideApproval, useDecisionPending, type ApprovalDecision } from './approval-decide.ts';
-import { approvalFraction, approvalPathKey, approvalPathTone, formatCountdown } from './chat-logic.ts';
+import { approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, formatCountdown } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import { useNow } from './hooks.ts';
 import { useT } from './i18n/index.ts';
@@ -129,6 +129,7 @@ function ApprovalDetails({ approval, onClose }: { approval: Approval; onClose: (
                   <span className={`tag tag-${approvalPathTone(found.verdict)}`}>{t(approvalPathKey(found))}</span>
                 </div>
               ))}
+              {approvalPathsMore(approval) > 0 && <span className="small muted">{t('approval.pathsMore', approvalPathsMore(approval))}</span>}
             </div>
           </>
         ) : approval.details.length > 0 && (

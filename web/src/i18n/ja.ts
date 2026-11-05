@@ -157,6 +157,7 @@ export const ja = {
   'context.tip': (used: string, available: string, capacity: string) => `${used} / ${available}（全体 ${capacity}）`,
   'context.over': '古い部分は要約されます',
   'approval.paths': '見つけたパス',
+  'approval.pathsMore': (n: number) => `ほか ${n} 件`,
   'approval.verdict.inWrite': '許可フォルダの中（読み書き）',
   'approval.verdict.inRead': '許可フォルダの中（読むだけ）',
   'approval.verdict.out': '許可フォルダの外',
