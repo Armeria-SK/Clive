@@ -5,7 +5,7 @@ import { Icon, type IconName } from '../icons.tsx';
 import { formatNumber, getLanguage, useT, type PlainKey } from '../i18n/index.ts';
 import { probeMessage } from '../server-text.ts';
 import { toast } from '../toast.tsx';
-import { FieldRow, NumberField, SegField, SubTitle, TextField } from './fields.tsx';
+import { FieldRow, IdField, NumberField, SegField, SubTitle, TextField } from './fields.tsx';
 import { KeyField } from './KeyField.tsx';
 import {
   addModel, addProvider, addToRoute, keyReady, keyUsage, moveInRoute, providerInUse, providerKeyEnv, removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, secondsOf,
@@ -138,7 +138,7 @@ export function ModelsSection({ draft, saved, update, problems, probes, probing,
             <TextField value={(selected.label as string) ?? ''} label={t('settings.models.fieldLabel')} onChange={v => edit({ label: v || undefined })} />
           </FieldRow>
           <FieldRow label={t('settings.models.fieldId')} desc={t('settings.models.fieldIdDesc')} changed={changed('id')} path={`${base}id`} error={errorFor(problems, `${base}id`)}>
-            <TextField value={selected.id as string} mono label={t('settings.models.fieldId')} onCommit={v => { const id = v.trim(); if (id && id !== selected.id) { update(c => renameModel(c, selected.id as string, id)); onSelect(id); } }} />
+            <IdField value={selected.id as string} kind="model" taken={models.map(m => m.id as string)} label={t('settings.models.fieldId')} onRename={id => { update(c => renameModel(c, selected.id as string, id)); onSelect(id); }} />
           </FieldRow>
           <FieldRow label={t('settings.models.fieldProvider')} changed={changed('provider')} path={`${base}provider`} error={errorFor(problems, `${base}provider`) ?? undefined}>
             <SegField value={selected.provider as string} label={t('settings.models.fieldProvider')} options={providerIds.map(id => ({ value: id, label: id }))} onChange={v => edit({ provider: v })} />
@@ -212,7 +212,7 @@ export function ProvidersSection({ draft, saved, update, problems, selectedId, o
       {selected && (
         <div className="set-rows">
           <FieldRow label={t('settings.providers.fieldId')} desc={t('settings.providers.fieldIdDesc')} changed={changed('id')} path={`${base}id`} error={errorFor(problems, `${base}id`)}>
-            <TextField value={selected.id as string} mono label={t('settings.providers.fieldId')} onCommit={v => { const id = v.trim(); if (id && id !== selected.id) { update(c => renameProvider(c, selected.id as string, id)); onSelect(id); } }} />
+            <IdField value={selected.id as string} kind="provider" taken={providers.map(p => p.id as string)} label={t('settings.providers.fieldId')} onRename={id => { update(c => renameProvider(c, selected.id as string, id)); onSelect(id); }} />
           </FieldRow>
           <FieldRow label={t('settings.providers.fieldKind')} changed={changed('kind')} path={`${base}kind`} error={errorFor(problems, `${base}kind`)}>
             <SegField value={selected.kind as string} label={t('settings.providers.fieldKind')} options={PROVIDER_KINDS.map(k => ({ value: k.value as string, label: k.label === 'OpenAI' ? t('settings.providers.kindOpenai') : k.label }))} onChange={v => edit({ kind: v })} />

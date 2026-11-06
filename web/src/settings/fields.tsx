@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from '
 import { Icon } from '../icons.tsx';
 import { formatNumber, useT } from '../i18n/index.ts';
 import { isComposing } from '../keys.ts';
+import { idFromInput, type IdKind } from './ids.ts';
 import { addTag, parseNumber } from './model.ts';
 
 // 設定の 1 行（デザインの並び: 左に名前・説明・エラー、右に入力）。changed の点は「保存していない変更」。
@@ -55,6 +56,32 @@ export function TextField({ value, onChange, mono, placeholder, label, invalid, 
       onBlur={() => onCommit?.(text)}
       onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) onCommit?.(text); }}
     />
+  );
+}
+
+// ID の欄: 好きに打てて、確定（欄を離れる・Enter）したときに ID の決まりに直す。直した ID は欄の下に見せる（ほかと重なれば -2 など）。
+// 使える文字が 1 つも無いときは、決められないと知らせて、確定しても今の ID のまま
+export function IdField({ value, kind, taken, label, onRename }: { value: string; kind: IdKind; taken: readonly string[]; label: string; onRename: (id: string) => void }) {
+  const t = useT();
+  const [text, setText] = useState(value);
+  useEffect(() => { setText(value); }, [value]);
+  const made = idFromInput(text, kind, taken, value);
+  const commit = () => {
+    if (made.id !== null && made.changed) onRename(made.id);
+    else setText(value);
+  };
+  const typed = text.trim() !== '';
+  return (
+    <div className="set-idfield">
+      <input
+        className="input set-text mono" value={text} aria-label={label} aria-invalid={(typed && made.id === null) || undefined} spellCheck={false}
+        onChange={e => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter' && !isComposing({ isComposing: e.nativeEvent.isComposing, keyCode: e.keyCode })) commit(); }}
+      />
+      {typed && made.id === null && <span className="set-row-error" role="alert">{t('settings.id.none')}</span>}
+      {typed && made.id !== null && made.id !== text && <span className="set-id-preview" role="status">{t('settings.id.preview', made.id)}</span>}
+    </div>
   );
 }
 
