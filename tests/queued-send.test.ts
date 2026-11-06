@@ -351,3 +351,41 @@ test('モデルを替えたあとの発言は、今の実行が失敗しても�
   assert.deepEqual(roles(s), ['user:最初', 'user:SECRET', 'assistant:m2 の返事']);
   assert.ok(!events.some(e => e.type === 'warning' && e.code === 'queued_saved'), '保存だけにはしない');
 });
+
+// 添付つきの待っていた発言を、実行を止めて保存だけにしたあと、その履歴の上で始まる実行（もう一度・次の発言）も「外から読んだ」扱いになる
+for (const how of ['retry', 'send'] as const) {
+  test(`添付つきの待っていた発言が保存だけになったあとの実行（${how === 'retry' ? '「もう一度」' : '次の発言'}）も「外から読んだ」扱いになる（書き込みは確かめが出る）`, async t => {
+    const s = await startApp(t);
+    const g = gate();
+    s.adapter().scripts = [after(g, say('届かない返事')), call('file_write', { path: 'out.txt', content: 'x' }), say('おわり')];
+    const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('外から来た文章') });
+    const first = await post(s, '最初');
+    const queued = await post(s, '添付を見て', { attachments: [upload.id] });
+    assert.equal(queued.body.queued, true);
+    assert.equal((await s.json(`/api/runs/${first.body.runId}/stop`, 'POST', {})).status, 200);
+    await settled(s.app, first.body.runId);
+    await waitFor(() => roles(s).length === 2, '保存');
+    assert.equal(runsOf(s).length, 1, '止めたあとに自動で実行しない');
+    assert.deepEqual(s.app.approvals.pending(), []);
+    const next = how === 'retry' ? await s.json(`/api/conversations/${CONVERSATION}/retry`, 'POST', {}) : await post(s, 'これを書いて');
+    assert.equal(next.status, 202);
+    await waitFor(() => s.app.approvals.pending().length === 1, '外から読んだあとの書き込みの確かめ');
+    assert.match(s.app.approvals.pending()[0]!.reasons.join(' '), /memo\.txt/u, '理由に添付の名前が出る');
+    s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+    await settled(s.app, next.body.runId);
+  });
+}
+
+test('添付の無い履歴の上で始まる実行（もう一度）は、今までどおり確かめなしで書ける。答えが付いたあとの古い添付も数えない', async t => {
+  const s = await startApp(t);
+  const upload = s.app.uploads.save({ name: 'old.txt', mime: 'text/plain', body: Buffer.from('古い添付') });
+  s.adapter().scripts = [say('添付への返事'), call('file_write', { path: 'out.txt', content: 'x' }), say('書きました')];
+  const first = await post(s, '添付を見て', { attachments: [upload.id] });
+  await settled(s.app, first.body.runId);
+  s.app.conversations.append(CONVERSATION, { role: 'user', content: '次はこれ' });
+  const retry = await s.json(`/api/conversations/${CONVERSATION}/retry`, 'POST', {});
+  assert.equal(retry.status, 202);
+  await settled(s.app, retry.body.runId);
+  assert.deepEqual(s.app.approvals.pending(), [], '返事が付いたあとの添付は、次の実行の確かめには持ち越さない');
+  assert.equal(roles(s).at(-1), 'assistant:書きました');
+});

@@ -207,11 +207,22 @@ export class ChatEngine {
       this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(content).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : content);
       this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     }
-    // 添付の中身は外部のデータなので、この実行ではシェルと書き込みを承認制にする（taint）
-    const names = items.flatMap(i => i.attachments.map(a => a.name));
-    if (names.length) this.#initialTaint.set(runId, names.map(name => engineText(languageOf(this.#d.config()), 'attachment.taint', { name })));
+    this.#taintFromHistory(runId, conversationId);
     this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, effort);
     return { ok: true, runId, messageId: firstId! };
+  }
+
+  // 添付の中身は外部のデータなので、返事がまだ付いていない（最後の assistant の発言より後の）ユーザーの発言に添付があれば、
+  // その実行ではシェルと書き込みを承認制にする（taint）。今送った発言だけでなく、保存だけになった待ちの発言や、やり直す発言の添付も数える
+  #taintFromHistory(runId: string, conversationId: string): void {
+    const names: string[] = [];
+    const stored = this.#d.conversations.messages(conversationId);
+    for (let i = stored.length - 1; i >= 0; i--) {
+      const message = stored[i]!.message;
+      if (message.role === 'assistant') break;
+      if (message.role === 'user') names.unshift(...(message.attachments ?? []).map(a => a.name));
+    }
+    if (names.length) this.#initialTaint.set(runId, names.map(name => engineText(languageOf(this.#d.config()), 'attachment.taint', { name })));
   }
 
   // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは入れない。承認の答えが先）。
@@ -274,6 +285,7 @@ export class ChatEngine {
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
+    this.#taintFromHistory(runId, conversationId);
     this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, conversation?.effort ?? null);
     return { ok: true, runId };
   }
