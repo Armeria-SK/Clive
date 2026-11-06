@@ -1,4 +1,6 @@
 import type { PlainKey } from '../i18n/index.ts';
+import { getLanguage, type Lang } from '../i18n/state.ts';
+import { serverText } from '../server-text.ts';
 import { keyEnvName, takenKeyEnvs } from '../../../src/shared/provider-key.ts';
 
 // 設定の画面の、画面を使わない部分。節の一覧・変更の数え方・保存に失敗したときの問題の読み取り・設定の書き換え。
@@ -119,15 +121,20 @@ export function parseProblem(text: string, config: Config): Problem {
   return problem;
 }
 
-export interface ServerIssue { path: string; message: string }
+// code / params: 形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。message はサーバーの日本語の文
+export interface ServerIssue { path: string; message: string; code?: string; params?: Record<string, unknown> }
 const isIssue = (value: unknown): value is ServerIssue =>
   isPlain(value) && typeof value.path === 'string' && typeof value.message === 'string';
 
+// 画面の言語の文。コードが表に無い・差し込みの値が足りないときは、サーバーの文のまま
+export const issueMessage = (issue: ServerIssue, language: Lang = getLanguage()): string => serverText(issue.code, issue.params, language) ?? issue.message;
+
 // サーバーが ID で書いた場所つきで返した問題（issues）を、そのまま行と節に結ぶ。モデルの ID に点があっても取り違えないよう、設定の ID と突き合わせる
-function problemOfIssue(issue: ServerIssue, config: Config): Problem {
+function problemOfIssue(issue: ServerIssue, config: Config, language: Lang): Problem {
   const segments = issue.path.split('.').filter(Boolean);
   const root = segments[0] ?? '';
-  const problem: Problem = { text: issue.path ? `${issue.path}: ${issue.message}` : issue.message, path: issue.path, message: issue.message, section: SECTION_OF_ROOT[root] ?? null };
+  const message = issueMessage(issue, language);
+  const problem: Problem = { text: issue.path ? `${issue.path}: ${message}` : message, path: issue.path, message, section: SECTION_OF_ROOT[root] ?? null };
   if (root === 'models' || root === 'providers') {
     const list = config[root];
     const ids = Array.isArray(list) ? list.map(item => item?.id).filter((id): id is string => typeof id === 'string').sort((a, b) => b.length - a.length) : [];
@@ -138,9 +145,9 @@ function problemOfIssue(issue: ServerIssue, config: Config): Problem {
 }
 
 // 保存を断られたときの応答から、画面に出す問題の一覧を作る。issues があればそれを使い、無い・読めない古い応答は文（problems）を今までの読み取りで読む。
-export function problemsOf(body: unknown, fallback: string, config: Config): Problem[] {
+export function problemsOf(body: unknown, fallback: string, config: Config, language: Lang = getLanguage()): Problem[] {
   const record = isPlain(body) ? body : {};
-  if (Array.isArray(record.issues) && record.issues.length > 0 && record.issues.every(isIssue)) return record.issues.map(issue => problemOfIssue(issue, config));
+  if (Array.isArray(record.issues) && record.issues.length > 0 && record.issues.every(isIssue)) return record.issues.map(issue => problemOfIssue(issue, config, language));
   const texts = Array.isArray(record.problems) ? record.problems.filter((text): text is string => typeof text === 'string') : [];
   return (texts.length ? texts : [fallback]).map(text => parseProblem(text, config));
 }

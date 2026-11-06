@@ -8,7 +8,7 @@ import { toast } from '../toast.tsx';
 import { FieldRow, IdField, NumberField, SegField, SubTitle, TextField } from './fields.tsx';
 import { KeyField } from './KeyField.tsx';
 import {
-  addModel, addProvider, addToRoute, keyReady, keyUsage, moveInRoute, providerInUse, providerKeyEnv, removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, secondsOf,
+  addModel, addProvider, addToRoute, isEnvName, keyReady, keyUsage, moveInRoute, providerInUse, providerKeyEnv, removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, secondsOf,
   sharedKeyWith, updateListItem, type Config, type Route,
 } from './model.ts';
 import { differs, errorFor, type SectionProps } from './types.ts';
@@ -220,7 +220,7 @@ export function ProvidersSection({ draft, saved, update, problems, selectedId, o
           <FieldRow label="URL" desc={t('settings.providers.fieldUrlDesc')} changed={changed('baseUrl')} path={`${base}baseUrl`} error={errorFor(problems, `${base}baseUrl`) ?? errorFor(problems, base.slice(0, -1))}>
             <TextField value={(selected.baseUrl as string) ?? ''} mono placeholder="https://…" label="URL" onChange={v => edit({ baseUrl: v || undefined })} />
           </FieldRow>
-          <FieldRow label={t('settings.providers.fieldKey')} desc={keyEnv ? t('settings.providers.fieldKeyDesc', keyEnv) : undefined} path={`${base}key`}>
+          <FieldRow label={t('settings.providers.fieldKey')} desc={keyEnv && isEnvName(keyEnv) ? t('settings.providers.fieldKeyDesc', keyEnv) : undefined} path={`${base}key`}>
             <KeyField id={selected.id as string} saved={savedProvider} ready={keyReady(saved, draft, selected.id as string)} sharedWith={sharedKeyWith(draft, selected.id as string)} onChanged={onKeyChanged} />
           </FieldRow>
           <details className="set-adv" open={advOpen || Boolean(keyEnvError)} onToggle={e => setAdvOpen(e.currentTarget.open)}>

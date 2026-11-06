@@ -1,14 +1,18 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Value } from '@sinclair/typebox/value';
+import { configText } from '../shared/messages/config.ts';
+import type { MessageParams } from '../shared/messages/define.ts';
 import { parseAllowEntry } from '../tools/hooks/allow-entry.ts';
 import { checkBaseUrl } from '../shared/url.ts';
 import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
+import { friendlyIssue } from './friendly.ts';
 import { AppConfig, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
 const ToolsSchema = ToolsConfigSchema();
 
-export interface ConfigIssue { path: string; message: string }
+// code / params は、形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。画面は、これから画面の言語の文を作る（message は日本語の文）
+export interface ConfigIssue { path: string; message: string; code?: string; params?: MessageParams }
 
 // 文（場所: 内容）から場所と内容を取り出す。issues を渡されなかった ConfigError の代わり。場所が無い文は path が空になる
 function issueOfText(text: string): ConfigIssue {
@@ -118,10 +122,11 @@ function issuePath(pointer: string, raw: unknown): string {
 export function parseConfig(raw: unknown): AppConfig {
   const withDefaults = Value.Default(AppConfig, Value.Clone(raw));
   if (!Value.Check(AppConfig, withDefaults)) {
-    const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20);
+    // 正規表現や「Expected string to match …」はそのまま見せない。項目ごとの友好的な文（src/shared/messages/config.ts）にする
+    const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20).map(e => { const friendly = friendlyIssue(e); return { e, friendly, message: friendly ? configText('ja', friendly.code, friendly.params) : e.message }; });
     throw new ConfigError('設定ファイルの形式が正しくありません',
-      errors.map(e => `${e.path || '/'}: ${e.message}`),
-      errors.map(e => ({ path: issuePath(e.path, withDefaults), message: e.message })));
+      errors.map(x => `${x.e.path || '/'}: ${x.message}`),
+      errors.map(x => ({ path: issuePath(x.e.path, withDefaults), message: x.message, ...(x.friendly ? { code: `config.${x.friendly.code}`, params: x.friendly.params } : {}) })));
   }
   const config = withDefaults as AppConfig;
   const found = findings(config);

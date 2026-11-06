@@ -11,7 +11,7 @@ import { AccessConfirm } from './settings/AccessConfirm.tsx';
 import { accessKey, accessWidening, type Access } from './settings/access.ts';
 import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merge.ts';
 import {
-  blockUnload, closeAction, countChanges, isSection, parseProblem, problemsOf, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
+  blockUnload, closeAction, countChanges, isSection, issueMessage, parseProblem, problemsOf, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
 import { editsToKeep, restoreKept, type KeptEdits } from './settings/keep.ts';
 import { applyFailure, applyStep } from './settings/server-apply.ts';
@@ -290,7 +290,7 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
                 <span className="set-banner-icon"><Icon name="alert" size={16} /></span>
                 <div className="set-banner-body">
                   <strong>{t('settings.configBroken')}</strong>
-                  <ul>{view.configError.problems.map(p => <li key={p}>{p}</li>)}</ul>
+                  <ul>{(view.configError.issues?.length ? view.configError.issues.map(i => `${i.path ? `${i.path}: ` : ''}${issueMessage(i)}`) : view.configError.problems).map(p => <li key={p}>{p}</li>)}</ul>
                 </div>
               </div>
             )}

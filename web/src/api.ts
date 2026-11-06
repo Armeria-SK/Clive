@@ -52,7 +52,7 @@ export interface ModelView {
 export interface SettingsView {
   config: Record<string, any>;
   apiKeys: Record<string, boolean>;
-  configError: { message: string; problems: string[]; issues?: Array<{ path: string; message: string }> } | null;
+  configError: { message: string; problems: string[]; issues?: Array<{ path: string; message: string; code?: string; params?: Record<string, unknown> }> } | null;
   restartRequired: boolean;
   configPath: string;
 }
