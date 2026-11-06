@@ -124,3 +124,11 @@ test('辞書: 末尾 4 文字が無いとき（短い鍵）は、「設定済み
     assert.match(set(''), without);
   }
 });
+
+test('辞書: キーが OS の環境変数にあるときの表示と、消せなかったときの知らせは、ja と en の両方にある', () => {
+  for (const [dict, name] of [[ja, 'ja'], [en, 'en']] as const) {
+    for (const key of ['settings.key.setOs', 'settings.key.osNote', 'settings.key.stillSetOs'] as const) assert.equal(typeof dict[key], 'string', `${name}: ${key}`);
+    assert.match(dict['settings.key.osNote'] as string, name === 'ja' ? /OS の環境変数/u : /operating system/u, name);
+    assert.match(dict['settings.key.osNote'] as string, /\.env/u, name);
+  }
+});

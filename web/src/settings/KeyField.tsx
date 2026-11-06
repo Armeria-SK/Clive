@@ -65,9 +65,11 @@ export function KeyField({ id, saved, ready, sharedWith, onChanged, unsafeEnv, o
     if (busy) return;
     setBusy(true); setError(null);
     try {
-      setState(await api.deleteProviderKey(id));
+      const next = await api.deleteProviderKey(id);
+      setState(next);
       setRemoving(false);
-      toast({ kind: 'done', icon: 'check', title: t('settings.key.removed') });
+      // OS の環境変数にあるキーは、ここからは消せない（.env に書かれた分だけ消えた）
+      toast(next.set ? { kind: 'info', icon: 'info', title: t('settings.key.stillSetOs') } : { kind: 'done', icon: 'check', title: t('settings.key.removed') });
       onChanged();
     } catch (failure) {
       setError(failure instanceof ApiError ? failure.message : t('settings.key.failed'));
@@ -86,6 +88,7 @@ export function KeyField({ id, saved, ready, sharedWith, onChanged, unsafeEnv, o
   if (state === null) return <span className="set-note" role="status">{t('settings.loading')}</span>;
   const current = state === 'failed' ? undefined : state;
   const isSet = current?.set === true;
+  const fromOs = isSet && current?.source === 'os';
   const showInput = (!isSet || editing) && !removing;
   return (
     <div className="set-keyfield">
@@ -93,9 +96,9 @@ export function KeyField({ id, saved, ready, sharedWith, onChanged, unsafeEnv, o
       {!isSet && state !== 'failed' && <span className="set-note">{t('settings.key.unset')}</span>}
       {isSet && !editing && !removing && (
         <div className="set-keyrow">
-          <span className="tag tag-neutral">{t('settings.key.set', current?.last4 ?? '')}</span>
+          <span className="tag tag-neutral">{fromOs ? t('settings.key.setOs') : t('settings.key.set', current?.last4 ?? '')}</span>
           <button type="button" className="btn btn-secondary" onClick={() => setEditing(true)}>{t('settings.key.replace')}</button>
-          <button type="button" className="btn btn-ghost" onClick={() => setRemoving(true)}>{t('settings.key.remove')}</button>
+          {!fromOs && <button type="button" className="btn btn-ghost" onClick={() => setRemoving(true)}>{t('settings.key.remove')}</button>}
         </div>
       )}
       {isSet && removing && (
@@ -117,6 +120,7 @@ export function KeyField({ id, saved, ready, sharedWith, onChanged, unsafeEnv, o
           {isSet && <button type="button" className="btn btn-ghost" onClick={() => { setEditing(false); setValue(''); setError(null); }} disabled={busy}>{t('settings.key.cancel')}</button>}
         </div>
       )}
+      {fromOs && <span className="set-note">{t('settings.key.osNote')}</span>}
       {error && <span className="set-row-error" role="alert">{error}</span>}
       {sharedWith.length > 0 && <span className="set-row-desc">{t('settings.key.shared', sharedWith.join(', '))}</span>}
       {confirm && (

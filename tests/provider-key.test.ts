@@ -134,16 +134,54 @@ test('末尾 4 文字は、12 文字以上の鍵のときだけ返す（短い�
 });
 
 test('鍵の名前でない環境変数（PATH など）を指すプロバイダの GET は、中身の末尾も返さない（入っているかだけ）', async t => {
-  const s = await start(t, { PATH: 'C:\\Windows\\System32;C:\\Tools\\bin;/usr/local/bin', HOME: '/home/someone-else' }, c => {
+  const env = { PATH: 'C:\\Windows\\System32;C:\\Tools\\bin;/usr/local/bin', HOME: '/home/someone-else' };
+  const s = await start(t, env, c => {
     c.providers.push({ id: 'pathy', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:3/v1', apiKeyEnv: 'PATH', maxParallel: 1, timeoutMs: 10_000 });
     c.providers.push({ id: 'homey', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:4/v1', apiKeyEnv: 'HOME', maxParallel: 1, timeoutMs: 10_000 });
   });
+  // OS の環境変数にだけあるときは、末尾どころか source: 'os' だけ。.env にも同じ値があるとき（.env から読み込まれたものと同じ）は、末尾を返す規則（鍵の名前だけ）に当たる
+  for (const id of ['pathy', 'homey']) assert.deepEqual((await s.get(id)).body, { set: true, source: 'os' }, id);
+  writeFileSync(s.paths.env, `PATH=${env.PATH}\nHOME=${env.HOME}\n`);
   for (const id of ['pathy', 'homey']) {
     const res = await s.get(id);
     assert.equal(res.status, 200);
     assert.deepEqual(res.body, { set: true, last4: null }, id);
   }
   assert.equal(JSON.stringify((await s.json('/api/settings', 'GET')).body).includes('bin'), false, '設定の応答にも環境変数の中身は出ない');
+});
+
+const OS_KEY = 'Qm8wE2rT5yU1iO7pAs3Df9';
+
+test('キーが OS の環境変数にあるとき（.env に無い）: GET は { set: true, source: "os" }。消す（DELETE）は、消せたと言わず { set: true, source: "os" } を返し、動いている環境も .env も変えない', async t => {
+  const s = await start(t, { FAKE_KEY: OS_KEY });
+  assert.deepEqual((await s.get('fake')).body, { set: true, source: 'os' });
+  const res = await s.del('fake');
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { set: true, source: 'os' });
+  assert.equal(s.env.FAKE_KEY, OS_KEY, 'OS の値を、動いている Clive から消さない');
+  assert.equal(existsSync(s.paths.env), false, '.env を作らない');
+  assert.equal(JSON.stringify(res.body).includes(OS_KEY.slice(-4)), false, '末尾も出さない');
+  assert.deepEqual((await s.get('fake')).body, { set: true, source: 'os' }, '消えていない');
+});
+
+test('キーが .env にもあり、OS の環境変数の値が優先されているとき: .env の行は消すが、OS の値は残るので { set: true, source: "os" }（古い鍵を .env に残さない）', async t => {
+  const s = await start(t, { FAKE_KEY: OS_KEY });
+  writeFileSync(s.paths.env, `OTHER=1\nFAKE_KEY=${KEY}\n`);
+  const res = await s.del('fake');
+  assert.deepEqual(res.body, { set: true, source: 'os' });
+  assert.equal(readFileSync(s.paths.env, 'utf8'), 'OTHER=1\n');
+  assert.equal(readFileSync(`${s.paths.env}.bak`, 'utf8').includes(KEY), false);
+  assert.equal(s.env.FAKE_KEY, OS_KEY);
+});
+
+test('キーが .env から読み込まれたものなら（動いている環境と .env が同じ値）、今までどおり消せる { set: false, last4: null }', async t => {
+  const s = await start(t, { FAKE_KEY: KEY });
+  writeFileSync(s.paths.env, `FAKE_KEY=${KEY}\n`);
+  assert.deepEqual((await s.get('fake')).body, { set: true, last4: KEY.slice(-4) }, '.env と同じ値なら OS の値とは言わない');
+  const res = await s.del('fake');
+  assert.deepEqual(res.body, { set: false, last4: null });
+  assert.equal(s.env.FAKE_KEY, undefined);
+  assert.equal(readFileSync(s.paths.env, 'utf8'), '');
 });
 
 test('書いたあと、モデルの確認をやり直す（鍵の名前が増えたときも、同じ名前に入れ直したときも、消したときも）', async t => {

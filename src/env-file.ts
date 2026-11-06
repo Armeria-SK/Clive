@@ -179,6 +179,11 @@ function save(path: string, previous: string | undefined, content: string, backu
   }
 }
 
+// .env に書かれている name の値（起動で読み込むのと同じ読み方）。無ければ・読めなければ undefined
+export function envFileValue(path: string, name: string): string | undefined {
+  try { return existsSync(path) ? parseEnv(readFileSync(path, 'utf8'))[name] : undefined; } catch { return undefined; }
+}
+
 export function setEnvValue(path: string, name: string, value: string): void {
   const existed = existsSync(path);
   const current = readExisting(path);

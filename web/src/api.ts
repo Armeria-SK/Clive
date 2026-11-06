@@ -124,7 +124,8 @@ export interface OnboardingView { done: boolean; steps: { language: boolean; use
 export interface PersonaWrite { userName?: string; callMe?: string; botName?: string; style?: 'calm' | 'friendly' | 'direct' | 'none'; styleNote?: string }
 export interface PersonaView { soul: string; user: string; tokens: { soul: number; user: number }; budget: number | null; max: number }
 // API キーの状態（GET /api/providers/:id/key）。鍵そのものは返らない
-export interface ProviderKeyState { set: boolean; last4: string | null }
+// source: 'os' は、鍵が .env ではなく OS の環境変数にある（ここからは消せない。末尾 4 文字も無い）
+export interface ProviderKeyState { set: boolean; last4?: string | null; source?: 'os' }
 export interface EnvReloadView { loaded: boolean; apiKeys: Record<string, boolean>; notApplied: string[] }
 
 export class ApiError extends Error {
