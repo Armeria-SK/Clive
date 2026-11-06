@@ -3,8 +3,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
+import { App } from '../src/app.ts';
+import { resolvePaths } from '../src/paths.ts';
+import type { PageNetwork, PageResponse } from '../src/tools/web/public-page.ts';
 import { CONVERSATION, fakeModel, settled, startApp, waitFor } from './app-setup.ts';
-import { fail, type Script } from './helpers.ts';
+import { fail, FakeAdapter, tempDir, testConfig, type Script } from './helpers.ts';
 
 // 段 8b: 自動承認を、会話のエンジンから通して確かめる（判定役は同じモデルの提供元に、偽のアダプタが答える）
 
@@ -169,4 +172,70 @@ test('自動承認（エンジン）: 判定役が allow でも、今回だけ�
   assert.equal(t2.adapter().calls.filter(isClassifier).length, 0);
   t2.app.approvals.decide(t2.app.approvals.pending()[0]!.id, 'deny');
   await settled(t2.app, attached.body.runId);
+});
+
+// ── 外から読んだ内容のあと（Web）。同じ実行の中でも、止めたあとの次の実行にも持ち越す ──
+
+async function webApp(t: { after: (fn: () => void) => void }) {
+  const paths = resolvePaths(tempDir(t));
+  mkdirSync(paths.data, { recursive: true });
+  const config = testConfig();
+  config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
+  config.models = [fakeModel('m')];
+  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
+  config.memory.review = false;
+  writeFileSync(paths.config, JSON.stringify(config));
+  const network: PageNetwork = {
+    resolve: async () => ['93.184.216.34'],
+    get: async () => ({ status: 200, contentType: 'text/html; charset=utf-8', body: Buffer.from('<!doctype html><html><head><title>t</title></head><body><main><p>ページの本文</p></main></body></html>') }) as PageResponse,
+  };
+  let adapter!: FakeAdapter;
+  const app = new App({ paths, databasePath: ':memory:', log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  await app.status.probeAll(app.config());
+  t.after(() => app.close());
+  mkdirSync(paths.workspace, { recursive: true });
+  const outsidePath = join(paths.data, 'outside.txt');
+  writeFileSync(outsidePath, '外のメモの中身');
+  const command = process.platform === 'win32' ? `Get-Content "${outsidePath}"` : `cat "${outsidePath}"`;
+  return { app, adapter: () => adapter, command };
+}
+
+test('自動承認（エンジン）: Web を読んだあとは、外を読むだけのコマンドも判定役に回さず、札が出る（taint）', async t => {
+  const s = await webApp(t);
+  s.adapter().scripts = [toolCall('web_fetch', { url: 'https://news.example.com/' }), toolCall('shell_run', { command: s.command }), say(ALLOW), say('おわり')];
+  s.app.conversations.setChoice('c1', { permissionMode: 'auto' });
+  const sent = s.app.engine.send('c1', 'このページを読んで、外のメモも読んで');
+  assert.ok(sent.ok);
+  await waitFor(() => s.app.approvals.pending().length === 1, 'Web を読んだあとの札');
+  assert.ok(s.app.approvals.pending()[0]!.kinds?.includes('taint'));
+  assert.ok(s.app.approvals.pending()[0]!.kinds?.includes('outside_read'));
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 0, '判定役を呼ばない');
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+  await settled(s.app, sent.runId);
+  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
+});
+
+test('自動承認（エンジン）: Web を読んだ実行が止められたあとの次の実行も、判定役に回さない（外から読んだ印の持ち越し）', async t => {
+  const s = await webApp(t);
+  const untilStopped: Script = async function* (req) {
+    await new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }));
+  };
+  s.app.conversations.setChoice('c1', { permissionMode: 'auto' });
+  s.adapter().scripts = [toolCall('web_fetch', { url: 'https://news.example.com/' }), untilStopped];
+  const first = s.app.engine.send('c1', 'このページを読んで');
+  assert.ok(first.ok);
+  await waitFor(() => s.adapter().calls.length >= 2, '道具のあとの 2 回目の呼び出し');
+  s.app.engine.stop(first.runId);
+  await settled(s.app, first.runId);
+  await s.app.engine.wait(first.runId);
+  assert.equal(s.app.runs.get(first.runId)!.tainted, 1);
+
+  s.adapter().scripts = [toolCall('shell_run', { command: s.command }), say(ALLOW), say('おわり')];
+  const second = s.app.engine.send('c1', '続けて、外のメモも読んで');
+  assert.ok(second.ok);
+  await waitFor(() => s.app.approvals.pending().length === 1, '持ち越した印のあとの札');
+  assert.ok(s.app.approvals.pending()[0]!.kinds?.includes('taint'));
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 0);
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+  await settled(s.app, second.runId);
 });
