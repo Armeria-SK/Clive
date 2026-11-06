@@ -119,6 +119,33 @@ test('消すと、控え（.env.bak）にも鍵を残さない。鍵は .env に
   }
 });
 
+test('末尾 4 文字は、12 文字以上の鍵のときだけ返す（短い鍵は末尾 4 文字が手がかりになる）。短い鍵は { set: true, last4: null }', async t => {
+  const s = await start(t);
+  const short = 'abcdefghijk';
+  assert.equal(short.length, 11);
+  const put = await s.put('my-llm', { key: short });
+  assert.equal(put.status, 200);
+  assert.deepEqual(put.body, { set: true, last4: null });
+  assert.deepEqual((await s.get('my-llm')).body, { set: true, last4: null });
+  const edge = 'abcdefghijkl';
+  assert.equal(edge.length, 12);
+  assert.deepEqual((await s.put('my-llm', { key: edge })).body, { set: true, last4: 'ijkl' }, '12 文字ちょうどなら返す');
+  assert.deepEqual((await s.get('my-llm')).body, { set: true, last4: 'ijkl' });
+});
+
+test('鍵の名前でない環境変数（PATH など）を指すプロバイダの GET は、中身の末尾も返さない（入っているかだけ）', async t => {
+  const s = await start(t, { PATH: 'C:\\Windows\\System32;C:\\Tools\\bin;/usr/local/bin', HOME: '/home/someone-else' }, c => {
+    c.providers.push({ id: 'pathy', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:3/v1', apiKeyEnv: 'PATH', maxParallel: 1, timeoutMs: 10_000 });
+    c.providers.push({ id: 'homey', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:4/v1', apiKeyEnv: 'HOME', maxParallel: 1, timeoutMs: 10_000 });
+  });
+  for (const id of ['pathy', 'homey']) {
+    const res = await s.get(id);
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, { set: true, last4: null }, id);
+  }
+  assert.equal(JSON.stringify((await s.json('/api/settings', 'GET')).body).includes('bin'), false, '設定の応答にも環境変数の中身は出ない');
+});
+
 test('書いたあと、モデルの確認をやり直す（鍵の名前が増えたときも、同じ名前に入れ直したときも、消したときも）', async t => {
   const s = await start(t);
   const checkedAt = () => s.app.status.get('m3')!.checkedAt;

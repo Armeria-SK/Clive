@@ -610,7 +610,7 @@ export const ja = {
   'settings.key.placeholder': 'キーを貼り付け',
   'settings.key.save': 'キーを保存',
   'settings.key.saving': '保存しています…',
-  'settings.key.set': (last4: string) => `設定済み（末尾 ${last4}）`,
+  'settings.key.set': (last4: string) => (last4 ? `設定済み（末尾 ${last4}）` : '設定済み'),
   'settings.key.unset': 'まだ入っていません',
   'settings.key.replace': '入れ直す',
   'settings.key.remove': '消す',

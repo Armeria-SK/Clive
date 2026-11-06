@@ -116,3 +116,11 @@ test('辞書: 鍵の名前として使えないときの注意は、使える言
     assert.match(errorBodyText({ code: 'http.key_env_unsafe', params: { env: 'PATH' } }, lang)!, pattern, lang);
   }
 });
+
+test('辞書: 末尾 4 文字が無いとき（短い鍵）は、「設定済み」だけを出す（空の「末尾 」を出さない）', () => {
+  for (const [dict, withTail, without] of [[ja, /設定済み（末尾 abcd）/u, /^設定済み$/u], [en, /Set \(ends with abcd\)/u, /^Set$/u]] as const) {
+    const set = dict['settings.key.set'] as (last4: string) => string;
+    assert.match(set('abcd'), withTail);
+    assert.match(set(''), without);
+  }
+});

@@ -11,6 +11,9 @@ import { configProblem, problem, readJson, requireObject, type Router, sendJson 
 
 type KeyState = { set: boolean; last4: string | null };
 
+// 末尾 4 文字を見せてよい鍵の最小の長さ（短い鍵は、末尾 4 文字が手がかりになる）
+const LAST4_MIN_CHARS = 12;
+
 const NOT_SET: KeyState = { set: false, last4: null };
 
 function envProblem(error: unknown): never {
@@ -26,9 +29,11 @@ export function registerKeyRoutes(router: Router, app: App): void {
     if (!provider) throw problem(404, 'not_found', 'provider_missing', { params: { id } });
     return { config, provider };
   };
+  // 末尾 4 文字は、鍵の名前（KEY・TOKEN など）の環境変数で、12 文字以上の鍵のときだけ。PATH など鍵でない環境変数の中身は、末尾も返さない
   const stateOf = (name: string): KeyState => {
     const value = app.env[name]?.trim();
-    return value ? { set: true, last4: value.slice(-4) } : NOT_SET;
+    if (!value) return NOT_SET;
+    return { set: true, last4: isSecretEnvName(name) && value.length >= LAST4_MIN_CHARS ? value.slice(-4) : null };
   };
   // このプロバイダが読む環境変数の名前。まだ決めていない非 Anthropic のプロバイダは、鍵を入れるまで「入っていない」
   const readName = (provider: ProviderConfig): string | undefined => provider.apiKeyEnv ?? (provider.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined);

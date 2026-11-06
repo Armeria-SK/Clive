@@ -613,7 +613,7 @@ export const en: Dict = {
   'settings.key.placeholder': 'Paste the key',
   'settings.key.save': 'Save key',
   'settings.key.saving': 'Saving…',
-  'settings.key.set': last4 => `Set (ends with ${last4})`,
+  'settings.key.set': last4 => (last4 ? `Set (ends with ${last4})` : 'Set'),
   'settings.key.unset': 'Not set yet',
   'settings.key.replace': 'Enter again',
   'settings.key.remove': 'Remove',
