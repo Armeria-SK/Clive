@@ -93,6 +93,40 @@ test('bash: \\" で引用符を閉じたと取り違えて、引用符の外の�
   }
 });
 
+// 全角の見張りは、字句の読み取りと同じ引用符の組み方でなければならない。"…" の中の $( … ) の中の引用符・コメントの中の引用符を取り違えると、引用符の外の全角（＂--pre=x＂ など）を見逃す
+test('bash: "…" の中の $( … ) の中の引用符・コメントの中の引用符に惑わされず、引用符の外の全角を止める', () => {
+  const denied = [
+    `echo "$(echo '"')" ＡＢ`, `echo "$(echo '"')" ＂--pre=x＂`, String.raw`echo "$(echo "a\"b")" ＡＢ`, `echo "$(echo "x $(echo '"')")" ＡＢ`, `echo "$(echo "(")" ＡＢ`, `echo "a$(echo ')')" ＡＢ`,
+    `echo $(echo '"') ＡＢ`, `echo $(echo "$(echo '"')") ＡＢ`, `cat <(echo '"') ＡＢ`, `echo "$(echo '"')$(echo '"')" ＂--pre=x＂`, `echo '"' ＡＢ`, `echo "'" ＡＢ`,
+    // "…" の中の $( … ) の中のコードは、引用符の外の全角を持てない
+    'echo "$(echo ＡＢ)"', 'echo "a $(echo ＂--pre=x＂) b"', 'echo "$(echo "$(echo ＡＢ)")"',
+    // コメントの中の引用符は、引用符を始めない
+    "echo a # it's\nrg ＂--pre=x＂ f z", "echo a # it's\nrg ＂--pre=x＂ f 'z'", 'echo a # "\nrg ＂--pre=x＂ f "z"', "echo a #it's\necho b ＡＢ 'x'", "echo a;# it's\nrg ＂x＂ f", "echo $(echo a\n# it's\necho ＡＢ\n)",
+    // # が語の途中・値の中にあるときはコメントではない
+    "echo a#b ＡＢ", "echo a#'b' ＡＢ", "x=#a ＡＢ",
+    // ヒアドキュメントの本文の中の引用符も、引用符を始めない
+    "cat <<'EOF'\nit's\nEOF\nrg ＂--pre=x＂ f.txt", "cat <<EOF\nit's\nEOF\nrg ＂--pre=x＂ f.txt", "cat <<-EOF\n\tit's\n\tEOF\nrg ＂--pre=x＂ f.txt", 'cat <<"EOF"\nit\'s\nEOF\nrg ＂--pre=x＂ f.txt',
+    "cat <<A <<B\na'b\nA\nc'd\nB\nrg ＂--pre=x＂ f.txt", "echo $(cat <<'EOF'\nit's\nEOF\n; rg ＂--pre=x＂ f.txt)",
+  ];
+  for (const shell of ['bash', 'sh'] as const) for (const command of denied) assert.equal(failure(command, shell), 'fullwidth', `${shell}: ${JSON.stringify(command)}`);
+  const allowed = [
+    `echo "$(echo 'ＡＢ')"`, `echo "$(echo "ＡＢ")"`, `echo "ＡＢ $(echo '"')"`, `echo "$(echo '"') ＡＢ"`, `echo "$(echo '"')" 'ＡＢ'`, `echo "$(echo '"')" "ＡＢ"`, `grep "日本語" f`,
+    String.raw`echo "a\"$(echo 'ＡＢ')"`, `echo $(echo "ＡＢ")`, `echo "$(echo "$(echo 'ＡＢ')")"`, "echo 'it''s' \"ＡＢ\"",
+    "cat <<'EOF'\nit's 'a \"b\nEOF\necho ok", "cat <<EOF\nit's\nEOF\necho 'ＡＢ'", "echo a # it's\necho ok", "cat <<<'ＡＢ'\necho ok",
+  ];
+  for (const shell of ['bash', 'sh'] as const) for (const command of allowed) assert.equal(failure(command, shell), null, `${shell}: ${JSON.stringify(command)}`);
+});
+
+test('bash: 引用符の外の全角を、判定でも止める（"$(echo \'"\')" ＂--pre=x＂ は rg の引数を割る）', t => {
+  const f = fixture(t);
+  for (const command of [`echo "$(echo '"')" ＡＢ`, `rg "$(echo '"')" ＂--pre=x＂ f.txt`, "echo a # it's\nrg ＂--pre=x＂ f.txt z"]) {
+    const verdict = f.bash(command);
+    assert.equal(verdict.decision, 'deny', command);
+    assert.match(verdict.reasons.join(), /全角/u, command);
+  }
+  assert.equal(f.bash(`echo "$(echo 'ＡＢ')"`).decision, 'allow');
+});
+
 test('bash: 守るコマンドの判定。grep "\\.ts$" src と rg "a\\|b" . は確かめなしに動く。echo "\\$(rm x)" は文字のままで、何も動かさない', t => {
   const f = fixture(t);
   const allow = [
@@ -299,4 +333,34 @@ test('PowerShell: シングルクォートの中・ヒア文字列の中の $( �
   assert.equal(f.ps("Write-Output '$(Remove-Item x)'").decision, 'allow');
   assert.equal(f.ps("Write-Output @'\n$(Remove-Item x)\n'@").decision, 'allow');
   assert.deepEqual(read("Write-Output '$(Remove-Item x)'", 'powershell').map(s => s.words[0]!.text), ['Write-Output']);
+});
+
+// 本物の Parser は、"$$"（直前の最後の語）と "$^"（最初の語）を変数として展開する。"$-" "$*" "$" だけなどは文字のまま（tests/shell-lex-real.test.ts で本物の Parser と突き合わせる）
+test('PowerShell: "$$" と "$^" を含む文字列は、値の分からない語（変数と同じ）。"$-" や "$" だけの文字列は文字のまま', t => {
+  const f = fixture(t);
+  for (const shell of PS_SHELLS) {
+    for (const text of ['$$', '$^', 'a$$b', 'a$^b', '$$.txt', 'x$^', '$^$$']) {
+      const word = read(`Write-Output "${text}"`, shell)[0]!.words[1]!;
+      assert.deepEqual([word.text, word.dynamic, word.quoted], [text, true, true], `${shell}: "${text}"`);
+    }
+    for (const text of ['$', 'a$', '$-', '$*', '$ b', '$.', '$%', 'a$.b', '100$', '$#']) {
+      const word = read(`Write-Output "${text}"`, shell)[0]!.words[1]!;
+      assert.deepEqual([word.text, word.dynamic], [text, false], `${shell}: "${text}"`);
+    }
+    assert.equal(read("Write-Output '$$'", shell)[0]!.words[1]!.dynamic, false, `${shell}: シングルクォートの中は文字`);
+    assert.equal(read('Write-Output $$', shell)[0]!.words[1]!.dynamic, true);
+  }
+  const level = (v: { decision: string; onceOnly: boolean }): string => (v.decision === 'allow' ? 'allow' : v.onceOnly ? 'once' : v.decision);
+  const same: Array<[string, string]> = [
+    ['rg "$$" src', 'rg $$ src'], ['rg "$^" src', 'rg $^ src'], ['rg "a$$b" src', 'rg a$$b src'], ['rg "$^.ts" src', 'rg $^.ts src'], ['rg "$$" "$^" src', 'rg $$ $^ src'],
+  ];
+  const wrong: string[] = [];
+  for (const [string, bare] of same) {
+    const a = level(f.ps(string));
+    const b = level(f.ps(bare));
+    if (a !== b) wrong.push(`${string} → ${a}、変数の形 ${bare} → ${b}`);
+  }
+  assert.deepEqual(wrong, []);
+  assert.notEqual(level(f.ps('rg "$$" src')), 'allow', '値の分からない rg のパターンは、読むだけでも確かめなしにはならない');
+  assert.equal(level(f.ps('rg "$-" src')), 'allow', '文字のままの "$-" は今までどおり');
 });

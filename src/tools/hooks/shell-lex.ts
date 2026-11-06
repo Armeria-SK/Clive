@@ -108,19 +108,88 @@ function outsidePsStrings(src: string): string {
   return out;
 }
 
-function outsideQuotes(src: string, shell: ShellKind): string {
-  if (isPowerShell(shell)) return outsidePsStrings(src);
+// bash の引用符の中を空白に置き換えた文字列。lexBash と同じ組み方をする: "…" の中の $( … ) は closeParen で切り出して中をコードとして見る。
+// コメント（語の頭の # から行末）とヒアドキュメントの本文は、引用符を始めない（空白にはしない。中の全角も見る）
+function outsideBashQuotes(src: string, level = 0): string {
   let out = '';
-  let quote: string | null = null;
-  for (let i = 0; i < src.length; i++) {
-    const ch = src[i]!;
-    if (quote) {
-      if (quote === '"' && ch === '\\' && i + 1 < src.length) { out += '  '; i++; continue; }
-      if (ch === quote) quote = null;
+  let i = 0;
+  let wordStart = true;
+  const n = src.length;
+  const pending: Array<{ delim: string; strip: boolean }> = [];
+  const sub = (at: number): boolean => {
+    const close = level < MAX_DEPTH + 2 ? closeParen(src, at) : -1;
+    if (close < 0) return false;
+    out += `  ${outsideBashQuotes(src.slice(at + 1, close), level + 1)} `;
+    i = close + 1;
+    return true;
+  };
+  const heredocBodies = (): void => {
+    for (const h of pending) {
+      while (i < n) {
+        const e = src.indexOf('\n', i);
+        const stop = e < 0 ? n : e + 1;
+        const line = src.slice(i, e < 0 ? n : e);
+        out += src.slice(i, stop);
+        i = stop;
+        if ((h.strip ? line.replace(/^\t+/u, '') : line) === h.delim) break;
+      }
+    }
+    pending.length = 0;
+  };
+  while (i < n) {
+    const c = src[i]!;
+    if (c === "'") {
+      const e = src.indexOf("'", i + 1);
+      const stop = e < 0 ? n : e + 1;
+      out += ' '.repeat(stop - i);
+      i = stop;
+      wordStart = false;
+      continue;
+    }
+    if (c === '"') {
       out += ' ';
-    } else if (ch === '"' || ch === "'") { quote = ch; out += ' '; } else out += ch;
+      i++;
+      while (i < n && src[i] !== '"') {
+        if (src[i] === '\\' && i + 1 < n) { out += '  '; i += 2; continue; }
+        if (src[i] === '$' && src[i + 1] === '(' && sub(i + 1)) continue;
+        out += ' ';
+        i++;
+      }
+      if (i < n) { out += ' '; i++; }
+      wordStart = false;
+      continue;
+    }
+    if (c === '#' && wordStart) {
+      while (i < n && src[i] !== '\n') { out += src[i]!; i++; }
+      continue;
+    }
+    if (c === '\n') {
+      out += c;
+      i++;
+      wordStart = true;
+      if (pending.length) heredocBodies();
+      continue;
+    }
+    if (c === '<' && src[i + 1] === '<') {
+      if (src[i + 2] === '<') { out += '<<<'; i += 3; wordStart = true; continue; }
+      const m = /^<<(-?)[ \t]*([^\s;&|()<>]*)/u.exec(src.slice(i, i + 400));
+      if (m) pending.push({ delim: m[2]!.replace(/['"\\]/gu, ''), strip: m[1] === '-' });
+      out += '<<';
+      i += 2;
+      wordStart = true;
+      continue;
+    }
+    if (c === '$' && src[i + 1] === '(' && sub(i + 1)) { wordStart = false; continue; }
+    if ((c === '<' || c === '>') && src[i + 1] === '(' && sub(i + 1)) { wordStart = true; continue; }
+    out += c;
+    i++;
+    wordStart = /[\s;&|()<>]/u.test(c);
   }
   return out;
+}
+
+function outsideQuotes(src: string, shell: ShellKind): string {
+  return isPowerShell(shell) ? outsidePsStrings(src) : outsideBashQuotes(src);
 }
 
 function precheck(src: string, shell: ShellKind): LexFail | null {
@@ -552,7 +621,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
             j = inner.end;
             continue;
           }
-          if (next !== undefined && /[A-Za-z_?]/u.test(next)) dyn = true;
+          if (next !== undefined && /[A-Za-z_?$^]/u.test(next)) dyn = true;
         }
         value += c; j++;
       }

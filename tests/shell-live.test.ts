@@ -460,6 +460,22 @@ test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の 
   await expectAsk(s, 'echo "\\\\$(node -e 1)"');
 });
 
+// 全角の見張りは、字句の読み取りと同じ引用符の組み方で、引用符の外の全角（＂--pre=x＂ は Windows で " になって引数を割る）を止める
+test('実機（bash）: "…" の中の $( ) の中の引用符・コメント・ヒアドキュメントの引用符に惑わされず、引用符の外の全角は動かす前に止まる。引用符の中の全角は動く', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  for (const command of [`echo "$(echo '"')" ＂--pre=x＂`, "echo a # it's\necho ＂--pre=x＂ done", "cat <<'EOF'\nit's\nEOF\necho ＂--pre=x＂ done", 'echo "$(echo ＡＢ)"']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, /書き方を判定できません/u, command);
+    assert.doesNotMatch(outcome.output.content, /done/u, `${command}: 動いた`);
+  }
+  for (const [command, expected] of [[`echo "$(echo 'ＡＢ')"`, 'ＡＢ'], [`echo "ＡＢ $(echo '"')"`, 'ＡＢ "']] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.output.content.split('\n\n').slice(2).join('\n\n').trim(), expected, command);
+  }
+});
+
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
 // 8 回目の審査（致命）: curl は URL の { } [ ] を展開し、-o の #1 に差し込み、-O は展開した名前で保存する。

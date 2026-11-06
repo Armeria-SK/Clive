@@ -274,6 +274,8 @@ const PS_DQ_ROWS = [
   'Write-Output "$((Get-Date).Year)"', 'Write-Output "$(Write-Output $(Get-Date))"', 'Write-Output "$(Write-Output (Get-Date))"', 'Write-Output "$(1,2)"', 'Write-Output "$(@(1,2).Count)"', 'Write-Output "$("a" + "b")"', 'Write-Output "x$([int]1)"', 'Get-Content "$(Get-Date).txt"', 'Set-Content "$(Get-Date).txt" x',
   'Write-Output "$(Remove-Item x)"', 'Write-Output "$(iex \'x\')"', 'Write-Output "a""b$(Get-Date)"', 'Write-Output "$(Get-Date)""$(Get-Location)"', 'Write-Output "$(\'a\'.ToUpper())"',
   'Write-Output "$(if ($true) { Get-Date })"', 'Write-Output "$(foreach ($i in 1,2) { Get-Date })"', 'Write-Output "$(Get-ChildItem | ForEach-Object { $_.Name })"',
+  // "$$"（直前の最後の語）と "$^"（最初の語）は本物も変数として展開する。"$-" "$*" "$" だけなどは文字のまま
+  'Write-Output "$$"', 'Write-Output "$^"', 'Write-Output "a$$b"', 'Write-Output "a$^b"', 'Write-Output "$$.txt"', 'Write-Output "$-"', 'Write-Output "$*"', 'Write-Output "a$"', 'Write-Output "$ b"', 'Write-Output "$#"', 'Write-Output "100$"',
 ];
 
 const PS_DQ_SCRIPT = `
