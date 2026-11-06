@@ -36,6 +36,8 @@ export interface PipelineDeps {
   autoClassify?: ((prompt: ClassifierPrompt, signal: AbortSignal) => Promise<string>) | undefined;
   // 判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）
   lastUserRequest?: (() => string) | undefined;
+  // この会話の実行が、外から読んだ内容を一度でも読んだことがあるか（会話ごとの印）。あれば判定役は使わない。渡さない・読めないときも、あるとみなす
+  conversationTainted?: (() => boolean) | undefined;
   // 判定役を待つ時間の上限（ミリ秒。試験用。既定 20 秒）
   autoTimeoutMs?: number | undefined;
 }
@@ -71,6 +73,11 @@ export function effectiveMode(ctx: ToolContext, deps: PipelineDeps): PermissionM
   let now: PermissionMode = start;
   if (deps.permissionMode) { try { now = deps.permissionMode(); } catch { now = 'normal'; } }
   return stricterMode(start, now);
+}
+
+function conversationTainted(deps: PipelineDeps): boolean {
+  if (!deps.conversationTainted) return true;
+  try { return deps.conversationTainted(); } catch { return true; }
 }
 
 export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: PipelineDeps): Promise<ToolCallOutcome> {
@@ -176,7 +183,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   let approvalId: string | undefined;
   // ── 自動承認（段 8b）: 判定役に回してよい確かめだけを、判定役に聞く。許せば実行、確かめる・失敗・時間切れ・読めない返事なら、いつもの承認の札 ──
-  if (decision === 'ask' && deps.autoClassify && mayClassify({ mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime, tainted: ctx.taint.tainted })) {
+  if (decision === 'ask' && deps.autoClassify && mayClassify({ mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime, tainted: ctx.taint.tainted, conversationTainted: conversationTainted(deps) })) {
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
       deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });

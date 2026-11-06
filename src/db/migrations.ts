@@ -311,4 +311,11 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   ALTER TABLE conversations ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'normal' CHECK (permission_mode IN ('normal', 'auto', 'plan'));
   `,
+  // 12: 会話の「外から読んだことがある」印 ever_tainted（1 = この会話のチャットの実行が、Web・添付・シェルの取得を一度でも読んだ。付いたら外れない。自動承認の判定役は、この会話では使わない）。
+  // 前からある会話は、外から読んだ実行の記録（engine_runs.tainted）から付ける。実行の「自動承認で許可フォルダの外を読んだ」印 auto_read_outside（止めた・失敗した実行から、次の実行が引き継ぐ）
+  `
+  ALTER TABLE conversations ADD COLUMN ever_tainted INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE engine_runs ADD COLUMN auto_read_outside INTEGER NOT NULL DEFAULT 0;
+  UPDATE conversations SET ever_tainted = 1 WHERE id IN (SELECT conversation_id FROM engine_runs WHERE kind = 'chat' AND tainted = 1 AND conversation_id IS NOT NULL);
+  `,
 ];

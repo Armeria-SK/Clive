@@ -18,6 +18,8 @@ export interface ConversationRow {
   model_id: string | null;
   effort: string | null;
   permission_mode: PermissionMode;
+  // 1 = この会話のチャットの実行が、外から読んだ内容（Web・添付・シェルの取得）を一度でも読んだ。付いたら外れない
+  ever_tainted: number;
 }
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
@@ -114,6 +116,17 @@ export class Conversations {
     if (choice.modelId !== undefined) this.db.prepare('UPDATE conversations SET model_id = ? WHERE id = ?').run(choice.modelId, id);
     if (choice.effort !== undefined) this.db.prepare('UPDATE conversations SET effort = ? WHERE id = ?').run(choice.effort, id);
     if (choice.permissionMode !== undefined) this.db.prepare('UPDATE conversations SET permission_mode = ? WHERE id = ?').run(choice.permissionMode, id);
+  }
+
+  // 会話に「外から読んだことがある」印を付ける（一度付いたら外れない）。自動承認の判定役は、印のある会話では使わない
+  markTainted(id: string): void {
+    this.db.prepare('UPDATE conversations SET ever_tainted = 1 WHERE id = ?').run(id);
+  }
+
+  // 外から読んだことがある会話か。会話が読めないときは、ある側に倒す
+  everTainted(id: string): boolean {
+    const row = this.db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get(id) as { ever_tainted: number } | undefined;
+    return row === undefined || row.ever_tainted !== 0;
   }
 
   // 会話の権限モード。無い会話はふつう

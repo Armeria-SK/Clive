@@ -26,7 +26,7 @@ import { tempDir, testConfig } from './helpers.ts';
 const ALL_KINDS: AskKind[] = ['precheck', 'code', 'taint', 'policy', 'hook', 'outside_read', 'outside_write', 'risky_command', 'egress', 'git_write', 'opaque', 'persona', 'owner', 'web'];
 const ALLOW = '{"decision":"allow","reason":"依頼の範囲です"}';
 
-const gate = (over: Partial<AutoGate> = {}): AutoGate => ({ mode: 'auto', runKind: 'chat', decision: 'ask', kinds: new Set<AskKind>(['outside_read']), onceOnly: false, everyTime: false, tainted: false, ...over });
+const gate = (over: Partial<AutoGate> = {}): AutoGate => ({ mode: 'auto', runKind: 'chat', decision: 'ask', kinds: new Set<AskKind>(['outside_read']), onceOnly: false, everyTime: false, tainted: false, conversationTainted: false, ...over });
 
 test('mayClassify: 判定役に回すのは、自動承認の会話の実行で、ask のうち、すべての理由が outside_read か risky_command のときだけ', () => {
   assert.equal(mayClassify(gate()), true);
@@ -51,6 +51,7 @@ test('mayClassify: 自動承認でないモード・会話以外の実行・ask 
   assert.equal(mayClassify(gate({ onceOnly: true })), false);
   assert.equal(mayClassify(gate({ everyTime: true })), false);
   assert.equal(mayClassify(gate({ tainted: true })), false);
+  assert.equal(mayClassify(gate({ conversationTainted: true })), false, 'この会話で外から読んだことがあれば、この実行が読んでいなくても回さない');
 });
 
 test('parseVerdict: 読むのは返事の最後の行の JSON だけ。途中に答えらしいものがあっても、決まった形でなければ読まない', () => {
@@ -165,16 +166,17 @@ async function setup(t: { after: (fn: () => void) => void }, options: { mutate?:
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const prompts: ClassifierPrompt[] = [];
-  const state = { mode: options.mode ?? 'auto' as PermissionMode, classify: options.classify ?? (() => ALLOW) };
+  const state = { mode: options.mode ?? 'auto' as PermissionMode, classify: options.classify ?? (() => ALLOW), conversationTainted: false as boolean | 'throws' };
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: options.startMode ?? 'auto',
   };
-  const call = (name: string, args: unknown, c: ToolContext = ctx, extra: { noClassifier?: boolean; timeoutMs?: number } = {}) =>
+  const call = (name: string, args: unknown, c: ToolContext = ctx, extra: { noClassifier?: boolean; timeoutMs?: number; noConversationFlag?: boolean } = {}) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
       registry, approvals, db, emit: e => events.push(e), permissionMode: () => state.mode, lastUserRequest: () => '外のメモを読んで',
       ...(extra.noClassifier ? {} : { autoClassify: async (prompt: ClassifierPrompt, signal: AbortSignal) => { prompts.push(prompt); return state.classify(prompt, signal); } }),
       ...(extra.timeoutMs ? { autoTimeoutMs: extra.timeoutMs } : {}),
+      ...(extra.noConversationFlag ? {} : { conversationTainted: () => { if (state.conversationTainted === 'throws') throw new Error('読めない'); return state.conversationTainted; } }),
     });
   const readOutside = process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"`;
   return { paths, ctx, call, approvals, events, db, parsed, controller, prompts, state, outside, readOutside };
@@ -270,7 +272,7 @@ test('自動承認: 判定役が無い（モデルを呼べない）、利用者
 
   const s = await setup(t);
   const mute = (c: ToolContext) => runToolCall({ id: 'k', name: 'shell_run', arguments: { command: s.readOutside } }, c, {
-    registry: new ToolRegistry().register(shellRun), approvals: s.approvals, db: s.db, emit: e => s.events.push(e), permissionMode: () => 'auto', lastUserRequest: () => '',
+    registry: new ToolRegistry().register(shellRun), approvals: s.approvals, db: s.db, emit: e => s.events.push(e), permissionMode: () => 'auto', lastUserRequest: () => '', conversationTainted: () => false,
     autoClassify: async p => { s.prompts.push(p); return ALLOW; },
   });
   const pending = mute(s.ctx);
@@ -367,6 +369,23 @@ test('外から読んだ内容のあと（taint）は、判定役に回さない
   // 外から読んだ印は、ふつうのモードの動きを変えない（もともと ask）
   const normal = await setup(t, { mode: 'normal', startMode: 'normal' });
   assert.deepEqual((await askedKinds(normal, 'shell_run', { command: normal.readOutside }, { ...normal.ctx, taint: { tainted: true, sources: ['web_fetch'] } })).kinds, ['outside_read', 'taint']);
+});
+
+test('この会話で外から読んだことがある（前の実行の印）なら、自動承認は判定役を使わず、外を読むだけのコマンドも札になる。印を読めない・読む口が無いときも同じ', async t => {
+  const base = await setup(t);
+  assert.equal((await base.call('shell_run', { command: base.readOutside })).decidedBy, 'auto-mode', '比べる基準: 印が無ければ判定役が使われる');
+  assert.equal(base.prompts.length, 1);
+  for (const label of ['印あり', '印を読めない', '読む口が無い'] as const) {
+    const s = await setup(t);
+    s.state.conversationTainted = label === '印あり' ? true : label === '印を読めない' ? 'throws' : false;
+    const running = s.call('shell_run', { command: s.readOutside }, s.ctx, label === '読む口が無い' ? { noConversationFlag: true } : {});
+    const request = await waitPending(s);
+    assert.deepEqual([...(request.kinds ?? [])], ['outside_read'], `${label}: この実行は読んでいないので taint の理由は載らない`);
+    s.approvals.decide(request.id, 'deny');
+    assert.equal((await running).decidedBy, 'user', label);
+    assert.equal(s.prompts.length, 0, `${label}: 判定役を呼ばない`);
+    assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, label);
+  }
 });
 
 test('持ち主が書いた確かめ（tools.shell.ask）・Web の道具・人格の書き込みは、判定役に回さない', async t => {

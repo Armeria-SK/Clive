@@ -270,3 +270,103 @@ test('自動承認（エンジン）: シェルで外から取得したら、実
   await settled(s.app, sent.body.runId);
   assert.equal(autoRows(s).length, 0);
 });
+
+// ── 会話の印（一度でも外から読んだ会話は、判定役を使わない）と、自動承認で外を読んだ印の持ち越し ──
+
+test('自動承認（エンジン）: 一度でも外から読んだ実行のある会話は、最後まで返事を書いて「外から読んだ」扱いが切れたあとの別の実行でも、判定役を使わず札が出る', async t => {
+  const s = await webApp(t);
+  s.app.conversations.setChoice('c1', { permissionMode: 'auto' });
+  s.adapter().scripts = [toolCall('web_fetch', { url: 'https://news.example.com/' }), say('読みました')];
+  const first = s.app.engine.send('c1', 'このページを読んで');
+  assert.ok(first.ok);
+  await settled(s.app, first.runId);
+  await s.app.engine.wait(first.runId);
+  assert.equal(s.app.runs.get(first.runId)!.ok, 1);
+  assert.equal(s.app.conversations.everTainted('c1'), true);
+
+  s.adapter().scripts = [toolCall('shell_run', { command: s.command }), say(ALLOW), say('おわり')];
+  const second = s.app.engine.send('c1', '外のメモも読んで');
+  assert.ok(second.ok);
+  await waitFor(() => s.app.approvals.pending().length === 1, '会話の印のあとの札');
+  assert.deepEqual([...(s.app.approvals.pending()[0]!.kinds ?? [])], ['outside_read'], 'この実行は読んでいないので、taint の理由は載らない');
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 0, '判定役を呼ばない');
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+  await settled(s.app, second.runId);
+  assert.equal(s.app.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
+});
+
+test('自動承認（エンジン）: 外から読んだことの無い会話には印が付かない。シェルで取得した・添付を付けた会話には付く', async t => {
+  const s = await startApp(t);
+  const outside = outsideRead(s);
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), say('読みました')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, sent.body.runId);
+  assert.equal(s.app.conversations.everTainted(CONVERSATION), false, '外を読んだだけでは付かない（許可フォルダの外のファイルは、外から来た文ではない）');
+
+  const fetching = await startApp(t);
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/' : 'curl -s https://clive-test.invalid/';
+  fetching.adapter().scripts = [toolCall('shell_run', { command: fetch }), say('取得しました')];
+  const second = await post(fetching, '取得して');
+  await settled(fetching.app, second.body.runId);
+  assert.equal(fetching.app.conversations.everTainted(CONVERSATION), true);
+
+  const attached = await startApp(t);
+  const upload = attached.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
+  attached.adapter().scripts = [say('読みました')];
+  const third = await post(attached, REQUEST, { attachments: [upload.id] });
+  await settled(attached.app, third.body.runId);
+  assert.equal(attached.app.conversations.everTainted(CONVERSATION), true);
+});
+
+test('自動承認（エンジン）: 自動で外を読んだ実行を止めた・失敗したあとの次の実行も、シェルのコマンドは毎回確かめる（印の持ち越し）。最後まで返事を書いた実行の分は持ち越さない', async t => {
+  const untilStopped: Script = async function* (req) {
+    await new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }));
+  };
+  // 止めた実行
+  const stopped = await startApp(t);
+  const outside = outsideRead(stopped);
+  stopped.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), untilStopped];
+  const first = await post(stopped, REQUEST, { permissionMode: 'auto' });
+  await waitFor(() => stopped.adapter().calls.length >= 3, '外を読んだあとの 2 回目の呼び出し');
+  stopped.app.engine.stop(first.body.runId);
+  await settled(stopped.app, first.body.runId);
+  await stopped.app.engine.wait(first.body.runId);
+  assert.equal(stopped.app.runs.get(first.body.runId)!.auto_read_outside, 1, '実行の記録に残る');
+  stopped.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
+  const second = await post(stopped, '続けて、もう一度読んで', { permissionMode: 'auto' });
+  await waitFor(() => stopped.app.approvals.pending().length === 1, '持ち越した印のあとの札');
+  assert.deepEqual([...(stopped.app.approvals.pending()[0]!.kinds ?? [])].sort(), ['egress', 'outside_read']);
+  assert.equal(stopped.app.approvals.pending()[0]!.everyTime, true);
+  assert.equal(stopped.adapter().calls.filter(isClassifier).length, 1, '判定役を呼んだのは、止めた実行の外読みだけ');
+  stopped.app.approvals.decide(stopped.app.approvals.pending()[0]!.id, 'deny');
+  await settled(stopped.app, second.body.runId);
+
+  // 失敗した実行（使えるモデルが 1 つで、読んだあとの呼び出しが失敗する）
+  const failing = await startApp(t, { models: [fakeModel('only')] });
+  const outside2 = outsideRead(failing);
+  failing.adapter().scripts = [toolCall('shell_run', { command: outside2.command }), say(ALLOW), fail(new Error('接続できません'))];
+  const third = await post(failing, REQUEST, { permissionMode: 'auto' });
+  await settled(failing.app, third.body.runId);
+  await failing.app.engine.wait(third.body.runId);
+  assert.equal(failing.app.runs.get(third.body.runId)!.ok, 0);
+  assert.equal(failing.app.runs.get(third.body.runId)!.auto_read_outside, 1);
+  failing.adapter().scripts = [toolCall('shell_run', { command: outside2.command }), say(ALLOW), say('おわり')];
+  const fourth = await post(failing, '続けて', { permissionMode: 'auto' });
+  await waitFor(() => failing.app.approvals.pending().length === 1, '失敗した実行のあとの札');
+  assert.ok(failing.app.approvals.pending()[0]!.kinds?.includes('egress'));
+  failing.app.approvals.decide(failing.app.approvals.pending()[0]!.id, 'deny');
+  await settled(failing.app, fourth.body.runId);
+
+  // 最後まで返事を書いて終わった実行の印は、次の実行へ持ち越さない（次の外読みは、また判定役が見る）
+  const finished = await startApp(t);
+  const outside3 = outsideRead(finished);
+  finished.adapter().scripts = [toolCall('shell_run', { command: outside3.command }), say(ALLOW), say('読みました')];
+  const fifth = await post(finished, REQUEST, { permissionMode: 'auto' });
+  await settled(finished.app, fifth.body.runId);
+  await finished.app.engine.wait(fifth.body.runId);
+  finished.adapter().scripts = [toolCall('shell_run', { command: outside3.command }), say(ALLOW), say('おわり')];
+  const sixth = await post(finished, 'もう一度読んで', { permissionMode: 'auto' });
+  await settled(finished.app, sixth.body.runId);
+  assert.equal(finished.adapter().calls.filter(isClassifier).length, 2, '2 回目の実行の外読みも、判定役が見た');
+  assert.equal(autoRows(finished).length, 2);
+});

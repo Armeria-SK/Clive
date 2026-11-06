@@ -28,13 +28,15 @@ export interface AutoGate {
   onceOnly: boolean;
   everyTime: boolean;
   tainted: boolean;
+  // この会話の実行が、外から読んだ内容を一度でも読んだことがある（この実行が読んでいなくても。会話ごとの印）
+  conversationTainted: boolean;
 }
 
 // 判定役に回してよいか。すべての条件が満たされたときだけ true（1 つでも欠ければ、今までどおり人が確かめる）
 export function mayClassify(gate: AutoGate): boolean {
   if (gate.mode !== 'auto' || gate.runKind !== 'chat') return false;
   if (gate.decision !== 'ask') return false;
-  if (gate.onceOnly || gate.everyTime || gate.tainted) return false;
+  if (gate.onceOnly || gate.everyTime || gate.tainted || gate.conversationTainted) return false;
   if (gate.kinds.size === 0) return false;
   for (const kind of gate.kinds) if (!CLASSIFIABLE_KINDS.has(kind)) return false;
   return true;
