@@ -6,7 +6,7 @@ import { toast } from './toast.tsx';
 
 interface Props { conversation: Conversation; onClose: () => void; onDeleted: (id: string) => void }
 
-const GOES = ['delete.goes1', 'delete.goes2', 'delete.goes3'] as const;
+const GOES = ['delete.goes1', 'delete.goes2', 'delete.goes3', 'delete.goes4'] as const;
 const STAYS = ['delete.stays1', 'delete.stays2', 'delete.stays3'] as const;
 
 // 会話の削除の確かめ。元に戻せないので、消えるものと残るものを並べて見せてから消す

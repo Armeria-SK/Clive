@@ -144,13 +144,21 @@ export function createWebServer(app: App): WebServer {
     sendJson(res, 200, app.conversations.summaryOf(id));
   });
   // 会話を消す（元に戻せない。画面は消えるものと残るものを見せて確かめてから呼ぶ）。返事を作っている最中の会話と、チャット以外の会話（タスク・振り返り）は断る。
+  // この会話を材料にした振り返りが動いていれば、止めて終わるのを待ってから消す（その会話から作った振り返りの会話も、いっしょに消える）。
   // モデルの道具からは呼べない（道具を足していない）
-  router.add('DELETE', '/api/conversations/:id', ({ res, params }) => {
+  router.add('DELETE', '/api/conversations/:id', async ({ res, params }) => {
     const id = params[0]!;
     const conversation = app.conversations.get(id);
     if (!conversation) throw problem(404, 'not_found', 'conversation_missing');
     if (conversation.kind !== 'chat') throw problem(409, 'conflict', 'conversation_not_deletable');
-    if (app.engine.activeRuns().some(r => r.conversationId === id)) throw problem(409, 'conflict', 'conversation_running');
+    const running = () => app.engine.activeRuns().some(r => r.conversationId === id);
+    if (running()) throw problem(409, 'conflict', 'conversation_running');
+    const reviewConversations = new Set(app.reviews.runningFor(id).map(j => j.review_conversation_id));
+    const reviewRuns = app.engine.activeRuns().filter(r => r.kind === 'review' && reviewConversations.has(r.conversationId));
+    for (const run of reviewRuns) app.engine.stop(run.runId);
+    await Promise.all(reviewRuns.map(run => app.engine.wait(run.runId)));
+    if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
+    if (running()) throw problem(409, 'conflict', 'conversation_running');
     const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs') }, id);
     app.approvals.forgetConversation(id);
     if (erased.files.failed.length) app.log(`[WARN] 会話を消したあと、消せなかったファイルがあります: ${erased.files.failed.join(', ')}`);

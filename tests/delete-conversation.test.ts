@@ -53,13 +53,21 @@ async function populate(s: Awaited<ReturnType<typeof startApp>>) {
   app.tasks.event(task.id, 'context', 'clive', `会話 ${TARGET} から作成`, 'run-t');
   // 振り返りの予定
   app.db.prepare(`INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, status, created_at) VALUES ('idle', ?, ?, 'pending', 1)`).run(`idle:${TARGET}:3`, TARGET);
-  app.db.prepare(`INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, status, note, created_at, finished_at) VALUES ('idle', ?, ?, 'done', '済み', 1, 2)`).run(`idle:${TARGET}:2`, TARGET);
+  // この会話を材料にした振り返り（記憶の振り返りの会話）。終わった振り返りの記録は、消す会話の発言を写した会話と、返事を載せたメモを持つ。ほかの会話の振り返りは巻き込まない
+  const review = app.conversations.create({ kind: 'task', title: '振り返り: 会話が途切れた' });
+  app.conversations.append(review.id, { role: 'user', content: `振り返ってください: ${SECRET} の会話` }, 'run-rv');
+  app.conversations.append(review.id, { role: 'assistant', content: `覚えました: ${SECRET}` }, 'run-rv');
+  app.db.prepare(`INSERT INTO engine_runs (id, kind, conversation_id, model_id, started_at, ended_at, ok, iterations, tool_calls, input_tokens, flags) VALUES ('run-rv', 'review', ?, 'm1', 1000, 2000, 1, 1, 0, 99, '[]')`).run(review.id);
+  app.db.prepare(`INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, status, run_id, review_conversation_id, note, created_at, finished_at) VALUES ('idle', ?, ?, 'done', 'run-rv', ?, ?, 1, 2)`).run(`idle:${TARGET}:2`, TARGET, review.id, `覚えました: ${SECRET}`);
+  const otherReview = app.conversations.create({ kind: 'task', title: '振り返り: 別の会話' });
+  app.conversations.append(otherReview.id, { role: 'user', content: '別の会話の振り返り' }, 'run-rv2');
+  app.db.prepare(`INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, status, run_id, review_conversation_id, note, created_at, finished_at) VALUES ('idle', ?, ?, 'done', 'run-rv2', ?, '済み', 1, 2)`).run(`idle:${OTHER}:2`, OTHER, otherReview.id);
   // 承認の「この会話では許可」(メモリ上)
   const pending = app.approvals.request({ runId: 'run-g', conversationId: TARGET, tool: 'shell_run', input: { command: 'ls' }, title: 't', body: 'b', reasons: [], details: [] }, 60_000, new AbortController().signal);
   app.approvals.decide(app.approvals.pending()[0]!.id, 'conversation');
   await pending;
   assert.equal(app.approvals.isGranted(TARGET, inputHash('shell_run', { command: 'ls' })), true, '前提: 許可を覚えている');
-  return { upload, shared, only, fullOutput, otherOutput, taskId: task.id };
+  return { upload, shared, only, fullOutput, otherOutput, taskId: task.id, reviewId: review.id, otherReviewId: otherReview.id };
 }
 
 test('削除: 発言・添付・要約・固定の system・承認・kv・検索の索引が消え、実行の数字だけが本文なしで残る。残るもの・ほかの会話は壊れない', async t => {
@@ -109,9 +117,20 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   assert.equal((task as unknown as { created_in_conversation: string | null }).created_in_conversation, null);
   assert.ok(!(app.db.prepare("SELECT content FROM task_events WHERE kind = 'context'").all() as Array<{ content: string }>).some(e => e.content.includes(TARGET)), 'タスクの経過に会話の ID が残らない');
   const jobs = app.db.prepare('SELECT status, conversation_id AS c, dedup_key AS k FROM memory_jobs').all() as Array<{ status: string; c: string | null; k: string }>;
-  assert.deepEqual(jobs.map(j => j.status), ['done'], '待っている振り返りは消す');
+  assert.deepEqual(jobs.map(j => j.status), ['done', 'done'], '待っている振り返りは消す（終わった記録は 2 件残る）');
   assert.equal(jobs[0]!.c, null);
   assert.ok(!jobs[0]!.k.includes(TARGET));
+  // この会話を材料にした振り返りの会話は、記録ごと消える。ほかの会話の振り返りは残る
+  assert.equal(res.body.reviews, 1);
+  assert.equal(app.conversations.get(p.reviewId), undefined, '振り返りの会話');
+  assert.deepEqual(app.conversations.messages(p.reviewId), []);
+  assert.equal(app.runs.get('run-rv')!.conversation_id, null, '振り返りの実行の記録も、会話との結び付きと本文を消して数字だけ残る');
+  assert.equal(app.runs.get('run-rv')!.input_tokens, 99);
+  const jobRow = app.db.prepare("SELECT conversation_id AS c, review_conversation_id AS r, note FROM memory_jobs WHERE run_id = 'run-rv'").get() as { c: string | null; r: string | null; note: string | null };
+  assert.deepEqual({ ...jobRow }, { c: null, r: null, note: null }, '振り返りの記録から、会話の ID と返事のメモが消える');
+  assert.ok(app.conversations.get(p.otherReviewId), 'ほかの会話の振り返りは残る');
+  assert.equal(app.conversations.messages(p.otherReviewId).length, 1);
+  assert.equal((app.db.prepare("SELECT review_conversation_id AS r FROM memory_jobs WHERE run_id = 'run-rv2'").get() as { r: string }).r, p.otherReviewId);
   // ほかの会話は無傷
   assert.equal(app.conversations.messages(OTHER).length, 1);
   assert.ok(searchHistory(app.db, '別の話', { limit: 5 }).length === 0 || true);
@@ -122,7 +141,7 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   for (const table of tables) {
     for (const row of app.db.prepare(`SELECT * FROM ${table}`).all() as Array<Record<string, unknown>>) {
       for (const [column, value] of Object.entries(row)) {
-        if (typeof value === 'string' && (value.includes(TARGET) || value.includes(SECRET))) leftovers.push(`${table}.${column}`);
+        if (typeof value === 'string' && (value.includes(TARGET) || value.includes(SECRET) || value.includes(p.reviewId))) leftovers.push(`${table}.${column}`);
       }
     }
   }
@@ -180,4 +199,40 @@ test('モデルの道具には、会話を消すものが無い（道具の一�
   assert.ok(!names.some(n => /conversation|chat/iu.test(n)));
   const fetchTool = tools.find(t => t.name === 'web_fetch')!;
   assert.ok(!('method' in ((fetchTool.input as { properties?: Record<string, unknown> }).properties ?? {})), 'web_fetch は GET だけ（method を選べない）');
+});
+
+test('削除: この会話の振り返りが動いている最中なら、止めて終わるのを待ってから消す（振り返りの書き込みも、会話も、記録も残らない）', async t => {
+  const s = await startApp(t);
+  const { app } = s;
+  app.conversations.create({ id: TARGET, title: `${SECRET} の会話` });
+  app.conversations.append(TARGET, { role: 'user', content: `${SECRET} について話した` });
+  app.conversations.append(TARGET, { role: 'assistant', content: 'はい' });
+  // 振り返りの実行は、返事の途中まで書いたあと、止められるまで待つ（止められると、途中までの文を会話に保存する。消したあとに残らないこと・会話を作り直さないことを見る）
+  s.adapter().scripts = [async function* (req) {
+    yield { type: 'text', delta: `${SECRET} を覚えようとしています` };
+    await new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }));
+  }];
+  app.reviews.enqueue('manual', `manual:${TARGET}`, { conversationId: TARGET });
+  const tick = app.worker.tick();
+  try {
+    await waitFor(() => app.engine.activeRuns().some(r => r.kind === 'review'), '振り返りの実行');
+    const review = app.engine.activeRuns().find(r => r.kind === 'review')!;
+    const res = await s.json(`/api/conversations/${TARGET}`, 'DELETE');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.reviews, 1);
+    assert.equal(app.engine.activeRuns().length, 0, '振り返りの実行は止まっている');
+    assert.equal(app.runs.get(review.runId)!.error_kind, 'cancelled');
+    assert.equal(app.conversations.get(review.conversationId), undefined, '振り返りの会話も消える');
+    assert.equal(app.conversations.get(TARGET), undefined);
+    await tick;
+    assert.equal(app.conversations.get(review.conversationId), undefined, '振り返りの終わりの処理が、消した会話を作り直さない');
+    assert.equal(app.kv.get(`review:upto:${TARGET}`), undefined);
+    const jobs = app.db.prepare('SELECT conversation_id AS c, review_conversation_id AS r, note FROM memory_jobs').all() as Array<{ c: string | null; r: string | null; note: string | null }>;
+    assert.ok(jobs.every(j => j.c === null && j.r === null && !String(j.note ?? '').includes(SECRET)));
+    for (const table of ['conversations', 'messages', 'memory_jobs', 'kv', 'engine_runs']) {
+      for (const row of app.db.prepare(`SELECT * FROM ${table}`).all() as Array<Record<string, unknown>>) {
+        for (const value of Object.values(row)) assert.ok(!(typeof value === 'string' && (value.includes(TARGET) || value.includes(review.conversationId))), `${table} に残っている`);
+      }
+    }
+  } finally { app.engine.stopAll(); await tick; }
 });

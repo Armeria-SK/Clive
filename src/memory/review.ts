@@ -65,6 +65,11 @@ export class ReviewJobs {
     this.#db.prepare('UPDATE memory_jobs SET status = ?, note = ?, finished_at = ? WHERE id = ?').run(status, note, this.#now(), id);
   }
 
+  // この会話を材料に、いま動いている振り返り
+  runningFor(conversationId: string): ReviewJob[] {
+    return this.#db.prepare("SELECT * FROM memory_jobs WHERE conversation_id = ? AND status = 'running'").all(conversationId) as unknown as ReviewJob[];
+  }
+
   requeue(id: number): void {
     this.#db.prepare("UPDATE memory_jobs SET status = 'pending', run_id = NULL WHERE id = ?").run(id);
   }

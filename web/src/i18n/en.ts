@@ -220,6 +220,7 @@ export const en: Dict = {
   'delete.goes1': 'The messages and the attached files',
   'delete.goes2': 'The summary so far and the search index',
   'delete.goes3': 'The approval records and the settings kept only for this chat',
+  'delete.goes4': 'The memory-review records made from this chat (the review conversations and their notes)',
   'delete.stays': 'What stays',
   'delete.stays1': 'The usage and cost numbers (the text is removed)',
   'delete.stays2': 'Tasks made from this chat (their link to the chat is removed)',
