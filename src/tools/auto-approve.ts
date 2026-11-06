@@ -88,6 +88,11 @@ export function buildClassifierPrompt(input: ClassifierInput): ClassifierPrompt 
   return { system, user };
 }
 
+// 判定役の返事が max_tokens で途中で切れた。切れた返事は、最後の行が答えに見えても使わない（読めない返事と同じに、確かめる）
+export class TruncatedReply extends Error {
+  constructor() { super('the classifier reply was cut off by max_tokens'); }
+}
+
 export interface ParsedVerdict { decision: 'allow' | 'ask'; reason: string }
 
 const oneLine = (text: string) => redactSecrets(text.replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim()).slice(0, REASON_LIMIT);
@@ -133,7 +138,8 @@ export async function autoDecide(
     if (combined.aborted) return { decision: 'ask', reason: '', failed: timeout.aborted ? 'timeout' : 'error' };
     const parsed = typeof reply === 'string' ? parseVerdict(reply) : undefined;
     return parsed ?? { decision: 'ask', reason: '', failed: 'unparsable' };
-  } catch {
+  } catch (error) {
+    if (error instanceof TruncatedReply) return { decision: 'ask', reason: '', failed: 'unparsable' };
     return { decision: 'ask', reason: '', failed: timeout.aborted ? 'timeout' : 'error' };
   }
 }

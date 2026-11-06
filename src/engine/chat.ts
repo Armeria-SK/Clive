@@ -11,7 +11,7 @@ import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
-import { USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
+import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
 import { PLAN_EFFECTS, REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
@@ -678,6 +678,7 @@ export class ChatEngine {
         model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, model.maxOutputTokens), signal,
       })) {
         if (event.type === 'text') text += event.delta;
+        else if (event.type === 'done' && event.stop === 'max_tokens') throw new TruncatedReply();
       }
       return text;
     } finally { release?.(); }

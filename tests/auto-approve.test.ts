@@ -10,7 +10,7 @@ import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { PERMISSION_MODES, type PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
-import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, CLASSIFIABLE_KINDS, mayClassify, parseVerdict, type AutoGate, type ClassifierInput, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
+import { ACTION_BODY_LIMIT, autoDecide, buildClassifierPrompt, CLASSIFIABLE_KINDS, mayClassify, parseVerdict, TruncatedReply, type AutoGate, type ClassifierInput, type ClassifierPrompt } from '../src/tools/auto-approve.ts';
 import { fileRead, fileWrite } from '../src/tools/builtin/files.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { webFetch } from '../src/tools/builtin/web.ts';
@@ -92,6 +92,7 @@ test('autoDecide: 判定役の失敗・時間切れ・読めない返事・取�
   assert.equal((await autoDecide(input(), async () => { throw new Error('接続できません'); }, signal)).failed, 'error');
   assert.equal((await autoDecide(input(), async () => 'わかりません', signal)).failed, 'unparsable');
   assert.equal((await autoDecide(input(), async () => '', signal)).failed, 'unparsable');
+  assert.deepEqual(await autoDecide(input(), async () => { throw new TruncatedReply(); }, signal), { decision: 'ask', reason: '', failed: 'unparsable' }, 'max_tokens で切れた返事は、読めない返事と同じに確かめる');
   assert.equal((await autoDecide(input(), async () => undefined as unknown as string, signal)).failed, 'unparsable');
   const started = Date.now();
   const hung = await autoDecide(input(), () => new Promise<string>(() => undefined), signal, 40);

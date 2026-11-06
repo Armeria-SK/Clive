@@ -370,3 +370,17 @@ test('自動承認（エンジン）: 自動で外を読んだ実行を止めた
   assert.equal(finished.adapter().calls.filter(isClassifier).length, 2, '2 回目の実行の外読みも、判定役が見た');
   assert.equal(autoRows(finished).length, 2);
 });
+
+test('自動承認（エンジン）: 判定役の返事が max_tokens で途中で切れたら、最後の行が allow に見えても許さず、札が出る', async t => {
+  const s = await startApp(t);
+  const outside = outsideRead(s);
+  const cutOff = (text: string): Script => async function* () { yield { type: 'text', delta: text }; yield { type: 'done', stop: 'max_tokens' as StopReason }; };
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), cutOff(ALLOW), say('読みました')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await waitFor(() => s.app.approvals.pending().length === 1, '返事が切れた判定役のあとの札');
+  assert.match(s.app.approvals.pending()[0]!.reasons.join('\n'), /答えられなかった/u);
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1);
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+  await settled(s.app, sent.body.runId);
+  assert.equal(autoRows(s).length, 0);
+});
