@@ -6,12 +6,33 @@ import { openZip } from '../src/shared/zip.ts';
 import { xlsxText } from '../src/shared/office-text.ts';
 
 test('表: startsLikeFormula は式の始まりを見る', () => {
-  for (const t of ['=1+1', '+1', '-1', '@SUM(A1)', '\tx', '\rx', '\uFF1D1']) {
+  for (const t of ['=1+1', '+1', '-1', '@SUM(A1)', '\tx', '\rx', '\nx', '\uFF1D1']) {
     assert.equal(startsLikeFormula(t), true, `true: ${JSON.stringify(t)}`);
   }
-  for (const t of ['a=1', '', ' =1', '1-2']) {
+  for (const t of ['a=1', '', '1-2', '   ', ' a=1', '\u3000x', '\uFEFF', '\u200B']) {
     assert.equal(startsLikeFormula(t), false, `false: ${JSON.stringify(t)}`);
   }
+});
+
+test('表: startsLikeFormula は先頭の空白・全角の空白・改行・BOM・幅の無い文字を飛ばしてから式の始まりを見る', () => {
+  for (const t of [' =1+1', '\u3000=1+1', '\n=1+1', '\uFEFF=1+1', '\u200B=1', '\u200C=1', '\u200D=1', '  \t =1', '\u3000\u200B\uFEFF@SUM(A1)', ' \uFF1D1', '\u00A0-1']) {
+    assert.equal(startsLikeFormula(t), true, `true: ${JSON.stringify(t)}`);
+  }
+});
+
+test('表: 先頭の空白などを飛ばして式に見えるセルも、CSV では \' を付け、xlsx では quotePrefix にして、数えて知らせる', () => {
+  const cells = [' =1+1', '\u3000=1+1', '\n=1+1', '\uFEFF=1+1', '\u200B=1'];
+  const csv = csvText([cells]);
+  assert.equal(csv.neutralized, 5);
+  assert.equal(csv.text, '\uFEFF' + "' =1+1,'\u3000=1+1,\"'\n=1+1\",'\uFEFF=1+1,'\u200B=1\r\n");
+  const { bytes, neutralized } = xlsxBytes([cells]);
+  assert.equal(neutralized, 5);
+  const opened = openZip(bytes);
+  assert.equal(opened.ok, true);
+  const sheet = opened.zip.read('xl/worksheets/sheet1.xml');
+  assert.equal(sheet.ok, true);
+  const xml = sheet.ok ? sheet.data.toString('utf8') : '';
+  assert.equal(xml.split('s="1"').length - 1, 5, '5 つとも quotePrefix の書式');
 });
 
 test('表: csvText は式を無害化して引用符を逃す', () => {

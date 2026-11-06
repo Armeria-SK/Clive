@@ -99,7 +99,7 @@ test('table_write: xlsx は式を書かず、文字は変えずに文字のセ�
   assert.ok(xml.includes('s="1"'), '式に見える文字のセルに quotePrefix の書式');
   assert.ok(!xml.includes("'=1+1"), 'xlsx には \' を足さない');
   const back = await docRead.execute({ path: 'a.xlsx' }, s.ctx);
-  assert.equal(back.content, '[シート: Sheet1]\na\t1\n=1+1\t\tx');
+  assert.ok(back.content.endsWith('<<<\n[シート: Sheet1]\na\t1\n=1+1\t\tx\n>>>'), back.content);
 });
 
 test('table_write: 既にあるファイルは overwrite: true のときだけ上書きし、そうでなければ中身を変えない', async t => {
@@ -134,6 +134,60 @@ test('table_write: execute を直接呼んでも、overwrite なしでは既に�
     const dir = await tableWrite.execute({ path: 'd.csv', rows: [['new']], ...(overwrite === undefined ? {} : { overwrite }) }, s.ctx);
     assert.equal(dir.isError, true);
     assert.equal(dir.content, 'フォルダです: d.csv');
+  }
+});
+
+test('table_write: 確かめたあとに別の誰かが作ったファイルは、overwrite なしでは黙って置き換えず、既にあると答える（csv も xlsx も）', async t => {
+  const s = setup(t);
+  const statOriginal = fs.statSync;
+  const writeOriginal = fs.writeFileSync;
+  const raced = new Set<string>();
+  const spy = mock.method(fs, 'statSync', ((path: fs.PathLike, ...rest: unknown[]) => {
+    const found = (statOriginal as (...args: unknown[]) => unknown)(path, ...rest);
+    const name = String(path);
+    if (found === undefined && /race\.(csv|xlsx)$/u.test(name) && (rest[0] as { throwIfNoEntry?: boolean } | undefined)?.throwIfNoEntry === false && !raced.has(name)) {
+      raced.add(name);
+      (writeOriginal as (...args: unknown[]) => void)(name, 'racer');
+    }
+    return found;
+  }) as typeof fs.statSync);
+  syncBuiltinESMExports();
+  try {
+    for (const args of [{ path: 'race.csv', rows: [['new']] }, { path: 'race.xlsx', rows: [['new']], overwrite: false }]) {
+      const out = await s.call(args);
+      assert.equal(out.output.isError, true, args.path);
+      assert.equal(out.output.content, `既にあります: ${args.path}`);
+      assert.equal(read(s, args.path).toString('utf8'), 'racer', `${args.path}: 確かめたあとに作られたファイルを置き換えてしまった`);
+    }
+    assert.equal(raced.size, 2, '確かめたあとにファイルを作る細工が両方で働いた');
+    assert.deepEqual(listing(s).filter(name => name.endsWith('.tmp')), [], '一時ファイルが残らない');
+    const direct = await tableWrite.execute({ path: 'race.csv', rows: [['new']] }, s.ctx);
+    assert.equal(direct.isError, true);
+    assert.equal(read(s, 'race.csv').toString('utf8'), 'racer');
+  } finally {
+    spy.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test('table_write: overwrite: true なら、確かめたあとに作られたファイルも置き換える（今までどおり）', async t => {
+  const s = setup(t);
+  const statOriginal = fs.statSync;
+  const writeOriginal = fs.writeFileSync;
+  const spy = mock.method(fs, 'statSync', ((path: fs.PathLike, ...rest: unknown[]) => {
+    const found = (statOriginal as (...args: unknown[]) => unknown)(path, ...rest);
+    if (found === undefined && String(path).endsWith('race.csv') && (rest[0] as { throwIfNoEntry?: boolean } | undefined)?.throwIfNoEntry === false) (writeOriginal as (...args: unknown[]) => void)(String(path), 'racer');
+    return found;
+  }) as typeof fs.statSync);
+  syncBuiltinESMExports();
+  try {
+    const out = await s.call({ path: 'race.csv', rows: [['new']], overwrite: true });
+    assert.ok(!out.output.isError, out.output.content);
+    assert.equal(read(s, 'race.csv').toString('utf8'), `${BOM}new\r\n`);
+    assert.deepEqual(listing(s).filter(name => name.endsWith('.tmp')), []);
+  } finally {
+    spy.mock.restore();
+    syncBuiltinESMExports();
   }
 });
 
@@ -282,10 +336,11 @@ test('table_write: 文字の合計は 500 万文字まで。1 セル 32,767 文�
   const rows = (count: number): string[][] => Array.from({ length: count }, () => [cell]);
   const over = await s.call({ path: 'big.csv', rows: rows(153) });
   assert.equal(over.decision, 'deny');
-  assert.match(over.output.content, /失敗しました: characters 5,013,351 > 5,000,000/u);
+  assert.match(over.output.content, /文字の合計が多すぎます（5,013,351 文字。5,000,000 文字まで）/u);
+  assert.doesNotMatch(over.output.content, /失敗しました|characters/u);
   const direct = await tableWrite.execute({ path: 'big.csv', rows: rows(153) }, s.ctx);
   assert.equal(direct.isError, true);
-  assert.equal(direct.content, '失敗しました: characters 5,013,351 > 5,000,000');
+  assert.equal(direct.content, '文字の合計が多すぎます（5,013,351 文字。5,000,000 文字まで）');
   assert.deepEqual(listing(s), []);
   const within = await s.call({ path: 'ok.csv', rows: rows(152) });
   assert.ok(!within.output.isError, within.output.content);
@@ -403,6 +458,7 @@ test('table_write: 英語の設定では、結果にも失敗の文にも日本�
   assert.equal(results[4]!.output.content, 'This is a folder: dir.csv');
   assert.match(results[5]!.output.content, /Only \.csv and \.xlsx can be written: a\.txt/u);
   assert.match(results[7]!.output.content, /There are too many cells \(100,100 cells, up to 100,000 cells\)/u);
+  assert.match(results[8]!.output.content, /The table has too many characters in total \(5,013,351 characters, up to 5,000,000 characters\)/u);
   const direct = await tableWrite.execute({ path: 'e.txt', rows: [['x']] }, s.ctx);
   assert.doesNotMatch(direct.content, JAPANESE);
 });

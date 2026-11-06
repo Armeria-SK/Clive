@@ -1,4 +1,4 @@
-import { mkdirSync, statSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, statSync, unlinkSync } from 'node:fs';
 import { dirname, extname, isAbsolute, relative } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { Language } from '../../config/schema.ts';
@@ -47,8 +47,18 @@ function sizeProblem(rows: ReadonlyArray<ReadonlyArray<Cell>>, language: Languag
     for (const cell of row) if (typeof cell === 'string') chars += cell.length;
   }
   if (cells > TABLE_MAX_CELLS) return toolText(language, 'table.too_many', { count: cells.toLocaleString('en-US'), max: TABLE_MAX_CELLS.toLocaleString('en-US') });
-  if (chars > TABLE_MAX_TOTAL_CHARS) return toolText(language, 'failed', { detail: `characters ${chars.toLocaleString('en-US')} > ${TABLE_MAX_TOTAL_CHARS.toLocaleString('en-US')}` });
+  if (chars > TABLE_MAX_TOTAL_CHARS) return toolText(language, 'table.too_big', { count: chars.toLocaleString('en-US'), max: TABLE_MAX_TOTAL_CHARS.toLocaleString('en-US') });
   return undefined;
+}
+
+function claimNewFile(abs: string): boolean {
+  try {
+    closeSync(openSync(abs, 'wx'));
+    return true;
+  } catch (thrown) {
+    if ((thrown as { code?: unknown } | null)?.code === 'EEXIST') return false;
+    throw thrown;
+  }
 }
 
 export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | number | null>>; overwrite?: boolean }> = {
@@ -90,15 +100,24 @@ export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | numb
       const stat = statSync(abs, { throwIfNoEntry: false });
       if (stat?.isDirectory()) return error(toolText(language, 'file.is_dir', { path }));
       if (stat && input.overwrite !== true) return error(toolText(language, 'file.exists', { path }));
+      let content: string | Uint8Array;
       let neutralized: number;
       if (format === '.csv') {
         const made = csvText(input.rows);
-        atomicWriteFile(abs, made.text);
+        content = made.text;
         neutralized = made.neutralized;
       } else {
         const made = xlsxBytes(input.rows);
-        atomicWriteFile(abs, made.bytes);
+        content = made.bytes;
         neutralized = made.neutralized;
+      }
+      const claimed = input.overwrite !== true;
+      if (claimed && !claimNewFile(abs)) return error(toolText(language, 'file.exists', { path }));
+      try {
+        atomicWriteFile(abs, content);
+      } catch (thrown) {
+        if (claimed) try { unlinkSync(abs); } catch { }
+        throw thrown;
       }
       const cols = input.rows.reduce((max, row) => Math.max(max, row.length), 0);
       const wrote = toolText(language, 'table.wrote', { path, rows: input.rows.length, cols });

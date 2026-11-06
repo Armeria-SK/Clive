@@ -14,7 +14,7 @@ const WORKSHEET_PATH = /^xl\/worksheets\/[^/]+\.xml$/;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/gu;
 
 export type OfficeFailure = 'encrypted' | 'damaged' | 'too_large' | 'dtd' | 'no_text';
-export type OfficeText = { ok: true; text: string; truncated: boolean } | { ok: false; reason: OfficeFailure; detail?: string };
+export type OfficeText = { ok: true; text: string; truncated: boolean; countLimit?: true } | { ok: false; reason: OfficeFailure; detail?: string };
 
 type OfficeError = Extract<OfficeText, { ok: false }>;
 type Part = { source: string } | { missing: true } | { error: OfficeError };
@@ -164,11 +164,12 @@ export function xlsxText(zip: ZipArchive, language: Language): OfficeText {
   if ('error' in book) return book.error;
 
   let truncated = false;
+  let countCut = false;
   const sheets: Array<{ name: string; id: string | undefined }> = [];
   const bookResult = parseXml(book.source, {
     open: (name, attrs) => {
       if (localName(name) !== 'sheet') return;
-      if (sheets.length >= XLSX_MAX_SHEETS) { truncated = true; return 'stop'; }
+      if (sheets.length >= XLSX_MAX_SHEETS) { countCut = true; return 'stop'; }
       sheets.push({ name: attrs['name'] ?? '', id: relationshipId(attrs) });
     },
   });
@@ -206,7 +207,7 @@ export function xlsxText(zip: ZipArchive, language: Language): OfficeText {
       open: (name) => {
         const local = localName(name);
         if (local === 'si') {
-          if (strings.length >= XLSX_MAX_STRINGS) { truncated = true; return 'stop'; }
+          if (strings.length >= XLSX_MAX_STRINGS) { countCut = true; return 'stop'; }
           inSi = true;
           inT = 0;
           inPhonetic = 0;
@@ -303,6 +304,7 @@ export function xlsxText(zip: ZipArchive, language: Language): OfficeText {
       } else {
         text = valueText;
       }
+      text = text.replace(CONTROL, ' ');
       if (text === '') return;
       if (cellColumn < lastColumn) ordered = false;
       lastColumn = cellColumn;
@@ -325,7 +327,7 @@ export function xlsxText(zip: ZipArchive, language: Language): OfficeText {
           }
           case 'c': {
             cellsSeen += 1;
-            if (cellsSeen > XLSX_MAX_CELLS) { truncated = true; stopped = true; return 'stop'; }
+            if (cellsSeen > XLSX_MAX_CELLS) { countCut = true; stopped = true; return 'stop'; }
             cellColumn = columnOf(attrs['r']) ?? previousColumn + 1;
             previousColumn = cellColumn;
             cellType = attrs['t'] ?? '';
@@ -377,5 +379,7 @@ export function xlsxText(zip: ZipArchive, language: Language): OfficeText {
   }
 
   if (sheetsRead === 0 || !hasRow) return { ok: false, reason: 'no_text' };
-  return { ok: true, text: lines.join('\n'), truncated };
+  const text = lines.join('\n');
+  if (countCut && !truncated) return { ok: true, text, truncated: true, countLimit: true };
+  return { ok: true, text, truncated: truncated || countCut };
 }

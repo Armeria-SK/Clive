@@ -7,10 +7,13 @@ export const TABLE_MAX_CELLS = 100_000;
 export const TABLE_MAX_CELL_CHARS = 32_767; // Excel の 1 セルの上限
 
 // 式の始まりに見えやすい 1 文字。全角は日本語の Excel で式に化けるかを確かめていないので、安全側で含める
-const FORMULA_LEADS = ['=', '+', '-', '@', '\t', '\r', '\uFF1D', '\uFF0B', '\uFF0D', '\uFF20'];
+const FORMULA_LEADS = ['=', '+', '-', '@', '\t', '\r', '\n', '\uFF1D', '\uFF0B', '\uFF0D', '\uFF20'];
+
+const SKIPPED_LEADING = /^[\s\uFEFF\u200B-\u200D]+/u;
 
 export function startsLikeFormula(text: string): boolean {
-  return FORMULA_LEADS.some((lead) => text.startsWith(lead));
+  const leads = (value: string): boolean => FORMULA_LEADS.some((lead) => value.startsWith(lead));
+  return leads(text) || leads(text.replace(SKIPPED_LEADING, ''));
 }
 
 export function csvText(rows: ReadonlyArray<ReadonlyArray<Cell>>): { text: string; neutralized: number } {

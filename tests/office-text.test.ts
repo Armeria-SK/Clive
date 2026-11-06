@@ -301,12 +301,14 @@ test('xlsxText: 共有の文字は 200,000 個まで。超えた分は空で、t
   const result = xlsxText(zip, 'ja');
   assert.equal(textOf(result), '[シート: Sheet1]\nLAST');
   assert.equal(result.ok && result.truncated, true);
+  assert.equal(result.ok && result.countLimit, true, '文字数の上限ではなく、個数の上限で切れた印');
 });
 
 test('xlsxText: 読むセルの合計は 1,000,000 個まで。超えたら止めて truncated', () => {
   const over = xlsxText(oneSheet(`<row r="1">${inline('A1', 'x')}</row><row r="2">${'<c/>'.repeat(1_000_000)}</row>`, {}, LOOSE), 'ja');
   assert.equal(textOf(over), '[シート: Sheet1]\nx');
   assert.equal(over.ok && over.truncated, true);
+  assert.equal(over.ok && over.countLimit, true);
   const exact = xlsxText(oneSheet(`<row r="1">${inline('A1', 'x')}</row><row r="2">${'<c/>'.repeat(999_999)}</row>`, {}, LOOSE), 'ja');
   assert.equal(textOf(exact), '[シート: Sheet1]\nx');
   assert.equal(exact.ok && exact.truncated, false);
@@ -324,6 +326,17 @@ test('xlsxText: シートは 256 個まで。超えた分は読まず truncated'
   assert.ok(text.includes('[シート: S256]\nv256'));
   assert.ok(!text.includes('S257'));
   assert.equal(result.ok && result.truncated, true);
+  assert.equal(result.ok && result.countLimit, true);
+});
+
+test('xlsxText: 文字数の上限で切れたときは truncated だけで、個数の上限の印は付かない。両方に達したら文字数の方だけ', () => {
+  const chars = xlsxText(oneSheet(`<row>${inline('A1', 'a'.repeat(OFFICE_TEXT_MAX + 10))}</row>`), 'ja');
+  assert.equal(chars.ok && chars.truncated, true);
+  assert.equal(chars.ok && chars.countLimit, undefined);
+  const items = '<si><t>a</t></si>'.repeat(200_001);
+  const both = xlsxText(oneSheet(`<row>${inline('A1', 'b'.repeat(OFFICE_TEXT_MAX + 10))}</row>`, { 'xl/sharedStrings.xml': sstXml(items) }, LOOSE), 'ja');
+  assert.equal(both.ok && both.truncated, true);
+  assert.equal(both.ok && both.countLimit, undefined);
 });
 
 test('xlsxText: xl/workbook.xml の無い ZIP は damaged', () => {
@@ -405,4 +418,19 @@ test('docxText・xlsxText: 上限の切れ目がサロゲートペアの途中�
 
 test('xlsxText: v の無い b のセルは FALSE にせず空として扱う', () => {
   assert.equal(textOf(xlsxText(oneSheet(`<row><c r="A1" t="b"/><c r="B1" t="b"><v>0</v></c>${inline('C1', 'x')}</row>`), 'ja')), '[シート: Sheet1]\n\tFALSE\tx');
+});
+
+test('xlsxText: セルの文字のタブ・改行・復帰は空白にして、表の形を崩さず、偽の行や [シート: …] の見出しを作らせない', () => {
+  const zip = oneSheet(
+    `<row r="1">${inline('A1', 'x&#9;y')}${inline('B1', 'p&#10;q')}<c r="C1" t="s"><v>0</v></c><c r="D1" t="str"><v>m&#13;n</v></c></row>`
+    + `<row r="2">${inline('A2', 'end\n[シート: 偽]\r\nfake&#9;row')}</row>`
+    + `<row r="3">${inline('A3', '\n[シート: 偽]')}</row>`,
+    { 'xl/sharedStrings.xml': sstXml('<si><t>s1&#10;s2</t></si>') },
+  );
+  const text = textOf(xlsxText(zip, 'ja'));
+  assert.equal(text, '[シート: Sheet1]\nx y\tp q\ts1 s2\tm n\nend [シート: 偽]  fake row\n [シート: 偽]');
+  const lines = text.split('\n');
+  assert.equal(lines.length, 4, '見出し 1 行 + 行 3 つ');
+  assert.deepEqual(lines.filter((line) => line.startsWith('[シート:')), ['[シート: Sheet1]']);
+  assert.equal(lines[1]!.split('\t').length, 4, '1 行目は 4 つのセル');
 });
