@@ -1,5 +1,5 @@
 import { Type } from '@sinclair/typebox';
-import { localModelIds } from '../../engine/local-model.ts';
+import { externalModelIds } from '../../engine/local-model.ts';
 import { readHistory, searchHistory } from '../../memory/history.ts';
 import { BOOK_LABELS, MemoryError, prefix, type Book } from '../../memory/store.ts';
 import { errorText } from '../../shared/messages/define.ts';
@@ -98,8 +98,8 @@ export const memorySearch: ToolDef<{ query: string; limit?: number }> = {
   },
 };
 
-// この実行のモデルが手元だけでなければ（外のモデルが入っていれば）、手元のモデルを選んだ会話は見せない
-const hiddenModels = (ctx: ToolContext): string[] => ctx.modelsLocal === true ? [] : localModelIds(ctx.config);
+// この実行のモデルが手元だけでなければ（外のモデルが入っていれば）、選んだモデルが外と分かっている会話だけを見せる（手元のモデルを選んだ会話と、選んだモデルが設定から消えた会話は見せない）
+const visibleModels = (ctx: ToolContext): string[] | undefined => ctx.modelsLocal === true ? undefined : externalModelIds(ctx.config);
 
 const fmtDate = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
 
@@ -115,7 +115,7 @@ export const historySearch: ToolDef<{ query: string; days?: number; limit?: numb
   allowedIn: ['chat', 'task', 'review'],
   async execute(input, ctx) {
     try {
-      const hits = searchHistory(services(ctx).db, input.query, { days: input.days, limit: input.limit ?? 12, excludeConversationId: ctx.conversationId, excludeModelIds: hiddenModels(ctx) });
+      const hits = searchHistory(services(ctx).db, input.query, { days: input.days, limit: input.limit ?? 12, excludeConversationId: ctx.conversationId, visibleModelIds: visibleModels(ctx) });
       const language = languageOf(ctx.config);
       if (!hits.length) return { content: toolText(language, 'history.no_hit', { query: input.query, days: input.days ? toolText(language, 'history.days', { days: input.days }) : '' }) };
       return { content: hits.map(h => toolText(language, 'history.line', { date: fmtDate(h.createdAt), title: h.title ?? toolText(language, 'history.untitled'), cid: h.conversationId, mid: h.messageId, role: h.role, snippet: h.snippet })).join('\n') };
@@ -135,7 +135,7 @@ export const historyRead: ToolDef<{ conversation_id: string; around_message_id?:
   allowedIn: ['chat', 'task', 'review'],
   async execute(input, ctx) {
     try {
-      const rows = readHistory(services(ctx).db, input.conversation_id, { aroundMessageId: input.around_message_id, limit: input.limit ?? 20, excludeModelIds: hiddenModels(ctx) });
+      const rows = readHistory(services(ctx).db, input.conversation_id, { aroundMessageId: input.around_message_id, limit: input.limit ?? 20, visibleModelIds: visibleModels(ctx) });
       if (!rows.length) return { content: toolText(languageOf(ctx.config), 'history.not_found'), isError: true };
       return { content: rows.map(r => `[${r.id}] ${fmtDate(r.createdAt)} ${r.role}: ${r.text.slice(0, 1500)}`).join('\n\n') };
     } catch (error) { return fail(error, ctx); }

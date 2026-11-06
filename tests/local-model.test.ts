@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type { ProviderConfig } from '../src/config/schema.ts';
-import { isLocalModel, isLocalProvider, localModelIds } from '../src/engine/local-model.ts';
+import { externalModelIds, isLocalModel, isLocalPinned, isLocalProvider, localModelIds } from '../src/engine/local-model.ts';
 import type { StopReason, ToolCall } from '../src/engine/types.ts';
+import { readHistory, searchHistory } from '../src/memory/history.ts';
 import { fakeModel, settled, startApp, uuid } from './app-setup.ts';
 import { reply, type Script, testConfig } from './helpers.ts';
 
@@ -172,4 +174,83 @@ test('画面の履歴検索（GET /api/history）は今までどおり、手元�
   const res = await s.json(`/api/history?q=${WORD}`, 'GET');
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.hits.map((h: { conversationId: string }) => h.conversationId).sort(), [uuid(11), uuid(12), uuid(13)]);
+});
+
+// ── 2: 選んだモデルが設定から消えた会話は、手元として扱う（外へ回さない側に倒す） ──
+test('会話で選んだモデルの判定（isLocalPinned）: 選んでいて、外と分かっているモデルでなければ手元。消えた・名前を変えた・提供元が無いモデルも手元', () => {
+  const config = testConfig();
+  config.providers = [provider({ id: 'a', baseUrl: 'http://127.0.0.1:1/v1' }), provider({ id: 'b', baseUrl: 'https://x.example.test/v1' })];
+  config.models = [fakeModel('m-a', { provider: 'a' }), fakeModel('m-b', { provider: 'b' }), fakeModel('m-c', { provider: 'gone' })];
+  assert.deepEqual(externalModelIds(config), ['m-b'], '外と分かっているのは、提供元があって手元でないモデルだけ');
+  assert.equal(isLocalPinned(config, 'm-a'), true);
+  assert.equal(isLocalPinned(config, 'm-b'), false);
+  assert.equal(isLocalPinned(config, 'm-c'), true, '提供元が設定に無いモデルは、外と分からないので手元');
+  assert.equal(isLocalPinned(config, 'removed-model'), true, '設定に無い（消した・名前を変えた）モデルも手元');
+  assert.equal(isLocalPinned(config, null), false, '選んでいない（自動）は対象外');
+  assert.equal(isLocalPinned(config, undefined), false);
+});
+
+const gone = (s: Started) => {
+  const config = JSON.parse(readFileSync(s.paths.config, 'utf8')) as ReturnType<typeof testConfig>;
+  config.models = config.models.filter(m => m.id !== 'loc');
+  config.routing.chat = config.routing.chat.filter(id => id !== 'loc');
+  writeFileSync(s.paths.config, JSON.stringify(config));
+  assert.ok(!s.app.config().models.some(m => m.id === 'loc'), '前提: 設定から消えた');
+};
+
+test('振り返り: 手元のモデルを選んだあと、そのモデルを設定から消した会話も、外のモデルに回さず飛ばす', async t => {
+  const s = await startApp(t, twoProviders(['ext1', 'ext2']));
+  const id = uuid(1);
+  chatWith(s, id, 'loc', 'ローカルでだけ話した内容');
+  gone(s);
+  s.app.reviews.enqueue('manual', `manual:${id}`, { conversationId: id });
+  await s.app.worker.tick();
+  assert.equal(s.adapters.get('ext')!.calls.length, 0, '外のモデルは呼ばれない');
+  assert.equal(s.adapter().calls.length, 0);
+  const [job] = reviewJobs(s);
+  assert.equal(job!.status, 'done');
+  assert.match(job!.note ?? '', /飛ばしました/u);
+  assert.deepEqual(reviewConversations(s), [], '振り返りの会話を作らない');
+});
+
+test('振り返り: 選んだモデルが設定から消えた会話は、裏方の順番のうち手元のモデルだけで振り返る', async t => {
+  const s = await startApp(t, twoProviders(['ext1', 'loc2', 'ext2']));
+  const id = uuid(1);
+  chatWith(s, id, 'loc', 'ローカルでだけ話した内容');
+  gone(s);
+  s.adapter().scripts = [reply('変更なし')];
+  s.app.reviews.enqueue('manual', `manual:${id}`, { conversationId: id });
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.adapters.get('ext')!.calls.length, 0, '外のモデルは呼ばれない');
+  assert.deepEqual(s.adapter().calls.map(c => c.model.id), ['loc2']);
+});
+
+test('履歴の検索・読み出し: 選んだモデルが設定に無い会話も手元として扱い、外のモデルの実行には出さない（手元のモデルだけの実行・画面の検索は出す）', async t => {
+  const s = await startApp(t, twoProviders([]));
+  historyFixtures(s);
+  chatWith(s, uuid(14), 'removed-model', `消えたモデルの会話 ${WORD} の話`);
+  const text = await searchFrom(s, uuid(20), 'ext1', call('history_search', { query: WORD }), 'ext');
+  assert.match(text, /外のモデルの会話/u);
+  assert.match(text, /自動の会話/u);
+  assert.doesNotMatch(text, /消えたモデルの会話/u, '設定に無いモデルを選んだ会話は、外のモデルに渡さない');
+  assert.doesNotMatch(text, /手元の会話/u);
+  const denied = await searchFrom(s, uuid(21), 'ext1', call('history_read', { conversation_id: uuid(14) }), 'ext');
+  assert.doesNotMatch(denied, /消えたモデルの会話/u);
+  assert.equal(denied, await searchFrom(s, uuid(22), 'ext1', call('history_read', { conversation_id: uuid(99) }), 'ext'), '存在しない会話と同じ文');
+  const local = await searchFrom(s, uuid(23), 'loc', call('history_search', { query: WORD }), 'fake');
+  assert.match(local, /消えたモデルの会話/u, '手元のモデルだけの実行には出る');
+  const screen = await s.json(`/api/history?q=${WORD}`, 'GET');
+  assert.ok(screen.body.hits.some((h: { conversationId: string }) => h.conversationId === uuid(14)), '画面の検索は今までどおり全部');
+});
+
+test('履歴の検索・読み出しの visibleModelIds: 空の一覧を渡すと、モデルを選んでいない会話だけが見える。渡さなければ全部', async t => {
+  const s = await startApp(t, twoProviders([]));
+  historyFixtures(s);
+  const ids = (options: { visibleModelIds?: string[] }) => searchHistory(s.app.db, WORD, options).map(h => h.conversationId).sort();
+  assert.deepEqual(ids({}), [uuid(11), uuid(12), uuid(13)]);
+  assert.deepEqual(ids({ visibleModelIds: [] }), [uuid(12)], '選んでいない会話だけ');
+  assert.deepEqual(ids({ visibleModelIds: ['ext2'] }), [uuid(12), uuid(13)]);
+  assert.equal(readHistory(s.app.db, uuid(13), { visibleModelIds: [] }).length, 0);
+  assert.equal(readHistory(s.app.db, uuid(12), { visibleModelIds: [] }).length, 1);
+  assert.equal(readHistory(s.app.db, uuid(13), {}).length, 1);
 });
