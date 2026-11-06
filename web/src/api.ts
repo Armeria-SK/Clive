@@ -20,6 +20,8 @@ export interface Message {
 }
 // 会話で選ぶモデルと考える深さ。渡さなかった方は変えない。null は自動・モデルの既定に戻す
 export interface ModelChoice { modelId?: string | null; effort?: string | null }
+// 実行中に送って、まだ履歴に入っていない発言（今の実行の次の区切りで入る）
+export interface PendingMessage { id: string; text: string; attachments: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>; interrupt: boolean; createdAt: number }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
 export interface ApprovalPreview { path: string; text: string; truncated: boolean }
 // 見つけたパスごとの判定。in は許可フォルダの中（mode はそのフォルダの読み書き / 読むだけ）、out は外、deny は拒否、unknown は判定できない（path が無い）
@@ -139,13 +141,16 @@ export const api = {
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),
-  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
+  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; pending: PendingMessage[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
+  cancelPending: (id: string, pendingId: string) => call<{ cancelled: true }>(`/api/conversations/${encodeURIComponent(id)}/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }),
   deleteConversation: (id: string) => call<{ deleted: true }>(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   summary: (id: string) => call<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/summary`),
   contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   decide: (id: string, decision: 'once' | 'conversation' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
-  send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}) => call<{ runId: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice }) }),
+  // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
+  send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean } = {}) =>
+    call<{ runId: string; queued?: boolean; pendingId?: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}) }) }),
   chooseModel: (id: string, choice: ModelChoice) => call<{ conversation: Conversation; effortReset?: boolean }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(choice) }),
   upload: async (file: File) => {
     const res = await fetch(`/api/uploads?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } });

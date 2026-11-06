@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type Approval, type ContextUsage, type Message, type ModelChoice, type ModelView, type Profile, type UploadView } from './api.ts';
+import { api, ApiError, type Approval, type ContextUsage, type Message, type ModelChoice, type ModelView, type PendingMessage, type Profile, type UploadView } from './api.ts';
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
@@ -11,7 +11,7 @@ import { archiveConversation, unarchiveConversation, type ConversationChange } f
 import { ModelMenu, OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
 import { SummaryDialog } from './SummaryDialog.tsx';
 import {
-  AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
+  AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PendingMessageRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
 } from './ChatMessages.tsx';
 import { Composer } from './Composer.tsx';
 import type { Draft } from './events.ts';
@@ -92,6 +92,7 @@ function noteIcon(notice: RunNotice): IconName {
 export function Chat({ conversationId, profile, modelName, defaultModelId, usage, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
   const t = useT();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [pending, setPending] = useState<PendingMessage[]>([]);
   const [title, setTitle] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(!conversationId);
   const [input, setInput] = useState('');
@@ -119,10 +120,11 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   const [liveSince] = useState(() => Date.now());
 
   const load = useCallback(async () => {
-    if (!conversationId) { setMessages([]); setLoaded(true); return; }
+    if (!conversationId) { setMessages([]); setPending([]); setLoaded(true); return; }
     try {
       const result = await api.messages(conversationId);
       setMessages(result.messages);
+      setPending(result.pending ?? []);
       setTitle(result.conversation.title);
       setArchivedNow(result.conversation.archived === 1);
       setModelId(result.conversation.model_id ?? null);
@@ -236,10 +238,10 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
     await archiveConversation(conversationId, title, t, onConversationChanged);
   }
 
-  async function send(preset?: string): Promise<void> {
+  // 返事を作っている最中でも送れる: 今の実行の次の区切りで読まれる（interrupt なら、今の実行を止めて、この発言から始める）
+  async function send(preset?: string, interrupt = false): Promise<void> {
     const text = (preset ?? input).trim();
     if ((!text && !attached.length) || sending) return;
-    if (draft) { toast({ kind: 'info', icon: 'alert', title: t('chat.busyTitle'), body: t('chat.busyBody') }); return; }
     const newTitle = renameTitleOf(text);
     if (newTitle) { await rename(newTitle); return; }
     if (isRenameWithoutTitle(text)) { toast({ kind: 'info', icon: 'alert', title: t('chat.rename.empty') }); return; }
@@ -250,7 +252,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       const id = target.id;
       created.current = target.created;
       onClearNotices(id);
-      await api.send(id, text, attached.map(a => a.id), conversationId ? {} : { ...(modelId ? { modelId } : {}), ...(effort ? { effort } : {}) });
+      await api.send(id, text, attached.map(a => a.id), conversationId ? {} : { ...(modelId ? { modelId } : {}), ...(effort ? { effort } : {}) }, interrupt && draft ? { interrupt: true } : {});
       if (preset === undefined) setInput('');
       setAttached([]);
       if (!conversationId) onCreated(id);
@@ -258,6 +260,16 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
     } catch (error) {
       await fail(error, t('chat.send.failed'));
     } finally { setSending(false); }
+  }
+
+  async function cancelPending(pendingId: string): Promise<void> {
+    if (!conversationId) return;
+    try { await api.cancelPending(conversationId, pendingId); }
+    catch (error) {
+      if (error instanceof ApiError && error.status === 404) toast({ kind: 'info', icon: 'info', title: t('chat.pending.gone') });
+      else toast({ kind: 'info', icon: 'alert', title: t('chat.pending.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    }
+    await load();
   }
 
   async function retry(): Promise<void> {
@@ -315,6 +327,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
     else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} />);
     else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} startedAt={startedAt} />);
   }
+  for (const p of pending) push(`pending-${p.id}`, 'user', <PendingMessageRow pending={p} onCancel={() => void cancelPending(p.id)} />);
   notices.filter(n => n.kind !== 'error').forEach((n, i) => {
     const key = `n-${n.runId}-${i}`;
     if (n.kind === 'memory') push(key, 'note', <MemoryRow message={n.message} eventId={n.eventId} />);
@@ -371,7 +384,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
             modelMenuOpen={menuOpen} onModelMenu={() => setMenuOpen(open => !open)}
             modelMenu={menuOpen ? <ModelMenu models={models} selected={modelId} effort={effort} efforts={efforts} onModel={id => void choose({ modelId: id })} onEffort={value => void choose({ effort: value })} onClose={() => setMenuOpen(false)} /> : null}
             onInput={setInput} onAttach={files => void attach(files)} onDetach={id => setAttached(list => list.filter(a => a.id !== id))}
-            onSend={() => void send()} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
+            onSend={() => void send()} onStopAndSend={() => void send(undefined, true)} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
           />
         </div>
       </div>

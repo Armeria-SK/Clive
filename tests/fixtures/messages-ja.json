@@ -113,6 +113,7 @@
     "send.busy_chat": "この会話はまだ返事を作っています。止めるか、終わるまで待ってください",
     "send.busy": "この会話はまだ返事を作っています",
     "send.nothing_to_retry": "やり直す発言がありません",
+    "send.queue_full": "待っている発言が多すぎます（{max} 件まで）。返事が終わってから送ってください",
     "send.task_running": "このタスクの会話は実行中です",
     "send.review_running": "この振り返りは実行中です",
     "run.preempted": "ユーザーとの会話を優先するため中断しました",
@@ -140,6 +141,7 @@
     "warn.retrying": "{message}。{seconds} 秒後に再試行します（{attempt}/{retries}）",
     "warn.compacted": "会話が長くなったため、古い発言 {count} 件を要約しました（要約は会話の「…」メニューから読めます。原文は残っていて、記憶の「過去の会話を探す」で探せます）",
     "warn.compaction_failed": "古い発言の要約に失敗したため、要約せずに外して続けます",
+    "warn.queued_saved": "返事が止まったので、待っていた発言 {count} 件は保存だけしました。続けるには、送り直すか「もう一度」を押してください",
     "warn.server_truncation": "サーバーが受け取った入力（{actual} トークン）が見積もり（{estimate}）より大幅に少なく、サーバー側で切り捨てられた可能性があります",
     "truncation.disable": "{message}（{strikes} 回連続）。サーバー側のコンテキスト長を確認してから、設定画面で確認し直してください",
     "message.stopped_partway": "（途中で止めました）",
@@ -552,6 +554,7 @@
     "persona_empty": "書き込む項目がありません（userName・callMe・botName・style・styleNote のどれかを送ってください）",
     "conversation_running": "この会話は返事を作っている最中なので消せません。止めてから消してください",
     "conversation_not_deletable": "タスクや振り返りの会話は、ここからは消せません",
+    "pending_gone": "その待ちの発言は、もう送られたか、取り消されています",
     "unknown_model": "モデル「{id}」は設定にありません",
     "bad_effort": "effort「{effort}」は、このモデルでは選べません（選べる値: {values}）",
     "internal": "内部エラーが発生しました（ログを確認してください）"

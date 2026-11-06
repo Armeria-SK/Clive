@@ -50,7 +50,7 @@ export function errorBodyText(body: unknown, language: Lang): string | null {
 
 const WARNING_KEY: Record<string, string> = {
   max_iterations: 'warn.max_iterations', context_trimmed: 'warn.context_trimmed', partial_discarded: 'warn.partial_discarded', retrying: 'warn.retrying',
-  compacted: 'warn.compacted', compaction_failed: 'warn.compaction_failed', server_truncation_suspected: 'warn.server_truncation',
+  compacted: 'warn.compacted', compaction_failed: 'warn.compaction_failed', queued_saved: 'warn.queued_saved', server_truncation_suspected: 'warn.server_truncation',
 };
 
 // 返事の途中の警告（SSE の warning）。再試行の理由は、理由のコードがあれば画面の言語に、無ければサーバーの詳しい文のまま。

@@ -220,6 +220,9 @@
 .archived-open { display: flex; flex: 1; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; color: var(--color-text); text-decoration: none; }
 .archived-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .archived-time { flex: none; color: var(--color-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.chat-pending .chat-user-bubble { opacity: .78; border: 1px dashed var(--color-divider); background: transparent; }
+.chat-pending-cancel { height: 22px; margin-left: 6px; padding: 0 8px; font-size: 12px; }
+.chat-stopsend { flex: none; height: 30px; padding: 0 10px; font-size: 12.5px; white-space: nowrap; }
 .chat-dialog-text { margin: 0; font-size: 14px; color: var(--color-text-muted); overflow-wrap: anywhere; }
 .chat-dialog-actions { flex-wrap: wrap; margin-top: 4px; }
 @media (max-width: 759px) {

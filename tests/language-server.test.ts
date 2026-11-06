@@ -435,11 +435,12 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
     s.adapter().scripts.push(hang());
     const running = s.app.engine.send('c5', 'hi');
     assert.ok(running.ok);
-    const busy = s.app.engine.send('c5', 'again');
+    // 実行中の送信は待たせる（tests/queued-send.test.ts）。実行中のやり直しは断る
+    const busy = s.app.engine.retry('c5');
     assert.ok(!busy.ok);
     if (!busy.ok) {
-      assert.equal(busy.errorMessage, pick('この会話はまだ返事を作っています。止めるか、終わるまで待ってください', 'This conversation is still writing a reply. Stop it or wait until it finishes'));
-      assert.equal(busy.errorCode, 'engine.send.busy_chat');
+      assert.equal(busy.errorMessage, pick('この会話はまだ返事を作っています', 'This conversation is still writing a reply'));
+      assert.equal(busy.errorCode, 'engine.send.busy');
     }
     s.app.engine.stop(running.runId);
     await s.app.engine.wait(running.runId);

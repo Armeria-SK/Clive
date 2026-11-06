@@ -368,6 +368,9 @@ export function App() {
         }
         break;
       }
+      case 'pending.changed':
+        bump(e.conversationId);
+        break;
       case 'conversation.changed':
         // ほかの画面で題・アーカイブが変わった。一覧を読み直し、アーカイブした会話のタブは閉じる
         refreshList();

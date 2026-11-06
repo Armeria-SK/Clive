@@ -173,6 +173,7 @@ export function createWebServer(app: App): WebServer {
           ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: JSON.stringify(c.arguments ?? c.raw ?? null).slice(0, 2000) })) } : {}),
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError) } : {}),
       })),
+      pending: app.engine.pending(id),
       activeRun: active ? { runId: active.runId, draft: app.bus.drafts().find(d => d.runId === active.runId)?.text ?? '' } : null,
       approvals: app.approvals.pending().filter(a => a.conversationId === id).map(approvalWire),
     });
@@ -200,6 +201,8 @@ export function createWebServer(app: App): WebServer {
       if (!upload) throw problem(400, 'invalid_field', 'attachment_missing', { field: 'attachments' });
       return upload;
     });
+    if (body.interrupt !== undefined && typeof body.interrupt !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'interrupt', params: { field: 'interrupt' } });
+    const interrupt = body.interrupt === true;
     const existing = app.conversations.get(id);
     const { choice } = readChoice(app, body, existing);
     const images: ImageRef[] = [];
@@ -221,9 +224,15 @@ export function createWebServer(app: App): WebServer {
     // 画面が決めた id へ最初の発言を送ると、受け付けたときに会話ができる。作られる id は UUID の形だけ。タスク・振り返りの会話には、ここから送らせない
     if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
     if (!existing && !CONVERSATION_ID.test(id)) throw problem(400, 'invalid_id', 'invalid_id');
-    const outcome = app.engine.send(id, content, images, attachments, choice);
+    const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt });
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
-    sendJson(res, 202, { runId: outcome.runId, messageId: outcome.messageId });
+    // 実行中だったときは待たせた（queued）。今の実行が次の区切りで読む。取り消すときは pendingId
+    sendJson(res, 202, outcome.queued ? { runId: outcome.runId, queued: true, pendingId: outcome.pendingId } : { runId: outcome.runId, messageId: outcome.messageId });
+  });
+  // 待っている発言を、差し込まれる前に取り消す
+  router.add('DELETE', '/api/conversations/:id/pending/:pid', ({ res, params }) => {
+    if (!app.engine.cancelPending(params[0]!, params[1]!)) throw problem(404, 'not_found', 'pending_gone');
+    sendJson(res, 200, { cancelled: true });
   });
   router.add('POST', '/api/conversations/:id/retry', ({ res, params }) => {
     const outcome = app.engine.retry(params[0]!);

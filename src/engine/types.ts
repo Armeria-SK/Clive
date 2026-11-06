@@ -91,6 +91,8 @@ export type RunEvent =
     errorKind?: EngineErrorKind; errorMessage?: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail;
   }
   // 会話の題・アーカイブ・削除が変わった（開いているほかの画面が一覧を読み直すため）
+  // 実行中に送った待ちの発言が増えた・取り消された・履歴に入った（画面が待ちの一覧を読み直す）
+  | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: TaskView }
   | { type: 'notification'; notification: Notification };

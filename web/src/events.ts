@@ -14,6 +14,7 @@ export type RunEvent =
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
   | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
+  | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: Task }
   | { type: 'notification'; notification: NotificationItem };

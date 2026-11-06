@@ -1,6 +1,6 @@
 import { memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { openSetup } from './onboarding.ts';
-import type { Message, Profile } from './api.ts';
+import type { Message, PendingMessage, Profile } from './api.ts';
 import { Avatar } from './Avatar.tsx';
 import { chatTime, firstLine, TextThrottle, toolIcon, type ContextNumbers } from './chat-logic.ts';
 import { useNow } from './hooks.ts';
@@ -59,6 +59,27 @@ export const UserMessage = memo(function UserMessage({ message }: { message: Mes
     </div>
   );
 });
+
+// 実行中に送って、まだ履歴に入っていない発言。「待ち」の印と取り消しのボタンを添える（入ると、ふつうの発言になる）
+export function PendingMessageRow({ pending, onCancel }: { pending: PendingMessage; onCancel: () => void }) {
+  const t = useT();
+  return (
+    <div className="chat-user chat-pending">
+      {pending.text && <div className="chat-user-bubble">{pending.text}</div>}
+      {pending.attachments.length ? (
+        <div className="chat-chips">
+          {pending.attachments.map(a => (
+            <span key={a.id} className="tag tag-neutral chat-chip"><Icon name="paperclip" size={11} />{t(KIND_KEY[a.kind])}: {a.name}</span>
+          ))}
+        </div>
+      ) : null}
+      <span className="chat-meta">
+        <span className="tag tag-neutral">{t('chat.pending.tag')}</span> {pending.interrupt ? t('chat.pending.afterStop') : t('chat.pending.hint')}
+        <button type="button" className="btn btn-ghost chat-pending-cancel" onClick={onCancel}>{t('chat.pending.cancel')}</button>
+      </span>
+    </div>
+  );
+}
 
 function CopyButton({ text }: { text: string }) {
   const t = useT();

@@ -160,7 +160,7 @@ test('利用者が止めたら、途中までの返事を「止めた」と分�
   const outcome = s.engine.send('c1', 'やあ');
   assert.ok(outcome.ok);
   await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal(s.engine.send('c1', 'もう一つ').ok, false); // 実行中は受け付けない
+  assert.equal(s.engine.retry('c1').ok, false); // 実行中のやり直しは受け付けない（送信は待たせる: tests/queued-send.test.ts）
   assert.ok(s.engine.stop(outcome.runId));
   release();
   const result = await s.engine.wait(outcome.runId)!;

@@ -30,6 +30,8 @@ interface Props {
   onAttach: (files: FileList | null) => void;
   onDetach: (id: string) => void;
   onSend: () => void;
+  // 返事を作っている最中に、今の実行を止めてこの発言から始める
+  onStopAndSend: () => void;
   onStop: () => void;
   onApproveOnce: (approvalId: string) => void;
   onSlash: (command: SlashCommand) => void;
@@ -88,11 +90,12 @@ export function Composer(props: Props) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (empty && approvalId !== null) props.onApproveOnce(approvalId);
+      else if (generating && !empty && (e.ctrlKey || e.metaKey)) props.onStopAndSend();
       else props.onSend();
     }
   }
 
-  const hint = hasApproval && empty ? t('chat.hintApprove') : t('chat.hintSend');
+  const hint = hasApproval && empty ? t('chat.hintApprove') : generating ? t('chat.hintQueue') : t('chat.hintSend');
   return (
     <div className="chat-composer">
       {slashOpen && (
@@ -149,20 +152,22 @@ export function Composer(props: Props) {
           <span className="chat-tools-fill" />
           {props.usage && <ContextMeter usage={props.usage} />}
           <span className="chat-hint">{hint}</span>
-          {generating
-            ? (
-              <button type="button" className="btn btn-secondary btn-icon chat-ctl chat-stop" aria-label={t('chat.stop')} data-tip={t('chat.stop')} data-kbd="Esc" onClick={props.onStop}>
-                <Icon name="square" size={12} />
-              </button>
-            )
-            : (
-              <button
-                type="button" className="btn btn-primary btn-icon chat-ctl chat-send" aria-label={t('chat.send')} data-tip={t('chat.send')} data-kbd="↵"
-                disabled={sending || uploading || empty} onClick={props.onSend}
-              >
-                <Icon name="arrowUp" size={15} />
-              </button>
-            )}
+          {generating && (
+            <button type="button" className="btn btn-secondary btn-icon chat-ctl chat-stop" aria-label={t('chat.stop')} data-tip={t('chat.stop')} data-kbd="Esc" onClick={props.onStop}>
+              <Icon name="square" size={12} />
+            </button>
+          )}
+          {generating && !empty && (
+            <button type="button" className="btn btn-ghost chat-stopsend" data-tip={t('chat.sendStopTip')} disabled={sending || uploading} onClick={props.onStopAndSend}>{t('chat.sendStop')}</button>
+          )}
+          {(!generating || !empty) && (
+            <button
+              type="button" className="btn btn-primary btn-icon chat-ctl chat-send" aria-label={generating ? t('chat.sendQueue') : t('chat.send')} data-tip={generating ? t('chat.sendQueue') : t('chat.send')} data-kbd="↵"
+              disabled={sending || uploading || empty} onClick={props.onSend}
+            >
+              <Icon name="arrowUp" size={15} />
+            </button>
+          )}
         </div>
       </div>
     </div>

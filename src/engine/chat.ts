@@ -49,6 +49,8 @@ export function iterationLimit(configured: number, kind: RunKind): number {
 const COMPACT_MIN_MESSAGES = 4;
 // 1 回の実行で要約を重ねられる回数。外す発言が増えるたびに要約し直すが、無限には繰り返さない
 const MAX_COMPACTIONS_PER_RUN = 5;
+// 1 つの会話で、実行中に待たせておける発言の数
+const MAX_PENDING_MESSAGES = 10;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
 
 export interface ChatEngineDeps {
@@ -84,10 +86,14 @@ export interface ModelProblem { modelId: string; status: string; message: string
 export interface SendChoice { modelId?: string | null | undefined; effort?: string | null | undefined }
 
 export type SendOutcome =
-  | { ok: true; runId: string; messageId?: number }
-  | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; detail?: ContextDetail; problems?: ModelProblem[] };
+  // queued: 実行中だったので待たせた（runId は今の実行。差し込まれる前なら pendingId で取り消せる）
+  | { ok: true; runId: string; messageId?: number; queued?: boolean; pendingId?: string }
+  | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail; problems?: ModelProblem[] };
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
+
+interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[] }
+interface PendingMessage extends ChatItem { id: string; interrupt: boolean; createdAt: number }
 
 export type ContextUsageOutcome =
   | { ok: true; modelId: string; tokens: number; available: number; capacity: number; ratio: number }
@@ -128,6 +134,8 @@ export class ChatEngine {
   // 会話の実行が止めたタスク（会話の実行が終わるとき、会話で進んだ分をこのタスクに引き継ぐ）
   #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
+  // 実行中に送られて、まだ履歴に入っていない発言（会話ごと。再起動で消える）
+  #pending = new Map<string, PendingMessage[]>();
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
 
@@ -137,8 +145,44 @@ export class ChatEngine {
     return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), key), errorCode: `engine.${key}` };
   }
 
-  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}): SendOutcome {
-    if (this.#byConversation.has(conversationId)) return this.#busy('send.busy_chat');
+  // 実行中の会話に送った発言は、新しい実行にせず待たせる（待ちの発言）。今の実行が次の区切り（道具の結果を返して、次にモデルを呼ぶ前）に来たら
+  // 履歴に入れ、実行が先に終わったら、その発言で新しい実行を始める。interrupt なら、今の実行を止めて、待っていた発言と一緒に新しい実行を始める
+  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean } = {}): SendOutcome {
+    const item: ChatItem = { content: text, images, attachments };
+    const running = this.#byConversation.get(conversationId);
+    if (running === undefined) return this.#beginChat(conversationId, [item], choice);
+    if (this.#active.get(running)?.kind !== 'chat') return this.#busy('send.busy_chat');
+    const queue = this.#pending.get(conversationId) ?? [];
+    if (queue.length >= MAX_PENDING_MESSAGES) {
+      return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), 'send.queue_full', { max: MAX_PENDING_MESSAGES }), errorCode: 'engine.send.queue_full', errorParams: { max: MAX_PENDING_MESSAGES } };
+    }
+    this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
+    // 選んだモデルと考える深さは、次の実行から効く（今の実行の鎖は変えない）
+    if (choice.modelId !== undefined || choice.effort !== undefined) this.#d.conversations.setChoice(conversationId, choice);
+    const pending: PendingMessage = { id: randomUUID(), ...item, interrupt: options.interrupt === true, createdAt: this.#d.now?.().getTime() ?? Date.now() };
+    this.#pending.set(conversationId, [...queue, pending]);
+    this.#d.bus.publish({ type: 'pending.changed', conversationId });
+    if (pending.interrupt) this.stop(running);
+    return { ok: true, runId: running, queued: true, pendingId: pending.id };
+  }
+
+  // 待っている発言（画面に出す形）
+  pending(conversationId: string): Array<{ id: string; text: string; attachments: AttachmentMeta[]; interrupt: boolean; createdAt: number }> {
+    return (this.#pending.get(conversationId) ?? []).map(p => ({ id: p.id, text: stripAttachments(p.content), attachments: p.attachments, interrupt: p.interrupt, createdAt: p.createdAt }));
+  }
+
+  // 差し込まれる前の待ちの発言を取り消す。もう差し込まれた・無いときは false
+  cancelPending(conversationId: string, pendingId: string): boolean {
+    const queue = this.#pending.get(conversationId);
+    if (!queue?.some(p => p.id === pendingId)) return false;
+    const rest = queue.filter(p => p.id !== pendingId);
+    if (rest.length) this.#pending.set(conversationId, rest); else this.#pending.delete(conversationId);
+    this.#d.bus.publish({ type: 'pending.changed', conversationId });
+    return true;
+  }
+
+  // 発言を保存して、チャットの実行を始める（1 つ以上の発言を順に保存し、1 つの実行で読ませる）。使えるモデルが無ければ、何も保存せずに断る
+  #beginChat(conversationId: string, items: ChatItem[], choice: SendChoice): SendOutcome {
     const existing = this.#d.conversations.get(conversationId);
     const pinned = choice.modelId !== undefined ? choice.modelId : existing?.model_id ?? null;
     const effort = choice.effort !== undefined ? choice.effort : existing?.effort ?? null;
@@ -147,16 +191,60 @@ export class ChatEngine {
     const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     if (choice.modelId !== undefined || choice.effort !== undefined) this.#d.conversations.setChoice(conversationId, choice);
-    const saved = this.#d.conversations.append(conversationId, { role: 'user', content: text, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
-    // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
-    this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(text).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : text);
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
-    this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    let firstId: number | undefined;
+    for (const { content, images, attachments } of items) {
+      const saved = this.#d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
+      firstId ??= saved.id;
+      // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
+      this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(content).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : content);
+      this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    }
     // 添付の中身は外部のデータなので、この実行ではシェルと書き込みを承認制にする（taint）
-    if (attachments.length) this.#initialTaint.set(runId, attachments.map(a => engineText(languageOf(this.#d.config()), 'attachment.taint', { name: a.name })));
+    const names = items.flatMap(i => i.attachments.map(a => a.name));
+    if (names.length) this.#initialTaint.set(runId, names.map(name => engineText(languageOf(this.#d.config()), 'attachment.taint', { name })));
     this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, effort);
-    return { ok: true, runId, messageId: saved.id };
+    return { ok: true, runId, messageId: firstId! };
+  }
+
+  // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは入れない。承認の答えが先）。
+  // 添付つきの発言は外から来た文なので、この実行の残りも「外から読んだ」扱いにする
+  #injectPending(runId: string, conversationId: string, ctx: ToolContext): void {
+    const d = this.#d;
+    const queue = this.#pending.get(conversationId);
+    if (!queue?.length) return;
+    if (d.tools?.approvals.pending().some(a => a.runId === runId)) return;
+    this.#pending.delete(conversationId);
+    const language = languageOf(d.config());
+    for (const { content, images, attachments } of queue) {
+      const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) }, runId);
+      d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+      if (attachments.length) {
+        ctx.taint.tainted = true;
+        ctx.taint.sources.push(...attachments.map(a => engineText(language, 'attachment.taint', { name: a.name })));
+      }
+    }
+    d.bus.publish({ type: 'pending.changed', conversationId });
+  }
+
+  // 実行が終わったとき、まだ待っている発言があれば: 実行が成功で終わった（または止めて送る）なら、その発言で新しい実行を始める。
+  // 失敗・取り消しで終わったときは、発言を保存だけして（新しい実行は始めない）、そのことを知らせる
+  #drainPending(conversationId: string, endedRunId: string, ended: EngineResult | undefined): void {
+    const d = this.#d;
+    const queue = this.#pending.get(conversationId);
+    if (!queue?.length) return;
+    this.#pending.delete(conversationId);
+    if (ended?.ok === true || queue.some(p => p.interrupt)) {
+      if (this.#beginChat(conversationId, queue, {}).ok) { d.bus.publish({ type: 'pending.changed', conversationId }); return; }
+    }
+    for (const { content, images, attachments } of queue) {
+      const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
+      d.bus.publish({ type: 'message.saved', runId: endedRunId, conversationId, messageId: saved.id, role: 'user' });
+    }
+    const language = languageOf(d.config());
+    d.bus.publish({ type: 'warning', runId: endedRunId, conversationId, code: 'queued_saved', message: engineText(language, 'warn.queued_saved', { count: queue.length }), params: { count: queue.length } });
+    d.bus.publish({ type: 'pending.changed', conversationId });
   }
 
   retry(conversationId: string): SendOutcome {
@@ -308,6 +396,7 @@ export class ChatEngine {
   #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null): void {
     const controller = new AbortController();
     this.#byConversation.set(conversationId, runId);
+    let ended: EngineResult | undefined;
     const done = this.#execute(runId, conversationId, chain, controller.signal, kind, task, forbid, effort)
       .catch((error): EngineResult => {
         this.#d.log?.(`[ERROR] run ${runId}: ${(error as Error).stack ?? error}`);
@@ -317,11 +406,16 @@ export class ChatEngine {
         this.#d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail: (error as Error).message } });
         return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail: (error as Error).message }, retryable: false };
       })
+      .then(result => { ended = result; return result; })
       .finally(() => {
         this.#active.delete(runId);
         this.#byConversation.delete(conversationId);
         this.#preemptedTasks.delete(runId);
         setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
+        // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
+        if (kind === 'chat') {
+          try { this.#drainPending(conversationId, runId, ended); } catch (error) { this.#d.log?.(`[ERROR] 待っていた発言の引き取り: ${(error as Error).stack ?? error}`); }
+        }
         try { this.onRunEnd?.({ runId, conversationId, kind }); } catch (error) { this.#d.log?.(`[ERROR] onRunEnd: ${(error as Error).message}`); }
       });
     this.#active.set(runId, { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), controller, done });
@@ -383,6 +477,7 @@ export class ChatEngine {
     const maxIterations = iterationLimit(config.tools.maxIterations, kind);
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
+      if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
