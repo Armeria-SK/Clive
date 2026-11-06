@@ -42,12 +42,12 @@ test('字句 11.2.1: 入れ子が 4 段より深い・引用符や括弧の閉�
   assert.equal(failure('(Get-Date', 'pwsh'), 'unclosed');
 });
 
-test('字句 11.2.2: PowerShell は、バッククォート・--%・<# #>・@" "@・${…}・プロバイダ付きの名前・"$(…)" を止める', () => {
+test('字句 11.2.2: PowerShell は、バッククォート・--%・<# #>・@" "@・${…}・プロバイダ付きの名前・"$$(…)" を止める（"$(…)" は読む。tests/shell-dq-escapes.test.ts）', () => {
   const cases: Array<[string, LexCode]> = [
     ['n`o`de --eval=1', 'backtick'], ['echo `n', 'backtick'], ['echo "a`nb"', 'backtick'],
     ['cmd --% /c dir', 'parse_token'], ['<# x #> ls', 'block_comment'], ['@"\nx\n"@', 'here_string'],
     ['${function:x}', 'provider_var'], ['$function:x', 'provider_var'], ['$alias:ls', 'provider_var'], ['$variable:x', 'provider_var'], ['${x}', 'provider_var'],
-    ['Write-Host "$(Get-Date)"', 'ps_expand'], ['Write-Host "${x}"', 'ps_expand'],
+    ['Write-Host "$$(Get-Date)"', 'ps_expand'], ['Write-Host "${x}"', 'ps_expand'],
   ];
   for (const shell of ['powershell', 'pwsh'] as const) for (const [command, code] of cases) assert.equal(failure(command, shell), code, `${shell}: ${JSON.stringify(command)}`);
   assert.equal(failure('ls && ls', 'powershell'), 'chain_op', '5.1 は && を知らない');

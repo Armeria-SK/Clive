@@ -298,6 +298,51 @@ test('実機（Windows PowerShell 5.1・制限モード）: git grep -e \'\' -- 
   assert.equal(existsSync(marker), false, 'Clive のシェルで x.sh が動いた');
 });
 
+// "…" の中の $( … ) は、中の文をトップレベルの文と同じに調べる（§11.15）。読むだけ・整えるだけは承認なしで本当に動き、中で書く・消す・コードを動かすものは確かめになって、拒否すれば何も起きない
+test('実機（Windows PowerShell 5.1・制限モード）: "…" の中の $( … ) は、読むだけなら承認なしで本当に動き、中で書く・消す部分式は確かめになって、拒否すれば何も書かれない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const rows: Array<[string, RegExp]> = [
+    ['Get-ChildItem *.txt | ForEach-Object { "$($_.Name) $($_.Length)" }', /a\.txt 18/u],
+    ['Write-Output "$((Get-Item a.txt).Length) bytes"', /18 bytes/u],
+    ['Write-Host "year $(Get-Date -Format yyyy)"', /year 20[0-9]{2}/u],
+    ['Write-Output "a$("x $(Get-Date -Format yyyy)")c"', /ax 20[0-9]{2}c/u],
+    ['Write-Output "名前は $((Get-Item a.txt).Name)"', /名前は a\.txt/u],
+    ['foreach ($f in Get-ChildItem *.txt) { Write-Host "[$($f.Name)]" }', /\[a\.txt\]/u],
+    ['"$(Get-Date -Format yyyy)-$(Get-Item a.txt | ForEach-Object { $_.Name })"', /20[0-9]{2}-a\.txt/u],
+    ["Write-Output \"it's $((Get-Item a.txt).Name)\"", /it's a\.txt/u],
+  ];
+  for (const [command, expected] of rows) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, expected, command);
+  }
+  const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  raw('Write-Output "$(Set-Content raw.txt hello)"');
+  assert.equal(existsSync(s.files('raw.txt')), true, '前提: 素の PowerShell では、"…" の中の部分式が本当に書く');
+  rmSync(s.files('raw.txt'));
+  for (const command of [
+    'Write-Output "$(Set-Content out.txt hello)"', 'Write-Output "$(Set-Content SOUL.md pwned)"', 'Write-Output "$(Remove-Item a.txt)"', 'Write-Output "$(New-Item -ItemType Directory made)"', 'Write-Output "$(Copy-Item a.txt c.txt)"',
+    'Write-Output "x$("y $(Move-Item a.txt moved.txt)")"', "Write-Output \"$(iex 'Get-Date')\"", 'Get-ChildItem *.txt | ForEach-Object { "$(Remove-Item $_.FullName)" }', 'Write-Output "$(Get-Date)" > out2.txt', 'Write-Output "$(Rename-Item notes.md -NewName renamed.md)"',
+  ]) await expectAsk(s, command);
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '人格が書き換わった');
+  assert.equal(readFileSync(s.files('a.txt'), 'utf8'), 'line1\nline2\nline3\n', 'a.txt が変わった');
+  assert.equal(readFileSync(s.files('notes.md'), 'utf8'), 'notes\n');
+  for (const name of ['out.txt', 'made', 'c.txt', 'moved.txt', 'out2.txt', 'renamed.md']) assert.equal(existsSync(s.files(name)), false, `${name} ができた`);
+  // 秘密の読み取りは確かめにも進まず止まり、秘密は出ない。読みきれない形は動かす前に止まる
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  assert.match(raw('Write-Output "$(Get-Content .env)"'), /SECRET=1/u, '前提: 素の PowerShell では、部分式が秘密を読む');
+  const secret = await s.call('Write-Output "$(Get-Content .env)"');
+  assert.equal(secret.decision, 'deny');
+  assert.doesNotMatch(secret.output.content, /SECRET=1/u);
+  for (const command of ['Write-Output "${env:PATH}"', 'Write-Output "$$(Get-Date)"', "Write-Output \"$(Write-Output ')')\"", 'Write-Output "$(Get-Date # c`n)"', '$a["$(Get-Date)"] = 1']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, /書き方を判定できません/u, command);
+  }
+});
+
 const bashPath = which('bash');
 const bashAvailable = bashPath !== undefined && spawnSync(bashPath, ['--noprofile', '--norc', '-c', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
 

@@ -63,7 +63,7 @@ const HIGH_PS = [
 // 止める書き方
 // 審査で見つかった: 本物の PowerShell は CR 1 つを文の区切りに、U+0085・U+2028 を語の区切りに読む。ガードは止める
 const SEPARATOR_PS = ['Write-Output a\rnode p.js', 'Set-Content README.md\rx', 'Set-Content README.md\u0085x', 'Set-Content README.md\u2028x', 'Set-Content README.md\u2029x'];
-const BLOCKED_PS = ["``n`o`de --eval=1", 'ls --% x', 'Write-Output ‘x’', 'Get-ChildItem –Path x', 'Write-Output "$(ls)"'];
+const BLOCKED_PS = ["``n`o`de --eval=1", 'ls --% x', 'Write-Output ‘x’', 'Get-ChildItem –Path x', 'Write-Output "${env:PATH}"'];
 
 test('審査で再現された抜けは、どれも確かめなしには動かない（本物のファイルがある作業フォルダで）', t => {
   const f = fixture(t);

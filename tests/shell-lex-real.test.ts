@@ -259,3 +259,92 @@ test('PowerShell 5.1: 本物の Parser が文や語を分ける文字（CR 1 つ
   const mine = lexShell('Write-Output a\r\nWrite-Output b', 'powershell');
   assert.ok(mine.ok && mine.statements.length === 2 && mine.statements.every(s => s.words.length === 2));
 });
+
+// "…" の中の $( … ) は、中の文を本物の Parser と同じに読む（§11.15）。複数行の行・ヒア文字列を含む行があるので、JSON の配列で渡す
+const PS_DQ_ROWS = [
+  'Write-Output "$($x.Name)"', 'Write-Output "$(Get-Date)"', 'Write-Output "a$($b)c"', 'Write-Output "$("x $($y)")"', 'Write-Output "$(rm x)"', 'Write-Output "$(Set-Content SOUL.md x)"',
+  '"$($x.Name)"', '"$(Get-Date)"', '"a$($b)c"', '"$("x $($y)")"', '"$(rm x)"', '"$(Set-Content SOUL.md x)"',
+  'Write-Output "$(Get-Date -Format yyyy)"', 'Write-Output "名前は $($x.Name)"', 'Write-Output "$($f.Length) bytes"', 'Get-ChildItem | ForEach-Object { "$($_.Name) $($_.Length)" }',
+  'Write-Output "$(Get-Date)-$(Get-Location)"', "Write-Output \"$(Write-Output '(a)')\"", "Write-Output \"$(Write-Output '\"')\"", "Write-Output \"$(Write-Output \"'\")\"", 'Write-Output "$(\nGet-Date\nGet-Location\n)"', 'Write-Output "a$()b"',
+  "Write-Output \"a$(@'\nx\n'@)b\"", 'Write-Output "$(Get-Date)" "$(Get-Location)"', 'Write-Host "$(1) $(2)"', 'Write-Output "$(Get-Date -Format "yyyy-MM")"', 'Write-Output "$(Write-Output "a b")"',
+  'Write-Output "$(Write-Output "$(Write-Output "deep")")"', 'Write-Output "$(Get-Date)$(Get-Location)x"', 'Write-Output "$( Get-Date )"', 'Write-Output "$(Get-Date;Get-Location)"', 'Write-Output "$(Get-Date | Out-String)"',
+  'Write-Output "$((Get-Date).Year)"', 'Write-Output "$(Write-Output $(Get-Date))"', 'Write-Output "$(Write-Output (Get-Date))"', 'Write-Output "$(1,2)"', 'Write-Output "$(@(1,2).Count)"', 'Write-Output "$("a" + "b")"', 'Write-Output "x$([int]1)"', 'Get-Content "$(Get-Date).txt"', 'Set-Content "$(Get-Date).txt" x',
+  'Write-Output "$(Remove-Item x)"', 'Write-Output "$(iex \'x\')"', 'Write-Output "a""b$(Get-Date)"', 'Write-Output "$(Get-Date)""$(Get-Location)"', 'Write-Output "$(\'a\'.ToUpper())"',
+  'Write-Output "$(if ($true) { Get-Date })"', 'Write-Output "$(foreach ($i in 1,2) { Get-Date })"', 'Write-Output "$(Get-ChildItem | ForEach-Object { $_.Name })"',
+];
+
+const PS_DQ_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$rows = $env:CLIVE_ROWS | ConvertFrom-Json
+for ($i = 0; $i -lt $rows.Count; $i++) {
+  $errors = $null; $tokens = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($rows[$i], [ref]$tokens, [ref]$errors)
+  if ($errors.Count -gt 0) { Write-Output ("ERR|" + $i); continue }
+  $cmds = $ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true)
+  foreach ($cmd in $cmds) {
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($e in $cmd.CommandElements) {
+      if ($e -is [System.Management.Automation.Language.CommandParameterAst]) {
+        $parts.Add('-' + $e.ParameterName)
+        if ($e.Argument -ne $null) { if ($e.Argument -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $parts.Add($e.Argument.Value) } else { $parts.Add($e.Argument.Extent.Text) } }
+      } elseif ($e -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $parts.Add($e.Value) }
+      elseif ($e -is [System.Management.Automation.Language.ConstantExpressionAst]) { $parts.Add($e.Extent.Text) }
+      else { $parts.Add('<<dyn>>') }
+    }
+    Write-Output ("CMD|" + $i + "|" + ($parts -join [string][char]31))
+  }
+}
+`;
+
+function realWordsOf(rows: readonly string[]): { byRow: Map<number, string[][]>; errored: Set<number> } {
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_DQ_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS: JSON.stringify(rows) } });
+  assert.equal(real.status, 0, real.stderr);
+  const byRow = new Map<number, string[][]>();
+  const errored = new Set<number>();
+  for (const line of real.stdout.split(/\r?\n/u)) {
+    const parts = line.split('|');
+    if (parts[0] === 'ERR') { errored.add(Number(parts[1])); continue; }
+    if (parts[0] !== 'CMD') continue;
+    const i = Number(parts[1]);
+    byRow.set(i, [...(byRow.get(i) ?? []), parts.slice(2).join('|').split(SEP)]);
+  }
+  return { byRow, errored };
+}
+
+test('PowerShell 5.1: "…" の中の $( … ) は、字句の読み取りが読んだコマンド（中の文を含む）の語が、本物の Parser と同じ', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const { byRow, errored } = realWordsOf(PS_DQ_ROWS);
+  const wrong: string[] = [];
+  for (const [i, row] of PS_DQ_ROWS.entries()) {
+    if (errored.has(i)) { wrong.push(`${row}: 本物の Parser が構文エラー`); continue; }
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (!lexed.ok) { wrong.push(`${shell}: ${row}: 読めない (${lexed.fail.code})`); continue; }
+      const mine = lexed.statements.filter(s => s.kind === 'command').map(s => s.words.map(w => (w.dynamic ? '<<dyn>>' : w.text)));
+      const theirs = byRow.get(i) ?? [];
+      const key = (list: string[][]) => list.map(w => JSON.stringify(w)).sort();
+      if (JSON.stringify(key(mine)) !== JSON.stringify(key(theirs))) wrong.push(`${shell}: ${row}: 字句 ${JSON.stringify(mine)} / 本物 ${JSON.stringify(theirs)}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+// 本物の Parser が読めるが、字句の読み取りは読みきれないとして止める形（止めるのが正しい側）。止める形が本物の Parser でどう読まれるかも見て、取り違えが無いことを確かめる
+test('PowerShell 5.1: "…" の中の $( の読みきれない形（${・$$(・コメント・@" "@・閉じない）を、字句の読み取りは止める。本物の Parser の読みとの違いを確かめる', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const rows = [
+    'Write-Output "${env:PATH}"', 'Write-Output "$$(Get-Date)"', 'Write-Output "$$$(Get-Date)"', 'Write-Output "$(Get-Date # c\n)"', 'Write-Output "$(@"\nx\n"@)"', 'Write-Output "$(Get-Date"', 'Write-Output "a`$(Get-Date)"', 'Write-Output "$(Get-Date `n)"',
+    'Write-Output "$("$("$("$("$(1)")")")")"',
+    "Write-Output \"$(Write-Output ')')\"", "Write-Output \"$(Write-Output '(')\"", 'Write-Output "$(Write-Output ")")"', 'Write-Output "$(Write-Output "(")"', "Write-Output \"a$(@'\nx)\n'@)b\"", 'Write-Output "$(Get-Date # )\n)"',
+  ];
+  const { byRow, errored } = realWordsOf(rows);
+  for (const row of rows) for (const shell of ['powershell', 'pwsh'] as ShellKind[]) assert.equal(lexShell(row, shell).ok, false, `${shell}: ${JSON.stringify(row)} は止める`);
+  // 取り違えの確認: $$( は $$ という変数と文字の ( … )（中は実行されない）、$$$( は $$ のあとの本物の置換（実行される）、コメントの中の ) は閉じない
+  assert.deepEqual(byRow.get(1) ?? [], [['Write-Output', '<<dyn>>']], '$$( は置換ではない（読み違えても中の文は動かない側）');
+  assert.deepEqual((byRow.get(2) ?? []).map(c => c[0]).sort(), ['Get-Date', 'Write-Output'], '$$$( のあとの $( は本物の置換');
+  assert.deepEqual((byRow.get(3) ?? []).map(c => c[0]).sort(), ['Get-Date', 'Write-Output'], 'コメントの中の ) は閉じず、次の行の ) で閉じる');
+  assert.ok(errored.has(5), '閉じない $( は本物の Parser も構文エラー');
+  assert.deepEqual(byRow.get(0) ?? [], [['Write-Output', '<<dyn>>']], '${…} は変数（読めるが、字句の読み取りは止める側）');
+  assert.deepEqual(byRow.get(6) ?? [], [['Write-Output', 'a$(Get-Date)']], 'バッククォートで打ち消した $( は文字');
+  // 本物の Parser は、"…" の中の $( の終わりを、引用符やコメントに関わらず ( と ) の数だけで決める。括弧が引用符・ヒア文字列・コメントの中にある形は、本物は構文エラーになる（読み方が割れる）ので、字句の読み取りは止める
+  for (const i of [9, 10, 11, 12, 13, 14]) assert.ok(errored.has(i), `${rows[i]}: 本物の Parser は ( ) を数だけで数えるので構文エラー`);
+});

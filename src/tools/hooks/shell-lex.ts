@@ -72,14 +72,50 @@ const blank = (): Statement => ({ kind: 'command', words: [], redirects: [], ass
 const plain = (text: string, over: Partial<Word> = {}): Word => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain', ...over });
 
 // ASCII の引用符（' と "）の中を空白に置き換えた文字列
+function outsidePsStrings(src: string): string {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  const single = (): void => {
+    out += ' '; i++;
+    while (i < n && src[i] !== "'") { out += ' '; i++; }
+    if (i < n) { out += ' '; i++; }
+  };
+  const double = (level: number): void => {
+    out += ' '; i++;
+    while (i < n) {
+      const c = src[i]!;
+      if (c === '"') { out += ' '; i++; if (src[i] === '"') { out += ' '; i++; continue; } return; }
+      if (c === '$' && src[i + 1] === '(' && level < MAX_DEPTH + 2) { out += '  '; i += 2; code(true, level + 1); continue; }
+      out += ' '; i++;
+    }
+  };
+  const code = (inSub: boolean, level: number): void => {
+    let depth = 0;
+    while (i < n) {
+      const c = src[i]!;
+      if (c === "'") { single(); continue; }
+      if (c === '"') { double(level); continue; }
+      if (c === '(') depth++;
+      else if (c === ')') {
+        if (inSub && depth === 0) { out += ' '; i++; return; }
+        if (depth > 0) depth--;
+      }
+      out += c; i++;
+    }
+  };
+  code(false, 0);
+  return out;
+}
+
 function outsideQuotes(src: string, shell: ShellKind): string {
+  if (isPowerShell(shell)) return outsidePsStrings(src);
   let out = '';
   let quote: string | null = null;
-  const bash = !isPowerShell(shell);
   for (let i = 0; i < src.length; i++) {
     const ch = src[i]!;
     if (quote) {
-      if (bash && quote === '"' && ch === '\\' && i + 1 < src.length) { out += '  '; i++; continue; }
+      if (quote === '"' && ch === '\\' && i + 1 < src.length) { out += '  '; i++; continue; }
       if (ch === quote) quote = null;
       out += ' ';
     } else if (ch === '"' || ch === "'") { quote = ch; out += ' '; } else out += ch;
@@ -420,7 +456,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
 
 // ── PowerShell ──────────────────────────────────────────────────────────
 
-interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean }
+interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][] }
 
 const PS_WORD_STOPS = new Set([' ', '\t', '\r', '\n', ';', '|', '&', '(', ')', '{', '}', ',', "'", '"', '`', '$', '<', '>']);
 const PS_OTHER_CONTROL = new Set([
@@ -440,11 +476,26 @@ const PS_METHOD_OK = new Set([
 ]);
 const isNumberWord = (v: string): boolean => /^[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
 
+function naiveSubEnd(src: string, from: number): number {
+  let depth = 1;
+  for (let i = from; i < src.length; i++) {
+    if (src[i] === '(') depth++;
+    else if (src[i] === ')' && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
 function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
+  const scanned = scanPs(src, shell, 0, 0, false);
+  return isFail(scanned) ? scanned : scanned.toks;
+}
+
+function scanPs(src: string, shell: ShellKind, from: number, level: number, sub: boolean): { toks: Tok[]; end: number } | LexFail {
   const toks: Tok[] = [];
   const n = src.length;
-  let i = 0;
+  let i = from;
   let sp = true;
+  let parens = 0;
   const push = (t: Omit<Tok, 'sp'>): void => { toks.push({ ...t, sp }); sp = false; };
   const prevEndsValue = (): boolean => {
     const p = toks.at(-1);
@@ -456,7 +507,7 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
     if (ch === ' ' || ch === '\t') { sp = true; i++; continue; }
     if (ch === '\r') { i++; continue; }
     if (ch === '\n') { push({ t: 'p', v: '\n' }); sp = true; i++; continue; }
-    if (ch === '#') { while (i < n && src[i] !== '\n') i++; continue; }
+    if (ch === '#') { if (sub) return fail('unexpected', '#'); while (i < n && src[i] !== '\n') i++; continue; }
     if (ch === '<') return fail(src[i + 1] === '#' ? 'block_comment' : 'unexpected', '<');
     if (ch === '`') return fail('backtick');
     if (ch === ';') { push({ t: 'p', v: ';' }); i++; continue; }
@@ -481,6 +532,7 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
     if (ch === '"') {
       let value = '';
       let dyn = false;
+      const subs: Tok[][] = [];
       let j = i + 1;
       for (;;) {
         if (j >= n) return fail('unclosed', '"');
@@ -489,12 +541,24 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
         if (c === '`') return fail('backtick');
         if (c === '$') {
           const next = src[j + 1];
-          if (next === '(' || next === '{') return fail('ps_expand', `$${next}`);
+          if (next === '{') return fail('ps_expand', '${');
+          if (next === '$' && src[j + 2] === '(') return fail('ps_expand', '$$(');
+          if (next === '(') {
+            if (level >= MAX_DEPTH) return fail('depth');
+            const inner = scanPs(src, shell, j + 2, level + 1, true);
+            if (isFail(inner)) return inner;
+            if (naiveSubEnd(src, j + 2) !== inner.end) return fail('ps_expand', '$(');
+            value += src.slice(j, inner.end);
+            subs.push(inner.toks);
+            dyn = true;
+            j = inner.end;
+            continue;
+          }
           if (next !== undefined && /[A-Za-z_?]/u.test(next)) dyn = true;
         }
         value += c; j++;
       }
-      push({ t: 'str', v: value, dyn }); i = j + 1; continue;
+      push({ t: 'str', v: value, dyn, ...(subs.length ? { subs } : {}) }); i = j + 1; continue;
     }
     if (ch === '@') {
       const next = src[i + 1];
@@ -507,14 +571,14 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
         i += m[0].length + close.index + close[0].length; continue;
       }
       if (next === '"') return fail('here_string', '@"');
-      if (next === '(') { push({ t: 'arr', v: '@(' }); i += 2; continue; }
+      if (next === '(') { push({ t: 'arr', v: '@(' }); i += 2; parens++; continue; }
       if (next === '{') { push({ t: 'hash', v: '@{' }); i += 2; continue; }
       const m = /^@([A-Za-z_][A-Za-z0-9_]*)/u.exec(src.slice(i, i + 80));
       if (m) { push({ t: 'splat', v: m[1]! }); i += m[0].length; continue; }
     }
     if (ch === '$') {
       const next = src[i + 1];
-      if (next === '(') { push({ t: 'sub', v: '$(' }); i += 2; continue; }
+      if (next === '(') { push({ t: 'sub', v: '$(' }); i += 2; parens++; continue; }
       if (next === '{') return fail('provider_var', '${…}');
       const m = /^\$(?:([A-Za-z_][A-Za-z0-9_]*):)?([A-Za-z_][A-Za-z0-9_]*)|^\$[?_^$]/u.exec(src.slice(i, i + 120));
       if (!m) return fail('unexpected', '$');
@@ -522,7 +586,12 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
       push({ t: 'var', v: m[1] !== undefined && m[1].toLowerCase() === 'env' ? `env:${m[2]}` : m[2] ?? m[0].slice(1), dyn: true });
       i += m[0].length; continue;
     }
-    if (ch === '(' || ch === ')' || ch === '{' || ch === '}' || ch === ',') { push({ t: 'p', v: ch }); i++; continue; }
+    if (ch === '(' || ch === ')' || ch === '{' || ch === '}' || ch === ',') {
+      if (ch === ')' && sub && parens === 0) return { toks, end: i + 1 };
+      if (ch === '(') parens++;
+      else if (ch === ')' && parens > 0) parens--;
+      push({ t: 'p', v: ch }); i++; continue;
+    }
     if (ch === ']') { push({ t: 'p', v: ']' }); i++; continue; }
     if (ch === '[') {
       const m = /^\[([A-Za-z_][A-Za-z0-9_.]*(?:\[\])?)\]/u.exec(src.slice(i, i + 120));
@@ -553,12 +622,14 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
     push({ t: 'word', v: text, glob: /[*?[]/u.test(text) });
     i = j;
   }
-  return toks;
+  if (sub) return fail('unclosed', '$(');
+  return { toks, end: n };
 }
 
 function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFail | null {
-  const toks = tokenizePs(src, shell);
-  if (isFail(toks)) return toks;
+  const scanned = tokenizePs(src, shell);
+  if (isFail(scanned)) return scanned;
+  let toks: Tok[] = scanned;
   let k = 0;
   const peek = (o = 0): Tok | undefined => toks[k + o];
   const isP = (t: Tok | undefined, v: string): boolean => t?.t === 'p' && t.v === v;
@@ -579,6 +650,20 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const a = peek();
       if (a?.t === 'p' && (a.v === '&&' || a.v === '||')) k++;
     }
+  };
+
+  const stringSubs = (t: Tok, depth: number): LexFail | null => {
+    for (const inner of t.subs ?? []) {
+      const savedToks = toks;
+      const savedK = k;
+      toks = inner;
+      k = 0;
+      const r = statements(null, depth + 1);
+      toks = savedToks;
+      k = savedK;
+      if (r) return r;
+    }
+    return null;
   };
 
   const pipeline = (depth: number): LexFail | null => {
@@ -617,6 +702,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const m = t.t === 'word' ? /^([^=]+)(=?)(.*)$/su.exec(t.v)! : null;
       keys.push((m ? m[1]! : t.v).toLowerCase());
       k++;
+      const keySubs = stringSubs(t, depth);
+      if (keySubs) return keySubs;
       let rest = m ? m[3]! : '';
       if (!m || m[2] === '') {
         const eq = peek();
@@ -662,7 +749,14 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     const t = peek()!;
     // .メンバー・[添字] が続くと、値は計算されたもの（'a'.Replace(..) など）。元の文字ではないので、パスとして読めない印の $( … ) にする
     if (t.t === 'var') { k++; const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(`$${t.v}`, { dynamic: true })); }
-    if (t.t === 'str') { k++; const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(t.v, { quoted: true, dynamic: t.dyn === true })); }
+    if (t.t === 'str') {
+      k++;
+      const inner = stringSubs(t, depth);
+      if (inner) return inner;
+      const start = k;
+      const r = chain(depth, st);
+      return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(t.v, { quoted: true, dynamic: t.dyn === true }));
+    }
     if (t.t === 'p' && t.v === '(' || t.t === 'sub' || t.t === 'arr') {
       k++;
       const r = statements(')', depth + 1);
@@ -812,6 +906,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       if (t.t === 'sub' || t.t === 'arr' || t.t === 'hash') level++;
       if (t.t === 'p' && (t.v === ')' || t.v === '}')) { if (level === 0) break; level--; }
       k++;
+      const inner = stringSubs(t, depth);
+      if (inner) return inner;
       if (level > MAX_DEPTH + 2) return fail('depth');
     }
     void depth;
@@ -875,6 +971,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     // 代入
     if (t.t === 'var') {
       let j = 1;
+      let indexSubs = false;
       for (;;) {
         const x = peek(j);
         if (x?.t === 'member') { j++; continue; }
@@ -883,6 +980,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
           for (;;) {
             const y = peek(j);
             if (!y) break;
+            if (y.subs) indexSubs = true;
             j++;
             if (isP(y, '[')) level++;
             else if (isP(y, ']') && --level === 0) break;
@@ -893,6 +991,7 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       }
       const op = peek(j);
       if (op?.t === 'word' && ASSIGN_OPS.has(op.v)) {
+        if (indexSubs) return fail('ps_expand', '$(');
         k += j + 1;
         skipNl();
         const r = pipeline(depth + 1);
