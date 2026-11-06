@@ -262,17 +262,32 @@ export class ChatEngine {
     const startAll = ended?.ok === true || queue.some(p => p.interrupt);
     const starters = startAll ? queue : queue.filter(p => p.held);
     const saveOnly = startAll ? [] : queue.filter(p => !p.held);
-    const save = (messages: PendingMessage[]) => {
-      for (const { content, images, attachments } of messages) {
-        const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
-        d.bus.publish({ type: 'message.saved', runId: endedRunId, conversationId, messageId: saved.id, role: 'user' });
-      }
-      const language = languageOf(d.config());
-      d.bus.publish({ type: 'warning', runId: endedRunId, conversationId, code: 'queued_saved', message: engineText(language, 'warn.queued_saved', { count: messages.length }), params: { count: messages.length } });
-    };
-    if (saveOnly.length) save(saveOnly);
-    if (starters.length && !this.#beginChat(conversationId, starters, {}).ok) save(starters);
+    if (saveOnly.length) this.#saveQueued(conversationId, saveOnly, endedRunId);
+    if (starters.length && !this.#beginChat(conversationId, starters, {}).ok) this.#saveQueued(conversationId, starters, endedRunId);
     d.bus.publish({ type: 'pending.changed', conversationId });
+  }
+
+  // 待っていた発言を、ふつうのユーザーの発言として保存だけする（新しい実行は始めない）。保存したことを警告で知らせる
+  #saveQueued(conversationId: string, messages: PendingMessage[], runId: string): void {
+    const d = this.#d;
+    for (const { content, images, attachments } of messages) {
+      const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
+      d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    }
+    const language = languageOf(d.config());
+    d.bus.publish({ type: 'warning', runId, conversationId, code: 'queued_saved', message: engineText(language, 'warn.queued_saved', { count: messages.length }), params: { count: messages.length } });
+  }
+
+  // 終了するとき（DB を閉じる前に呼ぶ）、待たせている発言を全部、保存だけして残す。待ちはメモリの中だけなので、これをしないと再起動で消える
+  saveQueued(): number {
+    let count = 0;
+    for (const [conversationId, queue] of [...this.#pending]) {
+      this.#pending.delete(conversationId);
+      this.#saveQueued(conversationId, queue, this.#byConversation.get(conversationId) ?? '');
+      this.#d.bus.publish({ type: 'pending.changed', conversationId });
+      count += queue.length;
+    }
+    return count;
   }
 
   retry(conversationId: string): SendOutcome {

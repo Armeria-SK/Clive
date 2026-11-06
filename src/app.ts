@@ -237,6 +237,7 @@ export class App {
 
   close(): void {
     this.worker.stop();
+    this.engine.saveQueued();
     this.engine.stopAll();
     this.approvals.cancelAll();
     this.db.close();

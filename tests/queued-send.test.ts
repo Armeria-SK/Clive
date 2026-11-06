@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { App } from '../src/app.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
+import { resolvePaths } from '../src/paths.ts';
 import type { ModelRequest } from '../src/providers/types.ts';
 import { CONVERSATION, fakeModel, settled, startApp, uuid, waitFor } from './app-setup.ts';
-import type { Script } from './helpers.ts';
+import { FakeAdapter, tempDir, testConfig, type Script } from './helpers.ts';
 
 type Started = Awaited<ReturnType<typeof startApp>>;
 
@@ -388,4 +390,39 @@ test('添付の無い履歴の上で始まる実行（もう一度）は、今�
   await settled(s.app, retry.body.runId);
   assert.deepEqual(s.app.approvals.pending(), [], '返事が付いたあとの添付は、次の実行の確かめには持ち越さない');
   assert.equal(roles(s).at(-1), 'assistant:書きました');
+});
+
+test('終了するとき、待たせている発言は保存だけして残す（メモリの中だけの待ちが、再起動で消えない）。新しい実行は始めない', async t => {
+  const dir = tempDir(t);
+  const paths = resolvePaths(dir);
+  mkdirSync(paths.data, { recursive: true });
+  const config = testConfig();
+  config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
+  config.models = [fakeModel('m1')];
+  config.routing = { chat: ['m1'], background: [], retriesPerModel: 0 };
+  writeFileSync(paths.config, JSON.stringify(config));
+  const databasePath = join(dir, 'clive.db');
+  const adapters: FakeAdapter[] = [];
+  const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, adapterOverride: provider => { const made = new FakeAdapter(provider); adapters.push(made); return made; } });
+
+  const first = open();
+  const g = gate();
+  adapters[0]!.scripts = [after(g, say('届かない返事'))];
+  await first.status.probeAll(first.config());
+  const sent = first.engine.send(CONVERSATION, '最初の発言');
+  assert.ok(sent.ok);
+  const done = first.engine.wait(sent.runId);
+  done?.catch(() => undefined);
+  assert.equal(first.engine.send(CONVERSATION, '待たせた発言 1').ok, true);
+  assert.equal(first.engine.send(CONVERSATION, '待たせた発言 2').ok, true);
+  assert.equal(first.engine.pending(CONVERSATION).length, 2);
+  first.close();
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  // 一時フォルダを消す前に DB を閉じる（Windows では開いたままだと消せない）
+  const second = open();
+  try {
+    assert.deepEqual(second.conversations.messages(CONVERSATION).map(m => `${m.role}:${m.text}`), ['user:最初の発言', 'user:待たせた発言 1', 'user:待たせた発言 2'], '待たせていた発言が、送った順に残っている');
+    assert.equal(second.runs.recent(10).length, 1, '終了のときに新しい実行は始めない');
+  } finally { second.close(); }
 });
