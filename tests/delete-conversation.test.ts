@@ -240,8 +240,8 @@ test('モデルの道具には、会話を消すものが無い（道具の一�
   const tools = builtinTools();
   const names = tools.map(t => t.name).sort();
   assert.deepEqual(names, [
-    'ask_user', 'calculate', 'checklist_write', 'curiosity_add', 'curiosity_list', 'curiosity_update', 'date_calc', 'file_edit', 'file_list', 'file_read', 'file_search', 'file_write', 'history_read', 'history_search',
-    'memory_forget', 'memory_save', 'memory_search', 'memory_update', 'notify_owner', 'shell_run', 'skill_draft', 'skill_view', 'task_checkpoint', 'task_complete',
+    'ask_user', 'calculate', 'checklist_write', 'curiosity_add', 'curiosity_list', 'curiosity_update', 'date_calc', 'doc_read', 'file_edit', 'file_list', 'file_read', 'file_search', 'file_write', 'history_read', 'history_search',
+    'memory_forget', 'memory_save', 'memory_search', 'memory_update', 'notify_owner', 'shell_run', 'skill_draft', 'skill_view', 'table_write', 'task_checkpoint', 'task_complete',
     'task_create', 'task_list', 'task_update', 'web_fetch', 'web_search',
   ], '道具を足したら、会話を消せないことを確かめ直す');
   assert.ok(!names.some(n => /conversation|chat/iu.test(n)));
