@@ -258,6 +258,7 @@ export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
   ask_user: 'help',
   curiosity_add: 'sparkles', curiosity_list: 'sparkles', curiosity_update: 'sparkles',
   calculate: 'sliders', date_calc: 'clock',
+  checklist_write: 'check', notify_owner: 'bell',
 };
 
 export const toolIcon = (name: string | null | undefined): IconName => TOOL_ICONS[name ?? ''] ?? 'terminal';

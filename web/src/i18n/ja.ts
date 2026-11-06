@@ -913,6 +913,8 @@ export const ja = {
   'tool.file_search': 'ファイルを名前や中身で探す',
   'tool.calculate': '計算する',
   'tool.date_calc': '日付と時刻を計算する',
+  'tool.checklist_write': '作業の一覧を書く',
+  'tool.notify_owner': '持ち主に知らせる',
   'folders.mode.write': '読み書き',
   'folders.mode.read': '読むだけ',
   'folders.modeLabel': (path: string) => `${path} の権限`,

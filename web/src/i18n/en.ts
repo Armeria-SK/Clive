@@ -916,6 +916,8 @@ export const en: Dict = {
   'tool.file_search': 'Search files by name or text',
   'tool.calculate': 'Calculate',
   'tool.date_calc': 'Work out dates and times',
+  'tool.checklist_write': 'Write a work checklist',
+  'tool.notify_owner': 'Notify the owner',
   'folders.mode.write': 'Read and write',
   'folders.mode.read': 'Read only',
   'folders.modeLabel': path => `Access to ${path}`,
