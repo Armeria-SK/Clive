@@ -12,7 +12,12 @@ Object.assign(NAMES, {
   e: Math.E,
   sqrt: Math.sqrt,
   abs: Math.abs,
-  round: (x: number, digits?: number) => (digits === undefined ? Math.round(x) : Number(Math.round(Number(`${x}e${digits}`)) + `e-${digits}`)),
+  round: (x: number, digits?: number) => {
+    if (digits === undefined) return Math.round(x);
+    // 桁のシフトが浮動小数点の範囲を超えると文字列の仕掛けが NaN になる。大きな値は丸めが意味を持たないためそのまま返す
+    if (Math.abs(x) >= 1e15) return x;
+    return Number(Math.round(Number(`${x}e${digits}`)) + `e-${digits}`);
+  },
   floor: Math.floor,
   ceil: Math.ceil,
   min: (...args: number[]) => Math.min(...args),
@@ -36,7 +41,6 @@ function tokenize(src: string): Token[] {
     if (/[0-9.]/u.test(c)) {
       let j = i;
       while (j < src.length && /[0-9.]/u.test(src[j]!)) j++;
-      const body = src.slice(i, j);
       // 指数（1e3 / 2.5E-2）
       if (j < src.length && /[eE]/u.test(src[j]!)) {
         let k = j + 1;
@@ -46,8 +50,10 @@ function tokenize(src: string): Token[] {
           j = k;
         }
       }
+      const body = src.slice(i, j);
       const value = Number(body);
-      if (!Number.isFinite(value)) throw { code: 'syntax', at: i };
+      if (Number.isNaN(value)) throw { code: 'syntax', at: i };
+      if (!Number.isFinite(value)) throw { code: 'not_finite', at: i };
       tokens.push({ kind: 'num', value });
       i = j;
       continue;
@@ -194,11 +200,16 @@ function apply(op: string, left: number, right: number): number {
   }
 }
 
+// ちょうど 1 引数を取る関数。min / max は可変長なので除く
+const SINGLE_ARG = new Set(['sqrt', 'abs', 'floor', 'ceil', 'log', 'ln', 'exp', 'sin', 'cos', 'tan']);
+
 function callFunction(name: string, fn: (...args: number[]) => number, args: number[]): number {
   if (name === 'round') {
     if (args.length < 1 || args.length > 2) throw { code: 'bad_args', at: undefined };
     const digits = args[1];
     if (digits !== undefined && (!Number.isInteger(digits) || digits < 0 || digits > 12)) throw { code: 'bad_args', at: undefined };
+  } else if (SINGLE_ARG.has(name)) {
+    if (args.length !== 1) throw { code: 'bad_args', at: undefined };
   } else {
     if (args.length < 1) throw { code: 'bad_args', at: undefined };
   }

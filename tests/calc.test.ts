@@ -33,6 +33,17 @@ test('計算: 表示は余計な桁を落とす', () => {
   assert.equal(formatNumber(0.1 + 0.2), '0.3');
 });
 
+test('計算: 指数付きの数値', () => {
+  assert.equal(ok('1e3'), 1000);
+  assert.equal(ok('2.5E-2'), 0.025);
+  fail('1e400', 'not_finite');
+});
+
+test('計算: 大きな値の丸めと引数の数', () => {
+  assert.equal(ok('round(10^21, 2)'), 1e21, '桁のシフトが範囲を超えても丸める');
+  fail('sqrt(4,9)', 'bad_args');
+});
+
 test('計算: 失敗のコード', () => {
   fail('1/0', 'not_finite');
   fail('foo(1)', 'unknown_name');

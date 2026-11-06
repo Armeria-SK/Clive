@@ -23,6 +23,32 @@ function daysInMonth(y: number, m: number): number {
   return new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
 
+// 1970-01-01 からの日数（Hinnant の civil 日付）。Date.UTC が y<100 を 19xx に潰すのを避けるため、
+// 結果の年を正しく求めるのに使う
+function daysFromCivil(y: number, m: number, d: number): number {
+  y -= m <= 2 ? 1 : 0;
+  const era = Math.floor(y / 400);
+  const yoe = y - era * 400;
+  const mp = m + (m > 2 ? -3 : 9);
+  const doy = Math.floor((153 * mp + 2) / 5) + d - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  return era * 146097 + doe - 719468;
+}
+
+function civilFromDays(z: number): { y: number; m: number; d: number } {
+  z += 719468;
+  const era = Math.floor(z / 146097);
+  const doe = z - era * 146097;
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365);
+  let y = yoe + era * 400;
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  const mp = Math.floor((5 * doy + 2) / 153);
+  const d = doy - Math.floor((153 * mp + 2) / 5) + 1;
+  const m = mp + (mp < 10 ? 3 : -9);
+  if (m <= 2) y++;
+  return { y, m, d };
+}
+
 type ParsedDate = { y: number; m: number; d: number };
 type ParsedDateTime = ParsedDate & { h: number; mi: number };
 
@@ -50,6 +76,7 @@ function parseDateTime(s: string): DateResult<ParsedDateTime> {
   const d = Number(match[3]);
   const h = Number(match[4]);
   const mi = Number(match[5]);
+  if (h > 23 || mi > 59) return { ok: false, code: 'bad_datetime' };
   if (!isRealDate(y, m, d)) return { ok: false, code: 'bad_date' };
   const err = yearError(y);
   if (err) return { ok: false, code: err };
@@ -105,8 +132,10 @@ export function addToDate(date: string, amount: { days?: number; weeks?: number;
   const m = ((totalMonths % 12) + 12) % 12 + 1;
   const d = Math.min(sd, daysInMonth(y, m));
   const dayCount = (amount.days ?? 0) + (amount.weeks ?? 0) * 7;
-  const dt = new Date(Date.UTC(y, m - 1, d) + dayCount * MS_PER_DAY);
-  return { ok: true, value: `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())}` };
+  // Date.UTC は y<100 を 19xx に潰すので、結果の年月日は civil 日数で求める
+  const r = civilFromDays(daysFromCivil(y, m, d) + dayCount);
+  if (r.y < MIN_YEAR || r.y > MAX_YEAR) return { ok: false, code: 'out_of_range' };
+  return { ok: true, value: `${r.y}-${pad2(r.m)}-${pad2(r.d)}` };
 }
 
 export function diffDates(from: string, to: string): DateResult<{ days: number; weekdays: number }> {
@@ -152,9 +181,14 @@ export function convertZone(datetime: string, fromZone: string, toZone: string):
   }
   const { y, m, d, h, mi } = parsed.value;
   const provUtc = Date.UTC(y, m - 1, d, h, mi);
+  // 最初の推測で得たオフセットは、DST 切替直後の時刻では本当の瞬間のものと異なることがある。
+  // 補正後の UTC 時刻でオフセットを再計算し、それを使う
   const fromWall = readWall(fromFmt, provUtc);
   const fromWallMs = Date.UTC(fromWall.y, fromWall.m - 1, fromWall.d, fromWall.h, fromWall.mi);
-  const trueUtc = provUtc + (provUtc - fromWallMs);
+  let trueUtc = provUtc + (provUtc - fromWallMs);
+  const checkWall = readWall(fromFmt, trueUtc);
+  const checkWallMs = Date.UTC(checkWall.y, checkWall.m - 1, checkWall.d, checkWall.h, checkWall.mi);
+  if (checkWallMs !== fromWallMs) trueUtc = provUtc + (trueUtc - checkWallMs);
   const toWall = readWall(toFmt, trueUtc);
   const datetimeOut = `${toWall.y}-${pad2(toWall.m)}-${pad2(toWall.d)}T${pad2(toWall.h)}:${pad2(toWall.mi)}`;
   return { ok: true, value: { datetime: datetimeOut, offset: toWall.offset } };

@@ -43,6 +43,24 @@ test('日付: タイムゾーン変換', () => {
   assert.equal(jan.offset, '-05:00', '冬時間');
 });
 
+test('日付: DST 切替直後の変換', () => {
+  // 2026-03-08 は America/New_York の DST 開始日（02:00 → 03:00）
+  const before = value(convertZone('2026-03-08T03:30', 'America/New_York', 'UTC'));
+  assert.equal(before.datetime, '2026-03-08T07:30', 'DST 開始後の 03:30 は UTC 07:30');
+  const after = value(convertZone('2026-03-08T05:00', 'America/New_York', 'UTC'));
+  assert.equal(after.datetime, '2026-03-08T09:00', 'DST 開始後の 05:00 は UTC 09:00');
+});
+
+test('日付: 時刻の範囲は拒否する', () => {
+  failCode(convertZone('2026-01-01T25:00', 'UTC', 'UTC'), 'bad_datetime');
+  failCode(convertZone('2026-01-01T00:99', 'UTC', 'UTC'), 'bad_datetime');
+});
+
+test('日付: 結果の年は範囲外を拒否する', () => {
+  failCode(addToDate('2026-01-01', { years: -1950 }), 'out_of_range');
+  failCode(addToDate('2026-01-01', { years: 100000 }), 'out_of_range');
+});
+
 test('日付: 今この瞬間', () => {
   const now = value(nowIn('Asia/Tokyo', Date.UTC(2026, 10, 6, 15, 0)));
   assert.equal(now.date, '2026-11-07');
