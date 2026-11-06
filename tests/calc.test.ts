@@ -44,6 +44,13 @@ test('計算: 大きな値の丸めと引数の数', () => {
   fail('sqrt(4,9)', 'bad_args');
 });
 
+test('計算: 指数表記の値でも丸めが壊れない', () => {
+  assert.equal(ok('round(1e-7, 2)'), 0);
+  assert.ok(Math.abs(ok('round(0.00000012345, 9)') - 1.23e-7) < 1e-20, '微小値は丸めて残る');
+  assert.equal(ok('round(1e9, 12)'), 1e9);
+  assert.equal(ok('round(123456789012, 12)'), 123456789012);
+});
+
 test('計算: 失敗のコード', () => {
   fail('1/0', 'not_finite');
   fail('foo(1)', 'unknown_name');

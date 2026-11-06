@@ -14,9 +14,17 @@ Object.assign(NAMES, {
   abs: Math.abs,
   round: (x: number, digits?: number) => {
     if (digits === undefined) return Math.round(x);
-    // 桁のシフトが浮動小数点の範囲を超えると文字列の仕掛けが NaN になる。大きな値は丸めが意味を持たないためそのまま返す
-    if (Math.abs(x) >= 1e15) return x;
-    return Number(Math.round(Number(`${x}e${digits}`)) + `e-${digits}`);
+    // 桁のシフトが浮動小数点の範囲を超えると文字列の仕掛けが NaN になる。
+    // 文字列シフトが有限ならそれを返し、失敗したときだけ直接乗算で丸める
+    const shifted = Number(`${x}e${digits}`);
+    if (Number.isFinite(shifted)) {
+      const r = Number(Math.round(shifted) + `e-${digits}`);
+      if (Number.isFinite(r)) return r;
+    }
+    if (Math.abs(x) * 10 ** digits >= 1e21) return x;
+    const r = Math.round(x * 10 ** digits) / 10 ** digits;
+    if (!Number.isFinite(r)) return x;
+    return r;
   },
   floor: Math.floor,
   ceil: Math.ceil,

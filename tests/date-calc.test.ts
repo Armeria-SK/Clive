@@ -59,6 +59,7 @@ test('日付: 時刻の範囲は拒否する', () => {
 test('日付: 結果の年は範囲外を拒否する', () => {
   failCode(addToDate('2026-01-01', { years: -1950 }), 'out_of_range');
   failCode(addToDate('2026-01-01', { years: 100000 }), 'out_of_range');
+  failCode(addToDate('2200-12-31', { days: 1 }), 'out_of_range');
 });
 
 test('日付: 今この瞬間', () => {

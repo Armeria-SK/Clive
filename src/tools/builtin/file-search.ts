@@ -76,8 +76,8 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
         if (entry.isSymbolicLink()) continue;
         const full = resolve(dir, entry.name);
         if (placePath(full, ctx.policy).kind === 'deny') continue;
+        if (scanned >= MAX_SCAN) { partial = true; break outer; }
         scanned++;
-        if (scanned > MAX_SCAN) { partial = true; break outer; }
         if (scanned % YIELD_EVERY === 0) {
           await new Promise(r => setImmediate(r));
           if (ctx.signal.aborted) break outer;
