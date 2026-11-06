@@ -307,4 +307,8 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE engine_runs ADD COLUMN tainted INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE tasks ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0;
   `,
+  // 11: 会話ごとの権限モード（normal = ふつう / auto = 自動承認 / plan = 計画。前からある会話と新しい会話は normal）
+  `
+  ALTER TABLE conversations ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'normal' CHECK (permission_mode IN ('normal', 'auto', 'plan'));
+  `,
 ];

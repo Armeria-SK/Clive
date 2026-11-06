@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from './database.ts';
 import type { ChatMessage } from '../engine/types.ts';
+import type { PermissionMode } from '../shared/permission-mode.ts';
 
 export interface ConversationRow {
   id: string;
@@ -16,6 +17,7 @@ export interface ConversationRow {
   summary_upto: number | null;
   model_id: string | null;
   effort: string | null;
+  permission_mode: PermissionMode;
 }
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
@@ -81,7 +83,7 @@ export class Conversations {
     const query = options.query?.trim();
     const like = query ? `%${query.replace(/[!%_]/gu, '!$&')}%` : null;
     const rows = this.db.prepare(`
-      SELECT id, kind, title, archived, created_at, last_message_at, summary_upto, model_id, effort,
+      SELECT id, kind, title, archived, created_at, last_message_at, summary_upto, model_id, effort, permission_mode,
         (summary IS NOT NULL AND summary != '') AS has_summary
       FROM conversations WHERE archived = ? AND kind = 'chat'${like ? " AND title LIKE ? ESCAPE '!'" : ''}
       ORDER BY last_message_at DESC LIMIT ?
@@ -106,11 +108,17 @@ export class Conversations {
     return true;
   }
 
-  // 会話で選んだモデルと考える深さ。渡さなかった方は変えない（null は自動・モデルの既定に戻す）
-  setChoice(id: string, choice: { modelId?: string | null | undefined; effort?: string | null | undefined }): void {
+  // 会話で選んだモデルと考える深さ・権限モード。渡さなかったものは変えない（モデルと考える深さの null は自動・モデルの既定に戻す）
+  setChoice(id: string, choice: { modelId?: string | null | undefined; effort?: string | null | undefined; permissionMode?: PermissionMode | undefined }): void {
     if (!this.ensure(id)) return;
     if (choice.modelId !== undefined) this.db.prepare('UPDATE conversations SET model_id = ? WHERE id = ?').run(choice.modelId, id);
     if (choice.effort !== undefined) this.db.prepare('UPDATE conversations SET effort = ? WHERE id = ?').run(choice.effort, id);
+    if (choice.permissionMode !== undefined) this.db.prepare('UPDATE conversations SET permission_mode = ? WHERE id = ?').run(choice.permissionMode, id);
+  }
+
+  // 会話の権限モード。無い会話はふつう
+  modeOf(id: string): PermissionMode {
+    return (this.db.prepare('SELECT permission_mode FROM conversations WHERE id = ?').get(id) as { permission_mode: PermissionMode } | undefined)?.permission_mode ?? 'normal';
   }
 
   rename(id: string, title: string): void {

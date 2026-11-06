@@ -7,6 +7,7 @@ import { candidateModelIds, type SendChoice } from '../engine/chat.ts';
 import { modelEfforts } from '../engine/efforts.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
+import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts';
 import { engineText } from '../shared/messages/engine.ts';
 import { approvalWire } from '../tools/approvals.ts';
 import { eraseConversation } from '../db/erase.ts';
@@ -87,10 +88,14 @@ function modelsView(app: App) {
   };
 }
 
-// モデルと考える深さの選び方（PATCH と送信で共通）。設定にあるモデルだけ、そのモデルで選べる値だけを受ける。
+// モデルと考える深さ・権限モードの選び方（PATCH と送信で共通）。設定にあるモデルだけ、そのモデルで選べる値だけを受ける。
 // モデルだけを替えて、今の考える深さが新しいモデルに無いときは、null に戻して effortReset で知らせる。何も書く前に検査を終える
 function readChoice(app: App, body: Record<string, unknown>, current: { model_id: string | null; effort: string | null } | undefined): { choice: SendChoice; effortReset: boolean } {
   const choice: SendChoice = {};
+  if (body.permissionMode !== undefined) {
+    if (!isPermissionMode(body.permissionMode)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'permissionMode', params: { field: 'permissionMode', values: PERMISSION_MODES.join(' / ') } });
+    choice.permissionMode = body.permissionMode;
+  }
   const text = (field: 'modelId' | 'effort'): string | null | undefined => {
     const value = body[field];
     if (value === undefined || value === null) return value;

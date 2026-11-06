@@ -5,6 +5,7 @@ import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
 import type { AppPaths } from '../paths.ts';
 import { redactSecrets } from '../shared/redaction.ts';
+import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { EndpointLimiter } from '../providers/limiter.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
@@ -86,8 +87,9 @@ const ATTACHMENT_PLACEHOLDER = new RegExp(`^(?:${(['ja', 'en'] as const).flatMap
 // messageCode / messageParams は、モデルの確認（probe）の messageCode / messageParams と同じ（確認していない・設定に無いときは engine.problem.*）。画面が自分の言語で組み立てられるように添える。
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: MessageParams | undefined }
 
-// 送信と一緒に渡す、会話で選ぶモデルと考える深さ。渡さなかった方は会話に覚えているもの。null は自動・モデルの既定
-export interface SendChoice { modelId?: string | null | undefined; effort?: string | null | undefined }
+// 送信と一緒に渡す、会話で選ぶモデルと考える深さ・権限モード。渡さなかったものは会話に覚えているもの。モデルと考える深さの null は自動・モデルの既定
+export interface SendChoice { modelId?: string | null | undefined; effort?: string | null | undefined; permissionMode?: PermissionMode | undefined }
+const hasChoice = (choice: SendChoice): boolean => choice.modelId !== undefined || choice.effort !== undefined || choice.permissionMode !== undefined;
 
 export type SendOutcome =
   // queued: 実行中だったので待たせた（runId は今の実行。差し込まれる前なら pendingId で取り消せる）
@@ -142,6 +144,8 @@ export class ChatEngine {
   #initialTaint = new Map<string, string[]>();
   // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
   #runModel = new Map<string, string | null>();
+  // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
+  #runMode = new Map<string, PermissionMode>();
   // 止める操作（stop）を受けた実行
   #stopped = new Set<string>();
   // 実行中に送られて、まだ履歴に入っていない発言（会話ごと。再起動で消える）
@@ -167,11 +171,12 @@ export class ChatEngine {
       return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), 'send.queue_full', { max: MAX_PENDING_MESSAGES }), errorCode: 'engine.send.queue_full', errorParams: { max: MAX_PENDING_MESSAGES } };
     }
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
-    // 選んだモデルと考える深さは、次の実行から効く（今の実行の鎖は変えない）
-    if (choice.modelId !== undefined || choice.effort !== undefined) this.#d.conversations.setChoice(conversationId, choice);
-    // 実行が始まってから会話のモデルが替わっていたら（PATCH でも、この送信の modelId でも）、この発言は古いモデルの実行に読ませない。
+    // 選んだモデルと考える深さは、次の実行から効く（今の実行の鎖は変えない）。権限モードは、厳しくなる向きはその場から、緩む向きは次の実行から効く（pipeline.ts）
+    if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
+    // 実行が始まってから会話のモデルや権限モードが替わっていたら（PATCH でも、この送信の modelId・permissionMode でも）、この発言は古いモデル・古いモードの実行に読ませない。
     // 一度保留した発言があれば、あとの発言も順番を守るため保留する
-    const held = queue.some(p => p.held) || (this.#d.conversations.get(conversationId)?.model_id ?? null) !== (this.#runModel.get(running) ?? null);
+    const held = queue.some(p => p.held) || (this.#d.conversations.get(conversationId)?.model_id ?? null) !== (this.#runModel.get(running) ?? null)
+      || this.#d.conversations.modeOf(conversationId) !== (this.#runMode.get(running) ?? 'normal');
     const pending: PendingMessage = { id: randomUUID(), ...item, interrupt: options.interrupt === true, createdAt: this.#d.now?.().getTime() ?? Date.now(), held, afterStop: this.#stopped.has(running) };
     this.#pending.set(conversationId, [...queue, pending]);
     this.#d.bus.publish({ type: 'pending.changed', conversationId });
@@ -205,7 +210,7 @@ export class ChatEngine {
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     // ユーザーが同じ id へ新しく送ったときは、消したばかりの会話の覚えを外す（動いていた実行の遅れた書き込みだけを見送るため）
     this.#d.conversations.reopen(conversationId);
-    if (choice.modelId !== undefined || choice.effort !== undefined) this.#d.conversations.setChoice(conversationId, choice);
+    if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
     let firstId: number | undefined;
@@ -473,7 +478,7 @@ export class ChatEngine {
   #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null): void {
     const controller = new AbortController();
     this.#byConversation.set(conversationId, runId);
-    if (kind === 'chat') this.#runModel.set(runId, this.#d.conversations.get(conversationId)?.model_id ?? null);
+    if (kind === 'chat') { this.#runModel.set(runId, this.#d.conversations.get(conversationId)?.model_id ?? null); this.#runMode.set(runId, this.#d.conversations.modeOf(conversationId)); }
     let ended: EngineResult | undefined;
     const done = this.#execute(runId, conversationId, chain, controller.signal, kind, task, forbid, effort)
       .catch((error): EngineResult => {
@@ -490,6 +495,7 @@ export class ChatEngine {
         this.#byConversation.delete(conversationId);
         this.#preemptedTasks.delete(runId);
         this.#runModel.delete(runId);
+        this.#runMode.delete(runId);
         this.#stopped.delete(runId);
         setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
         // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
