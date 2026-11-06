@@ -36,6 +36,8 @@ import { fileSearch } from './tools/builtin/file-search.ts';
 import { calculate, dateCalc } from './tools/builtin/calc.ts';
 import { checklistWrite } from './tools/builtin/checklist.ts';
 import { notifyOwner } from './tools/builtin/notify.ts';
+import { docRead } from './tools/builtin/docs.ts';
+import { tableWrite } from './tools/builtin/tables.ts';
 import type { PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { SkillStore } from './tools/skills/store.ts';
@@ -55,7 +57,7 @@ export function builtinTools(): ToolDef[] {
     memoryUpdate, memoryForget, memorySearch, historyRead,
     skillView, skillDraft, curiosityAdd, curiosityList, curiosityUpdate,
     fileSearch, calculate, dateCalc,
-    checklistWrite, notifyOwner,
+    checklistWrite, notifyOwner, docRead, tableWrite,
   ];
 }
 

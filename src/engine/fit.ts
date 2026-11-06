@@ -29,6 +29,12 @@ export interface Fitted {
   estimate: Estimate;
 }
 
+// fitMessages がどれだけ古い発言を外しても残る、いちばん小さい送信量（system・道具の仕様・最後のやり取り 1 つ）。
+// これが available を超えると fitMessages は ContextOverflow を投げる。逆に、available との差が、いま道具の結果などを足せる余裕
+export function irreducibleEstimate(input: { system: string; messages: readonly ChatMessage[]; tools: readonly ToolSpec[]; factor?: number }): Estimate {
+  return estimateRequest(input.system, groupExchanges(input.messages).at(-1) ?? [], input.tools, input.factor ?? 1);
+}
+
 export function fitMessages(input: {
   system: string; messages: readonly ChatMessage[]; tools: readonly ToolSpec[]; available: number; factor?: number;
 }): Fitted {

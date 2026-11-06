@@ -924,6 +924,8 @@ export const en: Dict = {
   'tool.date_calc': 'Work out dates and times',
   'tool.checklist_write': 'Write a work checklist',
   'tool.notify_owner': 'Notify the owner',
+  'tool.doc_read': 'Read PDF, Word and Excel files',
+  'tool.table_write': 'Write a table file (CSV or Excel)',
   'folders.mode.write': 'Read and write',
   'folders.mode.read': 'Read only',
   'folders.modeLabel': path => `Access to ${path}`,

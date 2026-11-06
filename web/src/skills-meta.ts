@@ -5,7 +5,7 @@ import type { ToolPolicy } from '../../src/tools/tool-policy.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
-// 組み込みの道具 29 個の絵と説明の辞書キー。名前・効果・使える場面・今の方針は、サーバー（GET /api/tools）から読む。
+// 組み込みの道具 31 個の絵と説明の辞書キー。名前・効果・使える場面・今の方針は、サーバー（GET /api/tools）から読む。
 // 名前の食い違いは tests/skills.test.ts が、サーバーの一覧と突き合わせて落とす。知らない道具（あとから増えたもの）は、絵だけ汎用で説明は出さない。
 export interface ToolLook { icon: IconName; desc: PlainKey | null }
 export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
@@ -38,6 +38,8 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   date_calc: { icon: 'clock', desc: 'tool.date_calc' },
   checklist_write: { icon: 'check', desc: 'tool.checklist_write' },
   notify_owner: { icon: 'bell', desc: 'tool.notify_owner' },
+  doc_read: { icon: 'file', desc: 'tool.doc_read' },
+  table_write: { icon: 'pencil', desc: 'tool.table_write' },
 };
 
 // 道具の並び: 画面の辞書の順（ファイル・シェル・Web・記憶・タスク・スキル・好奇心）。辞書に無い道具は、そのあとに名前順
