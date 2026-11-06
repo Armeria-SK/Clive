@@ -20,6 +20,8 @@ export class Notifications {
   readonly #db: DatabaseSync;
   readonly #now: () => number;
   onNotify: ((n: Notification) => void) | undefined;
+  // 聞かれていたことが片づいて既読にした通知の id（持ち主が読んだときの markRead では呼ばない）
+  onSettled: ((ids: number[]) => void) | undefined;
 
   constructor(db: DatabaseSync, now: () => number = Date.now) { this.#db = db; this.#now = now; }
 
@@ -45,6 +47,17 @@ export class Notifications {
 
   unread(): number {
     return (this.#db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE read_at IS NULL').get() as { n: number }).n;
+  }
+
+  // 通知が持ち主に求めていたこと（承認・返事・失敗の確認）が片づいたら、その未読を既読にする。kind と、link か dedupKey が合うものだけ
+  settle(kind: NotificationKind, by: { link: string } | { dedupKey: string }): void {
+    const rows = ('link' in by
+      ? this.#db.prepare('SELECT id FROM notifications WHERE read_at IS NULL AND kind = ? AND link = ?').all(kind, by.link)
+      : this.#db.prepare('SELECT id FROM notifications WHERE read_at IS NULL AND kind = ? AND dedup_key = ?').all(kind, by.dedupKey)) as Array<{ id: number }>;
+    if (!rows.length) return;
+    const ids = rows.map(r => r.id);
+    this.markRead(ids);
+    this.onSettled?.(ids);
   }
 
   markRead(ids?: readonly number[]): void {

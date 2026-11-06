@@ -98,4 +98,6 @@ export type RunEvent =
   | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: TaskView }
-  | { type: 'notification'; notification: Notification };
+  | { type: 'notification'; notification: Notification }
+  // 承認や返事が片づいて、通知が既読になった（画面が一覧と未読数を直す）。unread は既読にしたあとの未読の総数
+  | { type: 'notification.read'; ids: number[]; unread: number };

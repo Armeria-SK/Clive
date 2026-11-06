@@ -422,6 +422,10 @@ export function App() {
           new Notification(t('browser.notification', e.notification.title), { body: e.notification.body ?? '' });
         }
         break;
+      case 'notification.read': // 承認や返事が片づいて、サーバーが既読にした
+        setUnread(e.unread);
+        setNotifications(list => withRead(list, e.ids, Date.now()));
+        break;
     }
   }, [t, refreshList, refreshWorker, approvalTarget, tabState.close]);
 

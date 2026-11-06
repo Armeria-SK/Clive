@@ -34,6 +34,6 @@ export function notificationLink(link: string | null): string | null {
 export const withNotification = (list: readonly NotificationItem[] | null, added: NotificationItem): NotificationItem[] =>
   arrangeNotifications([added, ...(list ?? [])], NOTIFICATION_LIST_LIMIT);
 
-// ids を既読にする（ids が無ければ全部）。既読になった通知は、先頭から外れ、新しい順の場所に戻る
+// ids を既読にする（ids が無ければ全部）。既読になった通知は先頭から外れる。新しい 50 件の中なら新しい順の場所に戻り、それより古いものは一覧から消える
 export const withRead = (list: readonly NotificationItem[] | null, ids: readonly number[] | undefined, now: number): NotificationItem[] | null =>
   list && arrangeNotifications(list.map(n => (!ids || ids.includes(n.id) ? { ...n, read_at: n.read_at ?? now } : n)), NOTIFICATION_LIST_LIMIT);
