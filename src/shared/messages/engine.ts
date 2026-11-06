@@ -40,6 +40,8 @@ const ja = {
   'attachment.image': '（画像を添付しました）',
   'attachment.file': '（ファイルを添付しました）',
   'attachment.taint': '添付「{name}」',
+  'taint.carried': '前の実行で読んだもの',
+  'taint.unknown': '履歴が長く、確かめきれないもの',
 } as const;
 
 const en: Record<keyof typeof ja, string> = {
@@ -82,6 +84,8 @@ const en: Record<keyof typeof ja, string> = {
   'attachment.image': '(An image was attached)',
   'attachment.file': '(A file was attached)',
   'attachment.taint': 'Attachment "{name}"',
+  'taint.carried': 'what an earlier run read',
+  'taint.unknown': 'a history too long to check',
 };
 
 export const engineText = defineMessages('engine', ja, en);

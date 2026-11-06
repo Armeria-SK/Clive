@@ -149,7 +149,9 @@
     "message.stopped_partway": "（途中で止めました）",
     "attachment.image": "（画像を添付しました）",
     "attachment.file": "（ファイルを添付しました）",
-    "attachment.taint": "添付「{name}」"
+    "attachment.taint": "添付「{name}」",
+    "taint.carried": "前の実行で読んだもの",
+    "taint.unknown": "履歴が長く、確かめきれないもの"
   },
   "guard": {
     "scope.cmd_subst": "コマンド置換を含んでいます",

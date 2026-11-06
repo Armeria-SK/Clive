@@ -53,6 +53,8 @@ const MAX_COMPACTIONS_PER_RUN = 5;
 // 1 つの会話で、実行中に待たせておける発言の数
 const MAX_PENDING_MESSAGES = 10;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
+// 実行を始めるとき、添付の有無を見るために読み戻す発言の数（最後の返事がこの中に無ければ、確かめきれないので承認制の側に倒す）
+const TAINT_SCAN_LIMIT = 500;
 
 export interface ChatEngineDeps {
   config: () => AppConfig;
@@ -216,17 +218,32 @@ export class ChatEngine {
     return { ok: true, runId, messageId: firstId! };
   }
 
-  // 添付の中身は外部のデータなので、返事がまだ付いていない（最後の assistant の発言より後の）ユーザーの発言に添付があれば、
-  // その実行ではシェルと書き込みを承認制にする（taint）。今送った発言だけでなく、保存だけになった待ちの発言や、やり直す発言の添付も数える
+  // 外から読んだ内容が残ったまま始まる実行は、シェルと書き込みを承認制にする（taint）。次のどれかなら、始まる実行も「外から読んだ」扱いにする:
+  // - 最後の返事（道具の呼び出しだけではない assistant の発言）より後のユーザーの発言に添付がある。今送った発言・保存だけになった待ちの発言・やり直す発言のどれでも数え、道具を呼んだ assistant の発言は返事ではないので、またいで見る
+  // - 最後の返事を、読み出す発言の数（TAINT_SCAN_LIMIT）の中に見つけられない。添付の有無を確かめきれないので、承認制の側に倒す
+  // - 前のチャットの実行が、外から読んだまま、最後まで返事を書かずに終わった（止めた・失敗・取り消し・道具の上限のまとめ）。Web を読んだ分もこれで持ち越す。やり直し・続きは、その実行のやり直し・続きとみなす
   #taintFromHistory(runId: string, conversationId: string): void {
-    const names: string[] = [];
-    const stored = this.#d.conversations.messages(conversationId);
+    const language = languageOf(this.#d.config());
+    const sources: string[] = [];
+    const stored = this.#d.conversations.messages(conversationId, TAINT_SCAN_LIMIT);
+    let replied = false;
     for (let i = stored.length - 1; i >= 0; i--) {
       const message = stored[i]!.message;
-      if (message.role === 'assistant') break;
-      if (message.role === 'user') names.unshift(...(message.attachments ?? []).map(a => a.name));
+      if (message.role === 'assistant' && !message.toolCalls?.length) { replied = true; break; }
+      if (message.role === 'user') sources.unshift(...(message.attachments ?? []).map(a => engineText(language, 'attachment.taint', { name: a.name })));
     }
-    if (names.length) this.#initialTaint.set(runId, names.map(name => engineText(languageOf(this.#d.config()), 'attachment.taint', { name })));
+    if (!replied && stored.length >= TAINT_SCAN_LIMIT) sources.push(engineText(language, 'taint.unknown'));
+    if (this.#previousRunLeftTaint(conversationId)) sources.push(engineText(language, 'taint.carried'));
+    if (sources.length) this.#initialTaint.set(runId, sources);
+  }
+
+  // 前のチャットの実行が、外から読んだ印を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめではない）の印は持ち越さない
+  #previousRunLeftTaint(conversationId: string): boolean {
+    const last = this.#d.runs.latestChat(conversationId);
+    if (!last || last.tainted !== 1) return false;
+    let wrappedUp = true;
+    try { wrappedUp = (JSON.parse(last.flags) as string[]).includes('max_iterations'); } catch { }
+    return !(last.ok === 1 && !wrappedUp);
   }
 
   // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは、実行が道具の呼び出しの中で待っているので、区切りに来ない。承認の答えが先）。
@@ -512,6 +529,9 @@ export class ChatEngine {
       ...(forbid ? { forbiddenTools: forbid } : {}),
     };
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider));
+    // 外から読んだ印は、実行の記録に読んだ時点で書く（途中で止まる・落ちる実行でも、やり直し・続きが引き継げるように）
+    let taintRecorded = false;
+    const recordTaint = () => { if (taintRecorded || !ctx.taint.tainted) return; taintRecorded = true; d.runs.markTainted(runId); };
     const addUsage = (u: Usage) => {
       for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
         if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;
@@ -536,7 +556,7 @@ export class ChatEngine {
     const maxIterations = iterationLimit(config.tools.maxIterations, kind);
     const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
-      if (kind === 'chat') this.#injectPending(runId, conversationId, ctx);
+      if (kind === 'chat') { this.#injectPending(runId, conversationId, ctx); recordTaint(); }
       const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
@@ -564,6 +584,7 @@ export class ChatEngine {
         const toolCapacity = d.status.get(toolModel.id)?.effective ?? toolModel.contextLength ?? 0;
         ctx.outputLimit = toolCapacity > 0 ? toolOutputLimit(contextAvailable(toolCapacity, toolModel), TOOL_OUTPUT_LIMIT) : undefined;
         const outcome = await runToolCall(toolCall, ctx, { registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e) });
+        recordTaint();
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {
           role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}),

@@ -26,6 +26,8 @@ export interface RunRow {
   cache_write_tokens: number | null;
   est_prompt_tokens: number | null;
   flags: string;
+  // 1 = この実行は、外から読んだ内容（Web・添付、前の実行から引き継いだ分を含む）を読んだ。終わったかどうかに関わらず、読んだ時点で書く
+  tainted: number;
 }
 
 export interface RunFinish {
@@ -70,8 +72,18 @@ export class Runs {
     );
   }
 
+  // 「外から読んだ」印を付ける（一度付いたら外れない）。実行が終わる前に書くので、落ちて途中で終わった実行にも残る
+  markTainted(id: string): void {
+    this.db.prepare('UPDATE engine_runs SET tainted = 1 WHERE id = ?').run(id);
+  }
+
   get(id: string): RunRow | undefined {
     return this.db.prepare('SELECT * FROM engine_runs WHERE id = ?').get(id) as RunRow | undefined;
+  }
+
+  // その会話の、いちばん新しいチャットの実行（やり直し・次の発言が、前の実行の印と終わり方を見るため）
+  latestChat(conversationId: string): RunRow | undefined {
+    return this.db.prepare("SELECT * FROM engine_runs WHERE conversation_id = ? AND kind = 'chat' ORDER BY started_at DESC, rowid DESC LIMIT 1").get(conversationId) as RunRow | undefined;
   }
 
   recent(limit = 100): RunRow[] {
