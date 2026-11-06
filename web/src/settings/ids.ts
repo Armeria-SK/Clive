@@ -32,6 +32,15 @@ export function uniqueSlug(base: string, taken: readonly string[], kind: IdKind)
   }
 }
 
+// ⌘/Ctrl+S で保存するとき、打ちかけの ID の欄（確定は欄を離れたとき）にいたら、その欄を確定させる（blur）。確定したら true。
+// ID の欄は、打っている間は設定の値を変えない（確定のときに直した ID を入れる）ので、先に確定しないと、打ちかけの ID が保存に入らない
+export function commitPendingId(doc: { activeElement: Element | null }): boolean {
+  const active = doc.activeElement as (Element & { blur?: () => void }) | null;
+  if (typeof active?.closest !== 'function' || !active.closest('.set-idfield')) return false;
+  active.blur?.();
+  return true;
+}
+
 // 打った文字から決まる ID。id が null のときは、使える文字が 1 つも無いので決められない。changed は、今の ID から変わるか。
 // taken は今ある ID（current を含んでよい。自分自身とは重ならない）
 export function idFromInput(text: string, kind: IdKind, taken: readonly string[], current: string): { id: string | null; changed: boolean } {

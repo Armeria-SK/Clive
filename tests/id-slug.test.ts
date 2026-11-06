@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
 import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
-import { idFromInput, ID_RULES, slugId, uniqueSlug } from '../web/src/settings/ids.ts';
+import { commitPendingId, idFromInput, ID_RULES, slugId, uniqueSlug } from '../web/src/settings/ids.ts';
 
 // 段 9f（追加）: プロバイダの「名前（ID）」とモデルの ID の欄は、打った文字を受けて、ID の決まりに直す
 // （持ち主が「Anthropic」と打って、providers.Anthropic.id の「Expected string to match '^[a-z0-9]…」で保存できなかった）
@@ -95,4 +95,18 @@ test('辞書: 直した ID の見せ方と、決められないときの文は j
   assert.equal((en['settings.id.preview'] as (id: string) => string)('anthropic'), 'ID: anthropic');
   assert.notEqual(ja['settings.id.none'], en['settings.id.none']);
   assert.match(String(en['settings.id.none']), /letters|digits/u);
+});
+
+test('⌘/Ctrl+S: 打ちかけの ID の欄にいるときは、その欄を確定する（欄を離れる）。そうでなければ何もしない（commitPendingId）', () => {
+  const calls: string[] = [];
+  const element = (inside: boolean) => ({
+    closest: (selector: string) => (inside && selector === '.set-idfield' ? {} : null),
+    blur: () => { calls.push('blur'); },
+  });
+  assert.equal(commitPendingId({ activeElement: element(true) as never }), true);
+  assert.deepEqual(calls, ['blur']);
+  assert.equal(commitPendingId({ activeElement: element(false) as never }), false, 'ほかの欄（鍵・URL など）は、打つたびに値が変わるので触らない');
+  assert.equal(commitPendingId({ activeElement: null }), false);
+  assert.equal(commitPendingId({ activeElement: {} as never }), false, 'DOM の要素でないものは触らない');
+  assert.deepEqual(calls, ['blur']);
 });

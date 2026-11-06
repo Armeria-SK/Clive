@@ -13,6 +13,7 @@ import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merg
 import {
   blockUnload, closeAction, countChanges, isSection, issueMessage, parseProblem, problemsOf, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
+import { commitPendingId } from './settings/ids.ts';
 import { editsToKeep, restoreKept, type KeptEdits } from './settings/keep.ts';
 import { applyFailure, applyStep } from './settings/server-apply.ts';
 import { SectionView } from './settings/SectionView.tsx';
@@ -170,7 +171,14 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
       ? { kind: 'done', icon: 'copy', title: t('settings.keys.copied') }
       : { icon: 'alert', title: t('settings.keys.copyFailed'), body: t('settings.keys.copyFailedBody') }));
   };
-  useSaveShortcut(() => { if (!confirm) void save(); });
+  // 打ちかけの ID の欄は、先に確定する。確定は画面の状態を更新するので、更新が済んだあとの save（最新の編集を持つもの）を呼ぶ
+  const saveLatest = useRef(save);
+  saveLatest.current = save;
+  useSaveShortcut(() => {
+    if (confirm) return;
+    if (commitPendingId(document)) setTimeout(() => { void saveLatest.current(); }, 0);
+    else void save();
+  });
   useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
   // × ・Esc・背景で閉じるとき、保存していない変更があれば、捨てる前に確かめる
   const requestClose = () => {
