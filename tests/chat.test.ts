@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { afterEach, test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
-  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, compactTokens, contextPercent, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
-  mergeNotice, recountsUsage, restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
+  advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, checklistCounts, checklistOf, checklistOpen, checklistPhase, checklistToShow, compactTokens, contextPercent, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
+  mergeNotice, recountsUsage, restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary, withChecklistEvent,
+  type ChecklistView,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -104,9 +106,9 @@ test('renameTitleOf / isRenameWithoutTitle: /rename のあとの題だけを取�
   assert.equal(isRenameWithoutTitle('/rename x'), false);
 });
 
-test('toolIcon: 組み込みの道具 27 個すべてに絵があり、知らない道具は terminal', () => {
+test('toolIcon: 組み込みの道具 31 個すべてに絵があり、知らない道具は terminal', () => {
   const names = builtinTools().map(t => t.name).sort();
-  assert.equal(names.length, 27);
+  assert.equal(names.length, 31);
   assert.deepEqual(Object.keys(TOOL_ICONS).sort(), names, '道具を足したり消したりしたら、絵の表も直す');
   assert.equal(toolIcon('file_read'), 'file');
   assert.equal(toolIcon('shell_run'), 'terminal');
@@ -506,4 +508,109 @@ test('使用量の輪を数え直す変更: モデルを替えたときと、権
   assert.equal(recountsUsage('model'), true);
   assert.equal(recountsUsage('mode'), true);
   for (const kind of ['renamed', 'archived', 'unarchived', 'deleted'] as const) assert.equal(recountsUsage(kind), false, kind);
+});
+
+const CJK_CHARS = /[぀-ヿ一-鿿]/u;
+
+test('checklistCounts: 件数のまとめ（済み・いま・まだ）。全部済みは、1 件以上あって全部 done のときだけ', () => {
+  assert.deepEqual(checklistCounts([]), { total: 0, done: 0, active: 0, pending: 0, allDone: false }, '空の一覧は「全部済み」ではない');
+  assert.deepEqual(checklistCounts([{ status: 'done' }, { status: 'in_progress' }, { status: 'pending' }, { status: 'pending' }]), { total: 4, done: 1, active: 1, pending: 2, allDone: false });
+  assert.deepEqual(checklistCounts([{ status: 'done' }, { status: 'done' }]), { total: 2, done: 2, active: 0, pending: 0, allDone: true });
+  assert.equal(checklistCounts([{ status: 'done' }, { status: 'in_progress' }]).allDone, false);
+});
+
+test('checklistOf: 項目の文は文字のまま持つ（Markdown・リンク・HTML を読み解かない）。形の違う項目は捨て、知らない status は pending', () => {
+  const evil = '[開く](https://evil.example) <img src=x onerror=alert(1)> **太字** `code` https://evil.example/path';
+  const view = checklistOf({
+    items: [
+      { text: evil, status: 'in_progress' },
+      { text: '済んだ', status: 'done' },
+      { text: '未知の状態', status: 'blocked' },
+      { text: '状態なし' },
+      { text: '', status: 'pending' },
+      { text: '   ', status: 'pending' },
+      { text: 7, status: 'pending' },
+      'ただの文字',
+      null,
+    ],
+    tainted: true,
+    updatedAt: 123,
+  });
+  assert.deepEqual(view, {
+    items: [
+      { text: evil, status: 'in_progress' },
+      { text: '済んだ', status: 'done' },
+      { text: '未知の状態', status: 'pending' },
+      { text: '状態なし', status: 'pending' },
+    ],
+    tainted: true,
+  });
+  assert.equal(view.items[0]!.text, evil, '文は 1 文字も変えない');
+  assert.equal(checklistOf({ items: [{ text: 'a', status: 'done' }], tainted: 'yes' }).tainted, false, 'tainted は true のときだけ');
+  assert.deepEqual(checklistOf({ items: [], tainted: false, updatedAt: null }), { items: [], tainted: false }, '一覧が無い会話の応答');
+  for (const garbage of [null, undefined, 'x', 3, [], {}, { items: 'x' }, { items: {} }]) assert.deepEqual(checklistOf(garbage), { items: [], tainted: false }, String(garbage));
+});
+
+test('withChecklistEvent: 出来事はその会話の分だけを置き換える。渡した表は変えず、ほかの会話の一覧は同じものを返す（constructor のような ID でも継ぎ目に当たらない）', () => {
+  const first = withChecklistEvent(new Map(), { conversationId: 'c1', items: [{ text: 'a', status: 'pending' }], tainted: false });
+  const c1 = first.get('c1');
+  assert.deepEqual(c1, { items: [{ text: 'a', status: 'pending' }], tainted: false });
+  const second = withChecklistEvent(first, { conversationId: 'c2', items: [{ text: 'b', status: 'done' }], tainted: true });
+  assert.equal(first.has('c2'), false, '渡した表は変えない');
+  assert.equal(second.get('c1'), c1, '別の会話の出来事で、この会話の一覧は変わらない');
+  assert.deepEqual(second.get('c2'), { items: [{ text: 'b', status: 'done' }], tainted: true });
+  const replaced = withChecklistEvent(second, { conversationId: 'c1', items: [], tainted: false });
+  assert.deepEqual(replaced.get('c1'), { items: [], tainted: false }, '空の一覧で置き換わる（前の一覧と混ざらない）');
+  assert.equal(replaced.get('c2'), second.get('c2'));
+  for (const id of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) assert.equal(second.get(id), undefined, id);
+  assert.equal(withChecklistEvent(new Map(), { conversationId: '__proto__', items: [{ text: 'x', status: 'pending' }], tainted: false }).get('__proto__')?.items.length, 1);
+});
+
+test('checklistToShow: 項目が無ければ何も出さない。出来事の一覧が先で、出来事の空の一覧（消した）は読んだ古い一覧に勝つ', () => {
+  const read: ChecklistView = { items: [{ text: '古い', status: 'pending' }], tainted: false };
+  const live: ChecklistView = { items: [{ text: '新しい', status: 'done' }], tainted: true };
+  assert.equal(checklistToShow(undefined, null), null, '何も無い');
+  assert.equal(checklistToShow(undefined, { items: [], tainted: false }), null, '読んだ一覧が空なら出さない');
+  assert.equal(checklistToShow(undefined, read), read, '出来事がまだ無ければ、読んだ一覧');
+  assert.equal(checklistToShow(live, read), live, '出来事が先');
+  assert.equal(checklistToShow({ items: [], tainted: false }, read), null, '出来事で空にされた一覧は、読んだ古い一覧を出さない');
+  assert.equal(checklistToShow(live, null), live);
+});
+
+test('checklistOpen: 作業中は開いて、全部済みは畳んで出す。押した選びは、同じ状態のあいだだけ効く', () => {
+  const working = checklistCounts([{ status: 'done' }, { status: 'pending' }]);
+  const finished = checklistCounts([{ status: 'done' }, { status: 'done' }]);
+  assert.deepEqual([checklistPhase(working), checklistPhase(finished)], ['working', 'finished']);
+  assert.equal(checklistOpen(working, null), true, '作業中は開いている');
+  assert.equal(checklistOpen(finished, null), false, '全部済みは畳んでいる');
+  assert.equal(checklistOpen(working, { phase: 'working', open: false }), false, '作業中に畳んだ選びは守る');
+  assert.equal(checklistOpen(finished, { phase: 'finished', open: true }), true, '全部済みのあとに開いた選びは守る');
+  assert.equal(checklistOpen(finished, { phase: 'working', open: true }), false, '作業中に開いた選びは、全部済みになったら効かない（畳み直す）');
+  assert.equal(checklistOpen(working, { phase: 'finished', open: false }), true, '全部済みで畳んだ選びは、また作業が始まったら効かない（開き直す）');
+});
+
+test('作業の一覧の部品: 項目の文は文字のまま出す（Markdown・リンク・生の HTML を通さない）。辞書の文は日英にそろう', () => {
+  const source = readFileSync(new URL('../web/src/ChecklistPanel.tsx', import.meta.url), 'utf8').replace(/\r/g, '').replace(/\/\/.*$/gmu, '');
+  assert.doesNotMatch(source, /Markdown/u, 'Markdown.tsx を通さない');
+  assert.doesNotMatch(source, /dangerouslySetInnerHTML/u);
+  assert.doesNotMatch(source, /href|<a[\s>]|linkify|innerHTML/iu, 'リンクにしない');
+  assert.match(source, /<span className="chat-checklist-text">\{item\.text\}<\/span>/u, '項目の文は、そのまま文字として 1 か所だけに入れる');
+  assert.equal(source.match(/item\.text/gu)?.length, 1);
+  assert.match(source, /list\.tainted && <p className="chat-checklist-note">\{t\('checklist\.tainted'\)\}<\/p>/u, '外の内容を読んだあとに書かれた一覧には、小さな注記を付ける');
+  const keys = ['checklist.title', 'checklist.count', 'checklist.pending', 'checklist.inProgress', 'checklist.done', 'checklist.tainted'] as const;
+  for (const key of keys) {
+    assert.ok(key in ja && key in en, key);
+    assert.match(typeof ja[key] === 'string' ? ja[key] : ja[key](1, 2), CJK_CHARS, `${key}: 日本語の文`);
+    assert.doesNotMatch(typeof en[key] === 'string' ? en[key] : en[key](1, 2), CJK_CHARS, `${key}: 英語に日本語が混ざらない`);
+  }
+  assert.equal(ja['checklist.count'](2, 5), '2 / 5 件済み');
+  assert.equal(en['checklist.count'](2, 5), '2 / 5 done');
+});
+
+test('作業の一覧の置き場所: 入力欄（Composer）の直前に 1 つ。Chat は出来事（checklist）が届いていればそれを、無ければ開いたときに読んだ一覧を出す', () => {
+  const chat = readFileSync(new URL('../web/src/Chat.tsx', import.meta.url), 'utf8').replace(/\r/g, '');
+  assert.equal(chat.match(/<ChecklistPanel\b/gu)?.length, 1);
+  assert.ok(chat.indexOf('<ChecklistPanel') < chat.indexOf('<Composer') && chat.indexOf('<ChecklistPanel') > chat.indexOf('<ApprovalDock'), '承認の札の下、入力欄の上');
+  assert.match(chat, /checklistToShow\(checklist, readChecklist\)/u, '出来事が先、読んだ一覧はその次');
+  assert.match(readFileSync(new URL('../web/src/App.tsx', import.meta.url), 'utf8'), /case 'checklist\.updated':/u);
 });

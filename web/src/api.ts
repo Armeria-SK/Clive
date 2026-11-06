@@ -5,6 +5,11 @@ import { errorBodyText } from './server-text.ts';
 
 // 会話の要約（読むだけ）。要約が無ければ summary は null
 export interface ConversationSummary { summary: string | null; upto: number | null; summarizedMessages: number }
+// 作業の一覧（checklist_write で書かれたもの）。項目の文はモデルが書いた文字で、画面には文字のまま出す
+export type ChecklistStatus = 'pending' | 'in_progress' | 'done';
+export interface ChecklistItem { text: string; status: ChecklistStatus }
+// 一覧が無い会話は items が空で updatedAt が null。tainted は、外の内容を読んだあとに書かれた一覧
+export interface ChecklistData { items: ChecklistItem[]; tainted: boolean; updatedAt: number | null }
 export interface Conversation {
   id: string; title: string | null; created_at: number; last_message_at: number;
   // 要約があるか（全文は api.summary で読む）
@@ -168,6 +173,7 @@ export const api = {
   cancelPending: (id: string, pendingId: string) => call<{ cancelled: true }>(`/api/conversations/${encodeURIComponent(id)}/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }),
   deleteConversation: (id: string) => call<{ deleted: true }>(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   summary: (id: string) => call<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/summary`),
+  checklist: (id: string) => call<ChecklistData>(`/api/conversations/${encodeURIComponent(id)}/checklist`),
   contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
   decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),

@@ -11,6 +11,7 @@ import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts
 import { engineText } from '../shared/messages/engine.ts';
 import { approvalWire } from '../tools/approvals.ts';
 import { eraseConversation } from '../db/erase.ts';
+import { readChecklist } from '../tools/builtin/checklist-core.ts';
 import { searchHistory } from '../memory/history.ts';
 import { join } from 'node:path';
 import { MemoryError, planBooks } from '../memory/store.ts';
@@ -178,6 +179,12 @@ export function createWebServer(app: App): WebServer {
     const id = params[0]!;
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     sendJson(res, 200, app.conversations.summaryOf(id));
+  });
+  // 作業の一覧（読むだけ。書く・消す口は作らない）。一覧が無い会話は空の一覧を返す
+  router.add('GET', '/api/conversations/:id/checklist', ({ res, params }) => {
+    const id = params[0]!;
+    if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
+    sendJson(res, 200, readChecklist(app.kv, id) ?? { items: [], tainted: false, updatedAt: null });
   });
   // 会話を消す（元に戻せない。画面は消えるものと残るものを見せて確かめてから呼ぶ）。返事を作っている最中の会話と、チャット以外の会話（タスク・振り返り）は断る。
   // この会話を材料にした振り返りが動いていれば、止めて終わるのを待ってから消す（その会話から作った振り返りの会話も、いっしょに消える）。

@@ -64,7 +64,7 @@ test('通知のリンク: スキルの下書きの通知（#/review）は、そ�
   assert.equal(skillDraftLink({ link: null, title: 'x: y' }), null);
 });
 
-test('道具の一覧: サーバーの一覧（GET /api/tools）の 27 個すべてに、画面の絵と説明（ja と en の辞書）がある。画面にあってサーバーに無い道具も無い', async t => {
+test('道具の一覧: サーバーの一覧（GET /api/tools）の 31 個すべてに、画面の絵と説明（ja と en の辞書）がある。画面にあってサーバーに無い道具も無い', async t => {
   const s = await startScreenServer(t);
   const { tools } = (await (await s.api('/api/tools')).json()) as { tools: Array<{ name: string; effect: keyof typeof EFFECT_LABEL }> };
   const server = builtinTools();

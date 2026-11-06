@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
+import { prefixLength } from '../engine/tokens.ts';
 import type { RunEvent, ToolCall } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { languageOf } from '../shared/language.ts';
@@ -54,11 +55,13 @@ export interface ToolCallOutcome {
   invalidArguments: boolean;
 }
 
-function capOutput(output: ToolOutput, language: Language, limit: number): ToolOutput {
+// 文字数の上限（TOOL_OUTPUT_LIMIT）と、残りの余裕から決まるトークンの上限（tokens）の、先に達した方で切る
+function capOutput(output: ToolOutput, language: Language, tokens: number | undefined): ToolOutput {
   const content = redactSecrets(output.content);
-  if (content.length <= limit) return { ...output, content };
+  const shown = prefixLength(content, TOOL_OUTPUT_LIMIT, tokens ?? Infinity);
+  if (shown >= content.length) return { ...output, content };
   const note = output.fullRef ? toolText(language, 'pipeline.note_full', { ref: output.fullRef }) : toolText(language, 'pipeline.note_none');
-  return { ...output, content: `${content.slice(0, limit)}\n\n${toolText(language, 'pipeline.truncated', { total: content.length.toLocaleString('en-US'), shown: limit.toLocaleString('en-US'), note })}` };
+  return { ...output, content: `${content.slice(0, shown)}\n\n${toolText(language, 'pipeline.truncated', { total: content.length.toLocaleString('en-US'), shown: shown.toLocaleString('en-US'), note })}` };
 }
 
 const matches = (matcher: string, name: string) => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
@@ -114,7 +117,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
   let autoWhy: string | undefined;
   const finish = (outcome: ToolCallOutcome, approvalId?: string): ToolCallOutcome => {
-    const output = capOutput(outcome.output, language, ctx.outputLimit ?? TOOL_OUTPUT_LIMIT);
+    const output = capOutput(outcome.output, language, ctx.outputTokens);
     deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, ctx.runId, ctx.conversationId, call.name, shownInput, outcome.decision, outcome.decidedBy, approvalId ?? null,

@@ -328,7 +328,7 @@ test('Origin・Sec-Fetch-Site・Host の確かめは、ほかの書き込みと�
 test('モデルの道具から届かない: 道具の一覧に、鍵・環境変数・プロバイダの設定を触るものが無い', async t => {
   const s = await start(t);
   const names = builtinTools().map(tool => tool.name);
-  assert.equal(names.length, 27, '道具は増えていない');
+  assert.equal(names.length, 31, '組み込みの道具は 31 個（足したら、下の鍵・環境変数を触る道具が無いかの確かめも見直す）');
   assert.deepEqual(names.filter(n => /key|env|provider|secret|credential|settings/iu.test(n)), []);
   for (const kind of ['chat', 'task', 'review'] as const) assert.deepEqual(s.app.tools.forRun(kind).map(tool => tool.name).filter(n => /key|env|provider/iu.test(n)), [], kind);
 });

@@ -1,5 +1,5 @@
 import type { PermissionMode } from '../../src/shared/permission-mode.ts';
-import { ApiError, type ApprovalPathView, type ModelChoice, type ModelView } from './api.ts';
+import { ApiError, type ApprovalPathView, type ChecklistItem, type ChecklistStatus, type ModelChoice, type ModelView } from './api.ts';
 import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
 import type { IconName } from './icon-paths.ts';
 import { probeMessage, serverText } from './server-text.ts';
@@ -258,6 +258,8 @@ export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
   ask_user: 'help',
   curiosity_add: 'sparkles', curiosity_list: 'sparkles', curiosity_update: 'sparkles',
   calculate: 'sliders', date_calc: 'clock',
+  checklist_write: 'check', notify_owner: 'bell',
+  doc_read: 'file', table_write: 'pencil',
 };
 
 export const toolIcon = (name: string | null | undefined): IconName => TOOL_ICONS[name ?? ''] ?? 'terminal';
@@ -378,4 +380,62 @@ export function createDecisionTracker(): DecisionTracker {
 
 export function isNearBottom(el: { scrollHeight: number; scrollTop: number; clientHeight: number }, slack = 80): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight <= slack;
+}
+
+// 作業の一覧（入力欄の上の、折りたためる一覧）。画面を使わない部分。
+export interface ChecklistView { items: ChecklistItem[]; tainted: boolean }
+
+const CHECKLIST_STATUSES: readonly ChecklistStatus[] = ['pending', 'in_progress', 'done'];
+
+// サーバーの応答（GET .../checklist）と出来事（checklist.updated）から、画面に出す形を作る。
+// 項目の文は文字のまま持つ（文字でない項目・空の文は捨て、知らない status は pending）。ここでは文を読み解かない: Markdown にもリンクにもしない
+export function checklistOf(raw: unknown): ChecklistView {
+  const record = asRecord(raw);
+  const items: ChecklistItem[] = [];
+  const entries: unknown = record?.['items'];
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      const item = asRecord(entry);
+      const text = item?.['text'];
+      if (typeof text !== 'string' || text.trim() === '') continue;
+      items.push({ text, status: CHECKLIST_STATUSES.find(status => status === item?.['status']) ?? 'pending' });
+    }
+  }
+  return { items, tainted: record?.['tainted'] === true };
+}
+
+// 出来事を、会話ごとの一覧の表へ入れる。渡された表は変えず、その会話の分だけを置き換える（ほかの会話の一覧はそのまま）。
+// 表は Map: 会話の ID は URL からも来るので、`constructor` のような名前が表の継ぎ目に当たらないようにする
+export function withChecklistEvent(state: ReadonlyMap<string, ChecklistView>, event: { conversationId: string; items: unknown; tainted: unknown }): ReadonlyMap<string, ChecklistView> {
+  return new Map(state).set(event.conversationId, checklistOf(event));
+}
+
+// 出す一覧: 出来事で届いたもの（新しい）が先、無ければ開いたときに読んだもの。項目が無ければ何も出さない（出来事の空の一覧は、読んだ古い一覧に勝つ）
+export function checklistToShow(fromEvent: ChecklistView | undefined, fromRead: ChecklistView | null): ChecklistView | null {
+  const view = fromEvent ?? fromRead;
+  return view && view.items.length > 0 ? view : null;
+}
+
+export interface ChecklistCounts { total: number; done: number; active: number; pending: number; allDone: boolean }
+
+export function checklistCounts(items: ReadonlyArray<Pick<ChecklistItem, 'status'>>): ChecklistCounts {
+  let done = 0;
+  let active = 0;
+  for (const item of items) {
+    if (item.status === 'done') done += 1;
+    else if (item.status === 'in_progress') active += 1;
+  }
+  return { total: items.length, done, active, pending: items.length - done - active, allDone: items.length > 0 && done === items.length };
+}
+
+// 持ち主が一覧を開いた・畳んだ選び。全部済みの一覧は畳んで出す: 選びは「作業中」「全部済み」のどちらの間に押したかを覚え、状態が変わったら効かない
+// （全部済みになったら畳み直し、また作業が始まったら開き直す）
+export type ChecklistPhase = 'working' | 'finished';
+export interface ChecklistChoice { phase: ChecklistPhase; open: boolean }
+
+export const checklistPhase = (counts: ChecklistCounts): ChecklistPhase => (counts.allDone ? 'finished' : 'working');
+
+export function checklistOpen(counts: ChecklistCounts, choice: ChecklistChoice | null): boolean {
+  const phase = checklistPhase(counts);
+  return choice !== null && choice.phase === phase ? choice.open : phase === 'working';
 }

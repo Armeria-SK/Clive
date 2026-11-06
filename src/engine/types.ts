@@ -87,6 +87,7 @@ export type RunEvent =
   | { type: 'approval.requested'; runId: string; conversationId: string; approval: ReturnType<typeof approvalPublic> }
   | { type: 'approval.resolved'; runId: string; conversationId: string; approvalId: string; outcome: 'approved' | 'denied' | 'expired' | 'cancelled' }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
+  | { type: 'checklist.updated'; runId: string; conversationId: string; items: Array<{ text: string; status: 'pending' | 'in_progress' | 'done' }>; tainted: boolean }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
   | {
     type: 'run.end'; runId: string; conversationId: string; ok: boolean;
@@ -97,4 +98,6 @@ export type RunEvent =
   | { type: 'pending.changed'; conversationId: string }
   | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: TaskView }
-  | { type: 'notification'; notification: Notification };
+  | { type: 'notification'; notification: Notification }
+  // 承認や返事が片づいて、通知が既読になった（画面が一覧と未読数を直す）。unread は既読にしたあとの未読の総数
+  | { type: 'notification.read'; ids: number[]; unread: number };

@@ -13,7 +13,8 @@ import { ProviderError, providerError, type ProviderAdapter } from '../providers
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
-import { PLAN_EFFECTS, REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
+import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
+import { PLAN_EFFECTS, REVIEW_FORBIDDEN, runToolCall } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
@@ -23,9 +24,9 @@ import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import type { RunBus } from './bus.ts';
-import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolOutputLimit } from './context-budget.ts';
+import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolResultTokens } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
-import { ContextOverflow, fitMessages } from './fit.ts';
+import { ContextOverflow, fitMessages, irreducibleEstimate } from './fit.ts';
 import { isLocalModel, isLocalPinned, isLocalProvider } from './local-model.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
@@ -233,6 +234,7 @@ export class ChatEngine {
   // - 最後の返事（道具の呼び出しだけではない assistant の発言）より後のユーザーの発言に添付がある。今送った発言・保存だけになった待ちの発言・やり直す発言のどれでも数え、道具を呼んだ assistant の発言は返事ではないので、またいで見る
   // - 最後の返事を、読み出す発言の数（TAINT_SCAN_LIMIT）の中に見つけられない。添付の有無を確かめきれないので、承認制の側に倒す
   // - 前のチャットの実行が、外から読んだまま、最後まで返事を書かずに終わった（止めた・失敗・取り消し・道具の上限のまとめ）。Web を読んだ分もこれで持ち越す。やり直し・続きは、その実行のやり直し・続きとみなす
+  // - 外から読んだ実行が書いた作業の一覧が残っている（一覧は毎回の system に入るため、一覧を空にするまで、その会話の実行は「外から読んだ」で始める）
   #taintFromHistory(runId: string, conversationId: string): void {
     const language = languageOf(this.#d.config());
     const sources: string[] = [];
@@ -245,7 +247,13 @@ export class ChatEngine {
     }
     if (!replied && stored.length >= TAINT_SCAN_LIMIT) sources.push(engineText(language, 'taint.unknown'));
     if (this.#previousRunCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.carried'));
+    if (this.#checklistCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.checklist'));
     if (sources.length) this.#initialTaint.set(runId, sources);
+  }
+
+  #checklistCarriesTaint(conversationId: string): boolean {
+    const list = readChecklist(this.#d.kv, conversationId);
+    return list?.tainted === true && checklistInjects(list);
   }
 
   // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめではない）の印は持ち越さない
@@ -354,6 +362,7 @@ export class ChatEngine {
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     const control = { value: { outcome: 'none' } as TaskControl };
+    if (this.#checklistCarriesTaint(conversationId)) this.#initialTaint.set(runId, [engineText(languageOf(this.#d.config()), 'taint.checklist')]);
     this.#start(runId, conversationId, chain.usable, 'task', { task, control });
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
@@ -609,9 +618,8 @@ export class ChatEngine {
         if (signal.aborted) return this.#finishCancelled(runId, conversationId, counters, lastRoute, '');
         counters.toolCalls++;
         if (!toolCall.name.startsWith('task_')) counters.workCalls++;
-        const toolModel = lastRoute.model;
-        const toolCapacity = d.status.get(toolModel.id)?.effective ?? toolModel.contextLength ?? 0;
-        ctx.outputLimit = toolCapacity > 0 ? toolOutputLimit(contextAvailable(toolCapacity, toolModel), TOOL_OUTPUT_LIMIT) : undefined;
+        // この結果に許す量は、次のモデル呼び出しの残りの余裕から決める（結果が積まれるほど小さくなる）
+        ctx.outputTokens = this.#toolResultTokens({ conversationId, snapshot, model: lastRoute.model, kind, forbid, started: config, startedMode: ctx.permissionMode });
         const outcome = await runToolCall(toolCall, ctx, {
           registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
           permissionMode: () => d.conversations.modeOf(conversationId),
@@ -865,7 +873,8 @@ export class ChatEngine {
     const upto = conversation?.summary_upto ?? 0;
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
+    const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, checklist, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     let history = stored.map(m => m.message);
     if (fallbackMode) history = toJsonFallbackHistory(history, language);
@@ -873,6 +882,15 @@ export class ChatEngine {
     const apiTools = fallbackMode ? [] : specs;
     const factor = d.kv.getJson<number>(`calibration:${model.id}`) ?? 1;
     return { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor };
+  }
+
+  // 道具の結果 1 つに許す量（見積もりのトークン）。次の呼び出しで古い発言を全部外しても残る分（system・道具の仕様・いまのやり取り）を、
+  // そのモデルの available から引いた余裕の一部（context-budget.ts の toolResultTokens）。モデルの容量が分からなければ undefined（文字数の上限だけ）。何も書かない
+  #toolResultTokens(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined }): number | undefined {
+    const built = this.#assemble(p);
+    if (!(built.capacity > 0)) return undefined;
+    const { tokens } = irreducibleEstimate({ system: `${built.system.frozen}\n${built.system.dynamic}`, messages: built.history, tools: built.apiTools, factor: built.factor });
+    return toolResultTokens(built.available, tokens, built.factor);
   }
 
   // いまの会話を次に送るとき、モデルへ送る量（トークンの見積もり）。古い発言を削る前の全体で、available（削り始める境目）に対する割合 ratio は 1 を超えうる。

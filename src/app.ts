@@ -34,6 +34,10 @@ import { skillDraft, skillView } from './tools/builtin/skills.ts';
 import { webFetch, webSearch } from './tools/builtin/web.ts';
 import { fileSearch } from './tools/builtin/file-search.ts';
 import { calculate, dateCalc } from './tools/builtin/calc.ts';
+import { checklistWrite } from './tools/builtin/checklist.ts';
+import { notifyOwner } from './tools/builtin/notify.ts';
+import { docRead } from './tools/builtin/docs.ts';
+import { tableWrite } from './tools/builtin/tables.ts';
 import type { PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { SkillStore } from './tools/skills/store.ts';
@@ -53,6 +57,7 @@ export function builtinTools(): ToolDef[] {
     memoryUpdate, memoryForget, memorySearch, historyRead,
     skillView, skillDraft, curiosityAdd, curiosityList, curiosityUpdate,
     fileSearch, calculate, dateCalc,
+    checklistWrite, notifyOwner, docRead, tableWrite,
   ];
 }
 
@@ -136,6 +141,7 @@ export class App {
         }
       } else {
         this.bus.publish({ type: 'approval.resolved', runId: v.runId, conversationId: v.conversationId, approvalId: v.id, outcome: event.outcome });
+        this.notifications.settle('approval_needed', { dedupKey: `approval:${v.id}` });
       }
     });
     this.memory = new MemoryStore(this.db, undefined, () => languageOf(this.config()));
@@ -162,6 +168,9 @@ export class App {
     });
     this.tasks.onChange = task => {
       this.bus.publish({ type: 'task.changed', task: taskView(task, languageOf(this.config())) });
+      // 返事待ち・失敗でなくなったタスクの、返事や確認を求める通知は、もう答えることが無い
+      if (task.status !== 'waiting') this.notifications.settle('task_waiting', { link: `#/tasks/${task.id}` });
+      if (task.status !== 'failed') this.notifications.settle('task_failed', { link: `#/tasks/${task.id}` });
       if (task.status === 'done' || task.status === 'failed' || task.status === 'cancelled') {
         this.curiosity.onTaskFinished(task);
         // 実行したタスクが終わったら振り返る（実行の記録があるものだけ）
@@ -173,6 +182,7 @@ export class App {
     };
     this.tasks.onUncancelled = task => this.curiosity.onTaskRestored(task);
     this.notifications.onNotify = notification => this.bus.publish({ type: 'notification', notification });
+    this.notifications.onSettled = ids => this.bus.publish({ type: 'notification.read', ids, unread: this.notifications.unread() });
     this.health = new HealthMonitor({ status: this.status, runs: this.runs, notifications: this.notifications, now, log: this.log, language: () => languageOf(this.config()) });
     this.bus.subscribe(entry => this.health.observe(entry.event));
     this.skills.onDraft = draft => {
@@ -189,6 +199,19 @@ export class App {
       }
       this.worker.poke();
     };
+  }
+
+  // Web サーバーを起動するときに呼ぶ（doctor など、動いているサーバーと同じ DB を開くだけの使い方では呼ばない。呼ぶと動いている承認待ちの通知まで既読になる）。
+  // もう答えようのない大事な未読を既読にする（片づいたときに既読にする仕組みの前からあった通知と、落ちて承認の札ごと消えた通知）。
+  // 起動直後は承認の札がひとつも無いので、承認待ちは全部。返事待ち・失敗は、タスクが無いか、今その状態でないものだけ既読にする
+  settleStaleNotifications(): void {
+    const stale = this.notifications.list(0).filter(n => {
+      if (n.kind === 'approval_needed') return true;
+      if (!n.link?.startsWith('#/tasks/')) return false;
+      const task = this.tasks.get(n.link.slice('#/tasks/'.length));
+      return task === undefined || task.status !== (n.kind === 'task_waiting' ? 'waiting' : 'failed');
+    });
+    if (stale.length) this.notifications.settleIds(stale.map(n => n.id));
   }
 
   #applied = '';
