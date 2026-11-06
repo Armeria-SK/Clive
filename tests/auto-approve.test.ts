@@ -307,6 +307,40 @@ test('自動承認でないモードでは、判定役を呼ばない: ふつう
   assert.equal(effectiveMode({ ...probe.ctx, kind: 'task', permissionMode: 'plan' }, { permissionMode: () => 'plan' } as never), 'normal', 'タスクには効かない');
 });
 
+test('判定役を待っているあいだにモードを替えたら、判定役の答えは使わない: ふつうに戻したら札が出て、計画にしたら断る。自動承認のままなら許す', async t => {
+  for (const [label, switchTo] of [['ふつう', 'normal'], ['計画', 'plan'], ['替えない', 'auto']] as const) {
+    const s = await setup(t);
+    let answer!: (reply: string) => void;
+    s.state.classify = () => new Promise<string>(resolve => { answer = resolve; });
+    const running = s.call('shell_run', { command: s.readOutside });
+    for (let i = 0; i < 300 && s.prompts.length === 0; i++) await new Promise(r => setTimeout(r, 10));
+    assert.equal(s.prompts.length, 1, `${label}: 判定役を待っている`);
+    s.state.mode = switchTo;
+    answer(ALLOW);
+    if (switchTo === 'auto') {
+      const outcome = await running;
+      assert.equal(outcome.decidedBy, 'auto-mode', `${label}: 替えていなければ、判定役の allow で動く`);
+      continue;
+    }
+    if (switchTo === 'normal') {
+      const request = await waitPending(s);
+      assert.deepEqual([...(request.kinds ?? [])], ['outside_read'], label);
+      s.approvals.decide(request.id, 'deny');
+      const outcome = await running;
+      assert.deepEqual([outcome.decision, outcome.decidedBy], ['ask', 'user'], label);
+    } else {
+      const first = await Promise.race([running.then(outcome => ({ outcome })), waitPending(s).then(request => ({ request })).catch(() => ({ request: undefined }))]);
+      if ('request' in first && first.request) { s.approvals.decide(first.request.id, 'deny'); await running; }
+      assert.ok('outcome' in first, `${label}: 計画モードが禁じる道具を、札にしてしまった`);
+      assert.deepEqual([first.outcome.decision, first.outcome.decidedBy], ['deny', 'mode'], `${label}: 計画モードが禁じる道具は、札にもせず断る`);
+      assert.equal(s.approvals.pending().length, 0, label);
+    }
+    assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0, `${label}: 自動の記録は作らない`);
+    assert.equal(s.ctx.autoReadOutside, undefined, `${label}: 外を読んだ印も付けない`);
+    assert.deepEqual(s.events.filter(e => e.type === 'tool.auto').map(e => (e as { state: string }).state), ['checking', 'asked'], label);
+  }
+});
+
 test('拒否は判定役に送らない: 判定役が何でも allow と答えても、拒否は拒否のまま（秘密のパス・強い禁止・禁止の一覧・読むだけのフォルダへの書き込み・外のフォルダへのファイル道具）', async t => {
   const s = await setup(t, { classify: () => ALLOW, mutate: c => { c.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }]; } });
   mkdirSync(join(s.paths.data, 'reference'), { recursive: true });

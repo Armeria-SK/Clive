@@ -195,8 +195,16 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       autoEvent('asked');
       return finish({ output: { content: toolText(language, 'pipeline.cancelled'), isError: true }, decision: 'ask', decidedBy: 'auto-mode', invalidArguments: false });
     }
+    // 判定役を待つあいだにモードが替わっていたら、答えは使わない: ふつうに戻したら、いつもの札。計画にしたら、計画モードが禁じる道具は札にもせず断る
+    const modeNow = effectiveMode(ctx, deps);
+    if (modeNow === 'plan' && !PLAN_EFFECTS.has(tool.effect)) {
+      autoEvent('asked');
+      return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
+    }
     const why = verdict.reason || guardText(language, 'pipeline.auto_no_reason');
-    if (verdict.decision === 'allow') {
+    if (modeNow !== 'auto') {
+      autoEvent('asked');
+    } else if (verdict.decision === 'allow') {
       approvalId = deps.approvals.recordAuto({
         runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, details, kinds: [...askKinds],
       }, why);
