@@ -509,7 +509,15 @@
     "date.error.bad_datetime": "日時は YYYY-MM-DDTHH:mm の形で書いてください: {field}",
     "date.error.bad_timezone": "タイムゾーンの名前が読めません（例: Asia/Tokyo）: {field}",
     "date.error.out_of_range": "年は 1900〜2200、量は 10 万までにしてください: {field}",
-    "date.error.missing": "この操作に要る値がありません: {field}"
+    "date.error.missing": "この操作に要る値がありません: {field}",
+    "search.need_query": "name（名前のワイルドカード）か text（中身の文字）の少なくとも 1 つを指定してください",
+    "search.names": "名前が合うもの:",
+    "search.texts": "中身が合うもの:",
+    "search.none": "見つかりませんでした: {path}",
+    "search.cut": "[{max} 件で打ち切りました。path を絞るか max_results を増やしてください]",
+    "search.skipped": "[大きい・バイナリのため中身を見なかったファイル: {count} 個]",
+    "search.heavy": "[次のフォルダの中は探していません（path に指定すれば探します）: {names}]",
+    "search.partial": "[ファイルが多いため、{count} 個まで見て止めました]"
   },
   "store": {
     "memory.empty": "中身が空です",

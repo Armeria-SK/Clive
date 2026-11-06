@@ -169,6 +169,15 @@ const ja = {
   'date.error.bad_timezone': 'タイムゾーンの名前が読めません（例: Asia/Tokyo）: {field}',
   'date.error.out_of_range': '年は 1900〜2200、量は 10 万までにしてください: {field}',
   'date.error.missing': 'この操作に要る値がありません: {field}',
+
+  'search.need_query': 'name（名前のワイルドカード）か text（中身の文字）の少なくとも 1 つを指定してください',
+  'search.names': '名前が合うもの:',
+  'search.texts': '中身が合うもの:',
+  'search.none': '見つかりませんでした: {path}',
+  'search.cut': '[{max} 件で打ち切りました。path を絞るか max_results を増やしてください]',
+  'search.skipped': '[大きい・バイナリのため中身を見なかったファイル: {count} 個]',
+  'search.heavy': '[次のフォルダの中は探していません（path に指定すれば探します）: {names}]',
+  'search.partial': '[ファイルが多いため、{count} 個まで見て止めました]',
 } as const;
 
 const en: Record<keyof typeof ja, string> = {
@@ -340,6 +349,15 @@ const en: Record<keyof typeof ja, string> = {
   'date.error.bad_timezone': 'The timezone name cannot be read (for example, Asia/Tokyo): {field}',
   'date.error.out_of_range': 'The year must be 1900-2200 and the amount up to 100000: {field}',
   'date.error.missing': 'A value needed for this operation is missing: {field}',
+
+  'search.need_query': 'Specify at least one of name (a wildcard for the file name) or text (the characters in the content)',
+  'search.names': 'Matching by name:',
+  'search.texts': 'Matching by content:',
+  'search.none': 'Nothing was found: {path}',
+  'search.cut': '[Stopped at {max} results. Narrow path or increase max_results]',
+  'search.skipped': '[Files whose content was not read because they are large or binary: {count}]',
+  'search.heavy': '[The following folders were not searched (specify them in path to search them): {names}]',
+  'search.partial': '[There were many files, so I stopped after looking at {count}]',
 };
 
 export const toolText = defineMessages('tool', ja, en);
