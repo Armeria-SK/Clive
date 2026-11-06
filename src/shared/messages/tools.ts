@@ -189,6 +189,22 @@ const ja = {
   'notify_owner.sent': '持ち主に知らせました: {title}',
   'notify_owner.duplicate': '同じ知らせを 24 時間以内に出しているので、重ねませんでした',
   'notify_owner.unavailable': 'この実行では持ち主に知らせられません',
+
+  'doc.unsupported': '読める形は .pdf .docx .xlsx だけです: {path}',
+  'doc.mismatch': '拡張子（{ext}）と中身の形が合いません: {path}',
+  'doc.too_big': '大きすぎるファイルです（{size} バイト。{max} バイトまで）',
+  'doc.encrypted': 'パスワード付きか、古い形式（.doc .xls）のファイルのようなので読めません',
+  'doc.damaged': '壊れたファイルのようです（{detail}）',
+  'doc.too_large_inside': '展開すると大きすぎるため読みません（{detail}）',
+  'doc.dtd': '文書型宣言（DOCTYPE）か実体の宣言を含むため読みません',
+  'doc.no_text': '文字が見つかりませんでした: {path}',
+  'doc.sheet': '[シート: {name}]',
+  'doc.truncated': '[長いため、取り出した文字を {max} 文字で打ち切りました]',
+  'table.bad_ext': '書ける形は .csv と .xlsx だけです: {path}',
+  'table.too_many': 'セルが多すぎます（{count} 個。{max} 個まで）',
+  'table.wrote': '表を書きました: {path}（{rows} 行・{cols} 列）',
+  'table.neutralized': '[式として動かないよう、{count} 個のセルを文字として書きました]',
+  'summary.table_write': '表のファイルを書く: {path}（{rows} 行）',
 } as const;
 
 const en: Record<keyof typeof ja, string> = {
@@ -380,6 +396,22 @@ const en: Record<keyof typeof ja, string> = {
   'notify_owner.sent': 'Notified the owner: {title}',
   'notify_owner.duplicate': 'The same notification was sent within 24 hours, so it was not sent again',
   'notify_owner.unavailable': 'The owner cannot be notified in this run',
+
+  'doc.unsupported': 'Only .pdf, .docx, and .xlsx can be read: {path}',
+  'doc.mismatch': 'The extension ({ext}) does not match the content format: {path}',
+  'doc.too_big': 'The file is too large ({size} bytes, up to {max} bytes)',
+  'doc.encrypted': 'It appears to be password-protected or an older format (.doc, .xls), so it cannot be read',
+  'doc.damaged': 'The file appears to be damaged ({detail})',
+  'doc.too_large_inside': 'It will not be read because it would be too large after extraction ({detail})',
+  'doc.dtd': 'It will not be read because it contains a document type declaration (DOCTYPE) or entity declarations',
+  'doc.no_text': 'No text was found: {path}',
+  'doc.sheet': '[Sheet: {name}]',
+  'doc.truncated': '[Because it is long, the extracted text was cut off at {max} characters]',
+  'table.bad_ext': 'Only .csv and .xlsx can be written: {path}',
+  'table.too_many': 'There are too many cells ({count} cells, up to {max} cells)',
+  'table.wrote': 'Wrote the table: {path} ({rows} rows, {cols} columns)',
+  'table.neutralized': '[To prevent it from working as a formula, {count} cells were written as text]',
+  'summary.table_write': 'Writing a table file: {path} ({rows} rows)',
 };
 
 export const toolText = defineMessages('tool', ja, en);
