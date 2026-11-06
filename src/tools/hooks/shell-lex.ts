@@ -50,7 +50,7 @@ export interface Statement {
 }
 
 export type LexCode =
-  | 'curly_quote' | 'dash' | 'space' | 'fullwidth' | 'control' | 'depth' | 'unclosed' | 'backtick' | 'backslash' | 'win_backslash' | 'parse_token' | 'block_comment'
+  | 'curly_quote' | 'dash' | 'space' | 'fullwidth' | 'control' | 'depth' | 'unclosed' | 'backtick' | 'backslash' | 'parse_token' | 'block_comment'
   | 'provider_var' | 'dollar_form' | 'fd' | 'dev_net' | 'here_expand' | 'tilde_user' | 'ps_expand' | 'here_string' | 'ansi_c' | 'unexpected' | 'chain_op';
 export interface LexFail { code: LexCode; detail: string }
 export type LexResult = { ok: true; statements: Statement[] } | { ok: false; fail: LexFail };
@@ -142,15 +142,14 @@ function precheck(src: string, shell: ShellKind): LexFail | null {
   return null;
 }
 
-export interface LexOptions { windows?: boolean }
-interface BashEnv { crlf: boolean; windows: boolean }
+interface BashEnv { crlf: boolean }
 
-export function lexShell(command: string, shell: ShellKind, opts: LexOptions = {}): LexResult {
+export function lexShell(command: string, shell: ShellKind): LexResult {
   const early = precheck(command, shell);
   if (early) return { ok: false, fail: early };
   const normalized = command.replace(/\r\n/gu, '\n');
   const sink: Statement[] = [];
-  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink, { crlf: command.includes('\r\n'), windows: opts.windows ?? true });
+  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink, { crlf: command.includes('\r\n') });
   return failure ? { ok: false, fail: failure } : { ok: true, statements: sink };
 }
 
@@ -263,7 +262,6 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
           if (c === '\\') {
             const esc = src[i + 1];
             if (esc === '\n') { if (env.crlf) return fail('backslash'); i += 2; continue; }
-            if (esc === '\\' && env.windows) return fail('win_backslash');
             if (esc === '$' || esc === '`' || esc === '"' || esc === '\\') { w.text += esc; i += 2; continue; }
             w.text += c; i++;
             continue;

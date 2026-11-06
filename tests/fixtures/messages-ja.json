@@ -234,7 +234,6 @@
     "lex.unclosed": "閉じていない {detail}",
     "lex.backtick": "バッククォート（名前を割ったり、エスケープしたりできるため）",
     "lex.backslash": "バックスラッシュ（名前を割ったり、エスケープしたりできるため）",
-    "lex.win_backslash": "\"…\" の中の \\\\（Windows の Git Bash に渡すとき \\ が 1 つに減り、読み方がずれるため）",
     "lex.parse_token": "--%（ここから先をそのまま渡す書き方）",
     "lex.block_comment": "<# … #> のコメント",
     "lex.provider_var": "プロバイダ付きの名前や ${…}（{detail}）",

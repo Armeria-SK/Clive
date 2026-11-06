@@ -65,7 +65,11 @@ export function findExecutable(name: string, env: Record<string, string>, cwd: s
 }
 
 export type ShellChoice = 'auto' | 'pwsh' | 'powershell' | 'bash' | 'sh';
-export interface ShellSpec { name: string; file: string; args: (command: string) => string[] }
+// stdin: シェルに標準入力で渡す中身（PowerShell は引数で渡すので無い）
+export interface ShellSpec { name: string; file: string; args: (command: string) => string[]; stdin?: (command: string) => string }
+
+// スクリプトは引数でなく標準入力で渡す（Windows の Git Bash は -c の引数の連続する \\ を減らす）。-s にしないのは、cat や read が続きを食べるため。固定の 1 行が標準入力を読み切って eval する
+const POSIX_BOOT = 'eval "$(cat)"';
 
 const PS_UTF8 = '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;';
 // 文字コードの設定のあと、制限モードにする。.NET の直接呼び出し（[IO.File]::...）・New-Object・Add-Type が止まり、元のモードへ戻すのも止まる
@@ -73,7 +77,7 @@ const PS_CONSTRAINED = "$ExecutionContext.SessionState.LanguageMode='Constrained
 
 export function resolveShell(choice: ShellChoice): ShellSpec {
   const ps = (file: string, name: string): ShellSpec => ({ name, file, args: c => ['-NoProfile', '-NonInteractive', '-Command', `${PS_UTF8}${PS_CONSTRAINED}${c}`] });
-  const posix = (file: string, name: string): ShellSpec => ({ name, file, args: c => (name === 'bash' ? ['--noprofile', '--norc', '-c', c] : ['-c', c]) });
+  const posix = (file: string, name: string): ShellSpec => ({ name, file, args: () => (name === 'bash' ? ['--noprofile', '--norc', '-c', POSIX_BOOT] : ['-c', POSIX_BOOT]), stdin: c => c });
   if (choice === 'pwsh' || (choice === 'auto' && WINDOWS && which('pwsh'))) return ps(which('pwsh') ?? 'pwsh', 'pwsh');
   if (choice === 'powershell' || (choice === 'auto' && WINDOWS)) return ps(which('powershell') ?? 'powershell.exe', 'powershell');
   if (choice === 'bash' || (choice === 'auto' && which('bash'))) return posix(which('bash') ?? 'bash', 'bash');
@@ -151,7 +155,10 @@ export function runProcess(file: string, args: readonly string[], opts: RunOptio
     };
     child.stdout?.on('data', onData('out'));
     child.stderr?.on('data', onData('err'));
-    if (opts.input !== undefined) child.stdin?.end(opts.input);
+    if (opts.input !== undefined) {
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.end(opts.input);
+    }
 
     let timedOut = false; let aborted = false; let spawnError: string | undefined;
     const timer = setTimeout(() => { timedOut = true; killTree(child); }, opts.timeoutMs);

@@ -20,9 +20,9 @@ function fixture(t: { after: (fn: () => void) => void }) {
   return { ws, policy, bash: (c: string) => run(c, 'bash'), ps: (c: string) => run(c, 'powershell') };
 }
 
-const failure = (command: string, shell: ShellKind, windows = false): LexCode | null => { const r = lexShell(command, shell, { windows }); return r.ok ? null : r.fail.code; };
-const read = (command: string, shell: ShellKind, windows = false): Statement[] => {
-  const r = lexShell(command, shell, { windows });
+const failure = (command: string, shell: ShellKind): LexCode | null => { const r = lexShell(command, shell); return r.ok ? null : r.fail.code; };
+const read = (command: string, shell: ShellKind): Statement[] => {
+  const r = lexShell(command, shell);
   assert.ok(r.ok, `${shell}: ${JSON.stringify(command)} が読めない: ${r.ok ? '' : `${r.fail.code} ${r.fail.detail}`}`);
   return r.statements;
 };
@@ -116,21 +116,27 @@ test('bash: "…" の中の \\ が読めるようになっても、引用符の�
   assert.ok(stopped(f.bash(String.raw`echo "x" > "SOUL.md"`)));
 });
 
-test('bash（Windows）: Git Bash に -c で渡すと連続する \\ が 1 つに減るので、"…" の中の \\\\ は止める。\\ が 1 つの形はそのまま読む。何も渡さないときも止める側', t => {
-  const denied = [String.raw`echo "a\\b"`, String.raw`echo "\\$(ls)"`, String.raw`echo "\\\$(touch made)"`, String.raw`echo "a\\"`, String.raw`echo "\\\\"`, 'echo "x\\\\\\\n"', String.raw`grep "a\\.b" f`];
+test('bash: 連続する \\ も、Windows かどうかに関わらず同じに読む（Windows でも、スクリプトは標準入力で渡すので、引数の読み直しで減らない。実行との突き合わせは shell-runner-stdin.test.ts）', t => {
+  const rows: Array<[string, string, boolean]> = [
+    [String.raw`echo "a\\b"`, String.raw`a\b`, false], [String.raw`echo "a\\"`, 'a\\', false], [String.raw`echo "\\\\"`, '\\\\', false], [String.raw`grep "a\\.b" f`, String.raw`a\.b`, false],
+    [String.raw`echo "\\\$(touch made)"`, String.raw`\$(touch made)`, false], ['echo "x\\\\\\\n"', 'x\\', false],
+  ];
   for (const shell of ['bash', 'sh'] as const) {
-    for (const command of denied) {
-      assert.equal(failure(command, shell, true), 'win_backslash', `${shell}: ${command}`);
-      assert.equal(failure(command, shell, false), null, `${shell}: ${command}（Linux などでは読める）`);
+    for (const [command, text, dynamic] of rows) {
+      const statements = read(command, shell);
+      assert.equal(statements.length, 1, `${shell}: ${command}（置換は作られない）`);
+      assert.deepEqual([statements[0]!.words[1]!.text, statements[0]!.words[1]!.dynamic], [text, dynamic], `${shell}: ${command}`);
     }
-    for (const command of [String.raw`grep "\.ts$" src`, String.raw`echo "a\nb"`, String.raw`echo "\$(rm x)"`, String.raw`echo "say \"hi\""`, String.raw`rg "a\|b" .`, 'echo "a\\\nb"']) assert.equal(failure(command, shell, true), null, `${shell}: ${command}`);
+    // \\ のあとの $( は本物の置換: 中の文を作る
+    assert.deepEqual(read(String.raw`echo "\\$(ls)"`, shell).map(s => s.words[0]!.text), ['ls', 'echo']);
+    for (const command of [String.raw`grep "\.ts$" src`, String.raw`echo "a\nb"`, String.raw`echo "\$(rm x)"`, String.raw`echo "say \"hi\""`, String.raw`rg "a\|b" .`, 'echo "a\\\nb"']) assert.equal(failure(command, shell), null, `${shell}: ${command}`);
   }
-  assert.equal(lexShell(denied[2]!, 'bash').ok, false, 'windows を渡さないときは、止める側（Windows と同じ）');
   const f = fixture(t);
-  const verdict = checkShellCommand(denied[2]!, f.ws, { policy: { roots: [{ path: f.ws, mode: 'write' }], deny: [], askOnWrite: [], skillsDir: join(f.ws, 'skills') }, outsideRoots: 'ask', shell: 'bash', windows: true });
-  assert.equal(verdict.decision, 'deny');
-  assert.match(verdict.reasons.join(), /Git Bash/u);
-  assert.equal(f.bash(denied[2]!).decision, 'allow', 'Linux などの判定（windows: false）では、\\\\\\$ は文字');
+  const literal = f.bash(String.raw`echo "\\\$(touch SOUL.md)"`);
+  assert.equal(literal.decision, 'allow', '\\\\\\$ は文字なので、中の touch は文にならず、確かめなしで動く（何も書かれない）');
+  const real = f.bash(String.raw`echo "\\$(touch SOUL.md)"`);
+  assert.ok(stopped(real), '\\\\ のあとの $( は本物の置換なので、中の touch が判定される');
+  assert.equal(failure(String.raw`echo "a\\b"`, 'bash'), null, 'Windows でも止めない');
 });
 
 // ── PowerShell ──

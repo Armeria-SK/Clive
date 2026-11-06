@@ -135,6 +135,7 @@ export const shellRun: ToolDef<ShellInput> = {
       result = await runProcess(shell.file, shell.args(input.command), {
         cwd: cwd.cwd, env: { ...child.env, ...gitRun?.env }, timeoutMs: timeoutSec * 1000, signal: ctx.signal,
         maxBytes: settings.outputCapBytes, fullOutputDir: join(ctx.paths.data, 'tool_outputs'), outputId: `shell-${randomUUID()}`,
+        ...(shell.stdin ? { input: shell.stdin(input.command) } : {}),
       });
     } finally { gitRun?.cleanup(); }
     if (result.spawnError) return { content: toolText(language, 'shell.spawn_failed', { shell: shell.name, detail: result.spawnError }), isError: true };

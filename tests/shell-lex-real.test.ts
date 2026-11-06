@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { lexShell, type ShellKind } from '../src/tools/hooks/shell-lex.ts';
-import { which } from '../src/tools/shell/runner.ts';
+import { resolveShell, runProcess, scrubEnv, which } from '../src/tools/shell/runner.ts';
 import { tempDir } from './helpers.ts';
 
 // security-self-api.md §11.10: 字句の読み取りが、本物のシェルの読み方と同じこと。
@@ -95,7 +95,7 @@ test('bash: "…" の中の \\ の読み方（\\. \\n \\| \\$ \\` \\" \\\\ 改�
   const dir = scratch(t);
   const wrong: string[] = [];
   for (const row of BASH_DQ_ROWS) {
-    const lexed = lexShell(row, 'bash', { windows: false });
+    const lexed = lexShell(row, 'bash');
     if (!lexed.ok) { wrong.push(`${row}: 読めない (${lexed.fail.code})`); continue; }
     const st = lexed.statements[0]!;
     const name = st.words[0]!.text;
@@ -106,7 +106,7 @@ test('bash: "…" の中の \\ の読み方（\\. \\n \\| \\$ \\` \\" \\\\ 改�
     if (JSON.stringify(mine) !== JSON.stringify(realWords)) wrong.push(`${row}: 字句 ${JSON.stringify(mine)} / 本物 ${JSON.stringify(realWords)}`);
   }
   assert.deepEqual(wrong, []);
-  assert.equal(lexShell('echo "a\\', 'bash', { windows: false }).ok, false, '行末の \\ は引用符が閉じず、読めない');
+  assert.equal(lexShell('echo "a\\', 'bash').ok, false, '行末の \\ は引用符が閉じず、読めない');
 });
 
 test('bash: echo "\\$(rm x)" は本物の bash でも文字を出すだけで何も動かさない。\\\\ のあとの $( は本物の置換として動く（字句の読み取りの読み方と同じ）', { skip: !bashPath && 'bash が無い' }, t => {
@@ -115,37 +115,40 @@ test('bash: echo "\\$(rm x)" は本物の bash でも文字を出すだけで何
   const literal = viaFile(dir, 'echo "\\$(rm x)"');
   assert.equal(literal.stdout, '$(rm x)\n');
   assert.equal(existsSync(join(dir, 'cwd', 'x')), true, '\\$ は置換にならず、x は消えない');
-  const lexed = lexShell('echo "\\$(rm x)"', 'bash', { windows: false });
+  const lexed = lexShell('echo "\\$(rm x)"', 'bash');
   assert.ok(lexed.ok && lexed.statements.length === 1 && lexed.statements[0]!.words[1]!.text === '$(rm x)' && !lexed.statements[0]!.words[1]!.dynamic, '字句の読み取りも、置換のない 1 つの文として読む');
   const real = viaFile(dir, 'echo "\\\\$(touch made)"');
   assert.equal(real.stdout, '\\\n', '\\\\ は \\ 1 つになり、そのあとの $( は本物の置換（touch の出力は空）');
   assert.equal(existsSync(join(dir, 'cwd', 'made')), true, '本物の置換は動く');
-  const lexedReal = lexShell('echo "\\\\$(touch made)"', 'bash', { windows: false });
+  const lexedReal = lexShell('echo "\\\\$(touch made)"', 'bash');
   assert.ok(lexedReal.ok && lexedReal.statements.map(s => s.words[0]!.text).join() === 'touch,echo', '字句の読み取りも、置換の中の touch を文として読む');
 });
 
-// Windows の Git Bash に bash -c で渡すと、"…" の中の連続する \\ は 1 つに減る。ガードが「\\$ は文字」と読む "\\\\\\$(…)" を、本物は置換として動かしてしまう。Windows では \\ の連続を止める
-test('bash（Windows）: bash -c は連続する \\\\ を 1 つに減らして渡す。\\\\ を含む形は、Windows の読み取りが止め、含まない形は -c でもファイルでも同じに動く', { skip: (process.platform !== 'win32' || !bashPath) && 'Windows の Git Bash が無い' }, t => {
+// Windows の Git Bash に bash -c で渡すと、"…" の中の連続する \\ は 1 つに減る。Clive のシェルは、スクリプトを標準入力で渡す（runner.ts）ので減らず、ファイルで渡した結果と同じになる
+test('bash（Windows）: 素の bash -c は連続する \\\\ を 1 つに減らす。Clive のシェルの渡し方（標準入力）は、ファイルで渡した結果と同じで、ガードの読みどおりに動く', { skip: (process.platform !== 'win32' || !bashPath) && 'Windows の Git Bash が無い' }, async t => {
   const dir = scratch(t);
+  const spec = resolveShell('bash');
   const viaC = (script: string) => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', script], { cwd: join(dir, 'cwd'), encoding: 'utf8' });
+  const viaClive = (script: string) => runProcess(spec.file, spec.args(script), { cwd: join(dir, 'cwd'), env: scrubEnv(), timeoutMs: 30_000, signal: new AbortController().signal, maxBytes: 100_000, ...(spec.stdin ? { input: spec.stdin(script) } : {}) });
   const dangerous = 'echo "\\\\\\$(touch made3)"';
   assert.equal(viaFile(dir, dangerous).stdout, '\\$(touch made3)\n', '前提: ファイルで渡せば、置換にならず文字を出すだけ');
   assert.equal(existsSync(join(dir, 'cwd', 'made3')), false);
   assert.equal(viaC(dangerous).stdout, '\\\n', '前提: -c で渡すと \\\\ が減って、$( が本物の置換になる');
   assert.equal(existsSync(join(dir, 'cwd', 'made3')), true, '前提: -c では置換の touch が動く');
+  rmSync(join(dir, 'cwd', 'made3'));
+  assert.equal((await viaClive(dangerous)).stdout, '\\$(touch made3)\n', 'Clive のシェルの渡し方では、置換にならず文字を出すだけ');
+  assert.equal(existsSync(join(dir, 'cwd', 'made3')), false, 'Clive のシェルで置換の touch が動いた');
   const differ: string[] = [];
   for (const row of BASH_DQ_ROWS) {
     const script = `printf '<%s>\\n'${row.slice(row.indexOf(' '))}`;
     const c = viaC(script);
     const f = viaFile(dir, script);
-    const windows = lexShell(row, 'bash', { windows: true });
-    if (c.stdout !== f.stdout) {
-      differ.push(row);
-      assert.equal(windows.ok, false, `${row}: -c とファイルで結果が違うのに、Windows の読み取りが通した`);
-    } else if (windows.ok) {
-      const mine = windows.statements[0]!.words.slice(1).map(w => w.text);
-      assert.deepEqual(c.stdout.replace(/\n$/u, '').split('\n').map(l => l.replace(/^<|>$/gu, '')), mine, `${row}: Windows の読み取りが通した形は、-c でも読み取りどおりに動く`);
-    }
+    const clive = await viaClive(script);
+    assert.equal(clive.stdout, f.stdout, `${row}: Clive のシェルの結果が、ファイルで渡した結果と違う`);
+    if (c.stdout !== f.stdout) differ.push(row);
+    const lexed = lexShell(row, 'bash');
+    assert.ok(lexed.ok, `${row}: 読めない`);
+    if (lexed.ok) assert.deepEqual(clive.stdout.replace(/\n$/u, '').split('\n').map(l => l.replace(/^<|>$/gu, '')), lexed.statements[0]!.words.slice(1).map(w => w.text), `${row}: ガードの読みどおりに動く`);
   }
   assert.ok(differ.length > 0, '前提: \\\\ を含む行は -c で結果が変わる');
   assert.ok(differ.every(row => row.includes('\\\\')), `\\\\ を含まない行が -c で変わった: ${differ.filter(row => !row.includes('\\\\')).join(' / ')}`);

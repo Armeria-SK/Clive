@@ -12,6 +12,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { lexShell } from '../src/tools/hooks/shell-lex.ts';
 import { gitVersionAtLeast } from '../src/tools/shell/git-env.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -430,21 +431,33 @@ test('実機（bash）: "…" の中の \\ を含む読むだけのコマンド�
   assert.equal(readFileSync(s.files('x'), 'utf8'), 'keep', 'echo "\\$(rm x)" で x が消えた');
 });
 
-// Windows の Git Bash に bash -c で渡すと、連続する \\ が 1 つに減る。ガードが「\\\$ は文字」と読む形を、本物は置換として動かしてしまうので、Windows では止める
-test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の bash -c では減って置換が動くが、Clive のシェルでは動かす前に止まる', { skip: (process.platform !== 'win32' || !bashAvailable) && 'Windows の Git Bash が無い' }, async t => {
+// Windows の Git Bash に bash -c で渡すと、連続する \\ が 1 つに減る。Clive のシェルはスクリプトを標準入力で渡す（runner.ts）ので減らず、ガードの読みどおりに動く
+test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の bash -c では減って置換が動くが、Clive のシェルでは減らず、ガードの読みどおり文字のまま出て、置換の touch は動かない', { skip: (process.platform !== 'win32' || !bashAvailable) && 'Windows の Git Bash が無い' }, async t => {
   const s = setup(t, 'bash');
   const dangerous = 'echo "\\\\\\$(touch made)"';
   const raw = spawnSync(bashPath!, ['--noprofile', '--norc', '-c', dangerous], { cwd: s.paths.workspace, encoding: 'utf8' });
   assert.equal(raw.stdout, '\\\n', '前提: 素の bash -c では、\\\\\\$ が \\\\$ に減って、$( が置換になる');
   assert.equal(existsSync(s.files('made')), true, '前提: 置換の touch が動く');
   rmSync(s.files('made'));
-  for (const command of [dangerous, 'echo "a\\\\b"', 'echo "\\\\$(touch made)"', 'grep "a\\\\.b" a.txt']) {
-    const outcome = await s.call(command);
-    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
-    assert.match(outcome.output.content, /書き方を判定できません/u, command);
-    assert.match(outcome.output.content, /Git Bash/u, command);
-  }
+  const body = (outcome: { output: { content: string } }): string => outcome.output.content.split('\n\n').slice(2).join('\n\n').trim();
+  const lexed = lexShell(dangerous, 'bash');
+  assert.ok(lexed.ok && lexed.statements.length === 1 && lexed.statements[0]!.words[1]!.text === '\\$(touch made)', 'ガードは、置換のない 1 つの文として読む');
+  const outcome = await s.call(dangerous);
+  assert.equal(outcome.decision, 'allow', outcome.output.content);
+  assert.equal(outcome.decidedBy !== 'user', true, '承認を求めた');
+  assert.equal(outcome.output.isError, false, outcome.output.content);
+  assert.equal(body(outcome), '\\$(touch made)', 'ガードの読みと同じ文字が出る');
   assert.equal(existsSync(s.files('made')), false, 'Clive のシェルで置換の touch が動いた');
+  for (const [command, expected] of [
+    ['echo "a\\\\b"', 'a\\b'], ['echo "\\\\\\\\"', '\\\\'], ['echo "x\\\\" "y"', 'x\\ y'], ['echo "\\\\$HOME_UNSET_XYZ"', '\\'], ['grep -c "line\\\\|notes" a.txt', '3'],
+  ] as const) {
+    const run = await s.call(command);
+    assert.equal(run.decision, 'allow', `${command}: ${run.output.content}`);
+    assert.equal(run.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(body(run), expected, command);
+  }
+  // 本物の置換（\\ のあとの $( ）は、今までどおり中の文が判定される: コードを動かす文は確かめになり、拒否すれば動かない
+  await expectAsk(s, 'echo "\\\\$(node -e 1)"');
 });
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;

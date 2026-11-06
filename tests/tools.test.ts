@@ -574,7 +574,9 @@ test('PowerShell の引数: 文字コードの設定のあと、コマンドの�
     assert.ok(utf8 >= 0 && mode > utf8, `${choice}: 文字コードのあとに制限モード`);
     assert.ok(script.endsWith(';Get-Date') && script.indexOf('Get-Date') > mode, `${choice}: コマンドは制限モードのあと`);
   }
-  assert.deepEqual(resolveShell('bash').args('ls'), ['--noprofile', '--norc', '-c', 'ls']);
+  assert.deepEqual(resolveShell('bash').args('ls'), ['--noprofile', '--norc', '-c', 'eval "$(cat)"']);
+  assert.equal(resolveShell('bash').stdin?.('ls'), 'ls', 'スクリプトは標準入力で渡す（引数の読み直しで変わらない）');
+  assert.deepEqual(resolveShell('sh').args('ls'), ['-c', 'eval "$(cat)"']);
 });
 
 const autoShell = resolveShell('auto');
