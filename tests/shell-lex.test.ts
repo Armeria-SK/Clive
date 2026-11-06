@@ -285,6 +285,29 @@ test('字句 11.2.3: bash の [[ … ]] は ]] のすぐあとの ; & | ( ) で�
   assert.deepEqual(read('[[ -n x ]] > out.txt', 'bash')[0]!.redirects.map(r => [r.op, r.target?.text]), [['>', 'out.txt']]);
 });
 
+// 最終確認の乱数の試験で見つけた: [[ ]] の中の <( … ) >( … ) も、本物の bash はプロセス置換として中のコマンドを動かす。[[ の中では語を空白でだけ切るので、語の一部の文字として見逃していた
+test('字句 11.2.3: bash の [[ … ]] の中の <( … ) と >( … ) も、中の文を読む（プロセス置換は中のコマンドを動かす）', () => {
+  for (const command of ['[[ >(pwn) = a ]]', '[[ <(pwn) = a ]]', '[[ -n <(pwn) ]]', '[[ a == b || <(pwn) ]]', '[[ x == a<(pwn) ]]', '[[ x =~ >(pwn) ]]', 'if [[ -n <(pwn) ]]; then echo a; fi']) {
+    const seen = read(command, 'bash').map(s => s.words[0]?.text);
+    assert.ok(seen.includes('pwn'), `${JSON.stringify(command)}: pwn を文として読んでいない ${JSON.stringify(seen)}`);
+  }
+  assert.ok(read('[[ -n >(cat) ]]', 'bash').some(s => s.shapes.includes('process_out')), '>( … ) は書き込みの先が見えないので今回だけ');
+  assert.equal(failure('[[ -n <(pwn ]]', 'bash'), 'unclosed');
+  assert.deepEqual(read('[[ a < b ]] && echo lt', 'bash').map(line), ['[[ a < b ]]', 'echo lt'], '(  の付かない < は今までどおり文字列の比較');
+});
+
+// 同じく乱数の試験で見つけた: <( … ) >( … ) の閉じ ) のすぐあとに続く文字は、bash では同じ語の続き（# はコメントでなく語の一部）。
+// 字句の読み取りは、置換を 1 つの語として閉じてしまい、続きの # を語の頭のコメントと読んで、あとの文を隠していた（cat <(true)#; pwn）
+test('字句 11.2.3: bash の <( … ) >( … ) のすぐあとの文字は同じ語の続き。# はコメントでなく、あとの文を隠さない', () => {
+  for (const command of ['cat <(true)#; pwn', 'cat <(true)# & pwn', 'cat <(true)##& { pwn; }', 'echo >(cat)#; pwn', 'cat <(true)x#y; pwn', 'cat <(true)"a"#; pwn', 't<(rue &x)##& { pwn; }']) {
+    const seen = read(command, 'bash').map(s => s.words[0]?.text);
+    assert.ok(seen.includes('pwn'), `${JSON.stringify(command)}: pwn を文として読んでいない ${JSON.stringify(seen)}`);
+  }
+  assert.deepEqual(read('cat <(true)x; ls', 'bash').map(line), ['true', 'cat <(true)x', 'ls']);
+  assert.deepEqual(read('diff <(ls a) <(ls b)', 'bash').map(line), ['ls a', 'ls b', 'diff <(ls a) <(ls b)'], '続きの無い置換は今までどおり');
+  assert.deepEqual(read('cat <(true) # comment', 'bash').map(line), ['true', 'cat <(true)'], '空白をはさんだ # は今までどおりコメント');
+});
+
 // 同じく: $[ … ] と (( … )) は、中が式として読まれて # がコメントにならず、$( … ) も展開される。echo $[1 # $(pwn)] や (( ls # )); pwn は、# 以降を字句の読み取りがコメントと読んで隠していた
 test('字句 11.2.3: bash の $[ … ] と (( … )) は、中の # がコメントにならないので止める', () => {
   for (const command of ['echo $[1 # $(pwn)]', 'echo "$[1]"', 'echo $[1]', '(( ls # )); pwn', '((i++))', 'for ((i=0;i<3;i++)); do ls; done', 'x=1; ((x))']) {

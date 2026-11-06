@@ -530,7 +530,7 @@ test('実機（bash）: 文を隠す形（$( ) の中のコメント・case の 
   writeFileSync(s.files('pwn.sh'), '#!/bin/sh\necho ran > ran.txt\n', { mode: 0o755 });
   const rows = [
     'echo "$(# )\n./pwn.sh)"', 'x="$(# )\n./pwn.sh)"', 'echo "a$(#)\n./pwn.sh\n)"', 'echo "$(: # ) ;\n./pwn.sh)"', 'cat <(# )\n./pwn.sh)', 'echo "$(case x in x) ./pwn.sh;; esac)"', 'echo "$((true)\n./pwn.sh))"',
-    '[[ -n x # "\n]] && ./pwn.sh; echo "a" # "\n]]', 'if [[ -n x ]]; then ./pwn.sh ]] ; fi', 'if [[ -n x ]] then ./pwn.sh; fi', 'echo $[1 # $(./pwn.sh)]', '(( ls # )); ./pwn.sh',
+    '[[ -n x # "\n]] && ./pwn.sh; echo "a" # "\n]]', 'if [[ -n x ]]; then ./pwn.sh ]] ; fi', 'if [[ -n x ]] then ./pwn.sh; fi', 'echo $[1 # $(./pwn.sh)]', '(( ls # )); ./pwn.sh', '[[ -n <(./pwn.sh) ]]', '[[ x =~ >(./pwn.sh) ]]',
   ];
   for (const command of rows) {
     rmSync(marker, { force: true });

@@ -393,6 +393,13 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       } else if (ch === '~' && w.text === '' && !w.quoted) {
         const next = src[i + 1];
         if (next === undefined || next === '/' || /\s/u.test(next) || ';&|()<>'.includes(next)) { w.home = true; w.text = '~'; i++; } else return fail('tilde_user');
+      } else if ((ch === '<' || ch === '>') && src[i + 1] === '(') {
+        // [[ … ]] の中の語は空白でだけ切るので、<( … ) >( … ) もここに来る。本物の bash はプロセス置換として中のコマンドを動かす
+        const r = readSubstitution(i + 1);
+        if (r.fail) return r.fail;
+        if (ch === '>') cur.shapes.push('process_out');
+        w.text += src.slice(i, r.end + 1); w.dynamic = true;
+        i = r.end + 1;
       } else if (ch === '*' || ch === '?' || ch === '[') { w.glob = true; w.text += ch; i++; } else if (ch === '{') {
         const close = src.indexOf('}', i);
         const inner = close > i ? src.slice(i + 1, close) : '';
@@ -496,9 +503,13 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       if ((c === '<' || c === '>') && src[i + 1] === '(') {
         const r = readSubstitution(i + 1);
         if (r.fail) return r.fail;
-        cur.words.push(plain(src.slice(i, r.end + 1), { dynamic: true }));
-        if (c === '>') cur.shapes.push('process_out');
+        const head = src.slice(i, r.end + 1);
         i = r.end + 1;
+        // 閉じ ) のすぐあとに続く文字は同じ語の続き（# はコメントでなく語の一部）
+        const tail = readWord();
+        if (isFail(tail)) return tail;
+        cur.words.push(plain(head + tail.text, { dynamic: true, glob: tail.glob, quoted: tail.quoted }));
+        if (c === '>') cur.shapes.push('process_out');
         continue;
       }
       if (rest.startsWith('<<<')) {

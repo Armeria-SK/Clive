@@ -163,6 +163,8 @@ const BASH_HIDING_ROWS = [
   'echo "$((true)\npwn))"', 'x=$((true)\npwn)', 'echo "$((true) \npwn )"',
   '[[ -n x # "\n]] && pwn; echo "a" # "\n]]', "[[ -n x # '\n]] && pwn; echo '' # '\n]]",
   'if [[ -n x ]]; then pwn ]] ; fi', 'if [[ -n x ]] then pwn; fi', 'echo $[1 # $(pwn)]', 'echo "$[1 # $(pwn)]"', '(( ls # )); pwn',
+  '[[ >(pwn) = a ]]', '[[ <(pwn) = a ]]', '[[ -n <(pwn) ]]', '[[ a == b || <(pwn) ]]', '[[ x == a<(pwn) ]]', '[[ x =~ >(pwn) ]]',
+  'cat <(true)#; pwn', 'cat <(true)# & pwn', 'cat <(true)##& { pwn; }', 'echo >(cat)#; pwn', 't<(rue &x)##& { pwn; }',
 ];
 
 test('bash: 文を隠せた形（$( ) の中のコメント・case の )・$(( の部分シェル・[[ ]] のコメントと閉じ方・$[ ]・(( ））は、本物の bash では pwn が動く。字句の読み取りは止めるか、pwn を文として読む', { skip: !bashPath && 'bash が無い' }, t => {
