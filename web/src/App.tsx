@@ -14,7 +14,7 @@ import { useContextUsage } from './use-context-usage.ts';
 import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
-import { mergeNotice } from './chat-logic.ts';
+import { mergeNotice, recountsUsage } from './chat-logic.ts';
 import { LanguagePrompt } from './LanguagePrompt.tsx';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
@@ -273,8 +273,8 @@ export function App() {
     if (change.kind === 'archived' || change.kind === 'deleted') tabState.close(`chat:${change.id}`);
     if (change.kind === 'deleted' && currentRef.current === change.id) location.hash = '#/';
     if (change.kind === 'unarchived') tabState.openChat(change.id);
-    // モデルを替えたら、使用量の輪を、替えたモデルで数え直す
-    if (change.kind === 'model') setEndRevision(n => n + 1);
+    // モデルか権限モードを替えたら、使用量の輪を、替えたあとの条件で数え直す
+    if (recountsUsage(change.kind)) setEndRevision(n => n + 1);
   }, [refreshList, tabState.close, tabState.openChat]);
   const addNotice = (conversationId: string, notice: RunNotice) =>
     setNotices(state => ({ ...state, [conversationId]: mergeNotice(state[conversationId] ?? [], notice) }));

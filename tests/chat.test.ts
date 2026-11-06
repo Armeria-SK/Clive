@@ -4,7 +4,7 @@ import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
   advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, compactTokens, contextPercent, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
-  mergeNotice, restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
+  mergeNotice, recountsUsage, restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -500,4 +500,10 @@ test('使用量の表示: 割合は四捨五入、1 を超えたら「100%+」�
   assert.equal(ja['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k（全体 200k）');
   assert.equal(en['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k (total 200k)');
   for (const key of ['context.label', 'context.over'] as const) { assert.ok(ja[key] && en[key], key); assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, key); }
+});
+
+test('使用量の輪を数え直す変更: モデルを替えたときと、権限モードを替えたとき（計画は渡す道具の一覧と指示が変わる）。名前の変更・アーカイブ・削除では数え直さない', () => {
+  assert.equal(recountsUsage('model'), true);
+  assert.equal(recountsUsage('mode'), true);
+  for (const kind of ['renamed', 'archived', 'unarchived', 'deleted'] as const) assert.equal(recountsUsage(kind), false, kind);
 });
