@@ -180,15 +180,29 @@ export function convertZone(datetime: string, fromZone: string, toZone: string):
     return { ok: false, code: 'bad_timezone' };
   }
   const { y, m, d, h, mi } = parsed.value;
-  const provUtc = Date.UTC(y, m - 1, d, h, mi);
-  // 最初の推測で得たオフセットは、DST 切替直後の時刻では本当の瞬間のものと異なることがある。
-  // 補正後の UTC 時刻でオフセットを再計算し、それを使う
-  const fromWall = readWall(fromFmt, provUtc);
-  const fromWallMs = Date.UTC(fromWall.y, fromWall.m - 1, fromWall.d, fromWall.h, fromWall.mi);
-  let trueUtc = provUtc + (provUtc - fromWallMs);
-  const checkWall = readWall(fromFmt, trueUtc);
-  const checkWallMs = Date.UTC(checkWall.y, checkWall.m - 1, checkWall.d, checkWall.h, checkWall.mi);
-  if (checkWallMs !== fromWallMs) trueUtc = provUtc + (trueUtc - checkWallMs);
+  const wallAsUtc = Date.UTC(y, m - 1, d, h, mi);
+  // Temporal の "compatible" 規則。±24h のオフセットを二つ取り、候補 = wall − offset を二つ作る。
+  // 各候補がソースゾーンで要求した wall と一致すれば有効。両方有効なら早い瞬間、一方だけならそれ、
+  // 両方無効（春のギャップ）なら二つの候補の遅い瞬間。
+  const wallMs = (utc: number): number => {
+    const w = readWall(fromFmt, utc);
+    return Date.UTC(w.y, w.m - 1, w.d, w.h, w.mi);
+  };
+  const offsetAt = (utc: number): number => wallMs(utc) - utc;
+  const candBefore = wallAsUtc - offsetAt(wallAsUtc - MS_PER_DAY);
+  const candAfter = wallAsUtc - offsetAt(wallAsUtc + MS_PER_DAY);
+  const beforeValid = wallMs(candBefore) === wallAsUtc;
+  const afterValid = wallMs(candAfter) === wallAsUtc;
+  let trueUtc: number;
+  if (beforeValid && afterValid) {
+    trueUtc = Math.min(candBefore, candAfter);
+  } else if (beforeValid) {
+    trueUtc = candBefore;
+  } else if (afterValid) {
+    trueUtc = candAfter;
+  } else {
+    trueUtc = Math.max(candBefore, candAfter);
+  }
   const toWall = readWall(toFmt, trueUtc);
   const datetimeOut = `${toWall.y}-${pad2(toWall.m)}-${pad2(toWall.d)}T${pad2(toWall.h)}:${pad2(toWall.mi)}`;
   return { ok: true, value: { datetime: datetimeOut, offset: toWall.offset } };
