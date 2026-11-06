@@ -30,6 +30,11 @@
 .sk-tool-text { flex: 1; min-width: 150px; display: flex; flex-direction: column; }
 .sk-tool-name { font-family: var(--font-mono); font-size: 13px; }
 .sk-tool-desc { font-size: 12.5px; color: var(--color-text-muted); }
+.sk-tool-fixed { font-size: 12px; color: var(--color-text-muted); }
+.sk-tool-sub { flex-basis: 100%; padding-left: 32px; font-size: 12px; color: var(--color-text-muted); }
+.sk-policy-note { padding-top: 0; }
+.sk-retry { align-self: flex-start; }
+.sk-tools .set-widen { margin: 0 0 12px; }
 
 .sk-warn { display: block; font-size: 12px; color: var(--color-accent-text); }
 

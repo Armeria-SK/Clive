@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useT } from '../i18n/index.ts';
+import { POLICY_LABEL } from '../skills-meta.ts';
 import type { Access } from './access.ts';
 
 type Translate = ReturnType<typeof useT>;
@@ -33,6 +34,7 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'provider-url': return t('access.providerUrl', a.id, a.url);
     case 'provider-key': return t('access.providerKey', a.id, a.env);
     case 'searxng-url': return t('access.searxng', a.url);
+    case 'tool-policy-loosened': return t('access.toolPolicy', a.tool, t(POLICY_LABEL[a.from]), t(POLICY_LABEL[a.to]));
   }
 }
 

@@ -13,6 +13,7 @@ import type { ApprovalBroker } from '../tools/approvals.ts';
 import { REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
+import { toolPolicy } from '../tools/tool-policy.ts';
 import type { RunKind, TaskControl, ToolContext, ToolDef } from '../tools/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
@@ -304,9 +305,12 @@ export class ChatEngine {
     this.#active.set(runId, { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), controller, done });
   }
 
+  // モデルに渡す道具の一覧。外す条件はここだけ（maxTools の数える前に外す）: 振り返りで禁止の効果・この実行で禁止された道具・持ち主が「止める」にした道具（tools.policies）。
+  // 段 8b の会話ごとのモード（計画など）も、ここに条件を足す（パイプラインの二重の拒否は runToolCall）
   #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
-    const exclude = (t: ToolDef) => (kind === 'review' && REVIEW_FORBIDDEN.has(t.effect)) || forbid?.has(t.name) === true;
+    const config = this.#d.config();
+    const exclude = (t: ToolDef) => (kind === 'review' && REVIEW_FORBIDDEN.has(t.effect)) || forbid?.has(t.name) === true || toolPolicy(config, t.name) === 'block';
     return this.#d.tools.registry.forRun(kind, { limit: model.maxTools, exclude });
   }
 
@@ -386,7 +390,7 @@ export class ChatEngine {
         const toolModel = lastRoute.model;
         const toolCapacity = d.status.get(toolModel.id)?.effective ?? toolModel.contextLength ?? 0;
         ctx.outputLimit = toolCapacity > 0 ? toolOutputLimit(contextAvailable(toolCapacity, toolModel), TOOL_OUTPUT_LIMIT) : undefined;
-        const outcome = await runToolCall(toolCall, ctx, { registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e) });
+        const outcome = await runToolCall(toolCall, ctx, { registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config });
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {
           role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}),

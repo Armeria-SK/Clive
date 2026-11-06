@@ -39,6 +39,7 @@ import { TaskStore, taskView } from './tasks/store.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
 import { ToolRegistry } from './tools/registry.ts';
+import { ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
 import { MemoryStore, renderBooks } from './memory/store.ts';
 
@@ -98,6 +99,7 @@ export class App {
     const config = this.configStore.load();
     ensureWorkspace(this.paths, languageOf(config));
     this.bootServer = structuredClone(config.server);
+    this.#warnIgnoredPolicies(config);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
     const now = options.now ?? Date.now;
     this.conversations = new Conversations(this.db, now);
@@ -184,6 +186,11 @@ export class App {
 
   #applied = '';
 
+  // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
+  #warnIgnoredPolicies(config: AppConfig): void {
+    for (const name of ignoredPolicyNames(config)) this.log(`[WARN] tools.policies の「${name}」は、方針を持てない道具（タスクの進め方に必要）なので無視します`);
+  }
+
   #importCuriosity(): void {
     if (this.kv.get('curiosity:imported')) return;
     const path = join(this.paths.workspace, 'CURIOSITY.md');
@@ -202,6 +209,7 @@ export class App {
       this.registry.reload(config);
       void this.status.probeAll(config).catch(error => this.log(`[ERROR] 設定の再読み込み後の確認に失敗: ${(error as Error).message}`));
       this.log('[INFO] 設定ファイルの変更を読み込みました');
+      this.#warnIgnoredPolicies(config);
       this.worker?.poke();
     }
     this.#applied ||= json;
@@ -222,11 +230,12 @@ export class App {
     return this.memory ? estimateTextTokens(renderBooks(this.memory.list(), languageOf(this.config()))) : 0;
   }
 
-  async applyConfig(next: AppConfig): Promise<AppConfig> {
+  // probe: false は、モデルやプロバイダに関わらない変更（道具の方針など）で、モデルの確認の通信をしない
+  async applyConfig(next: AppConfig, options: { probe?: boolean } = {}): Promise<AppConfig> {
     const saved = this.configStore.save(next);
     this.#applied = JSON.stringify(saved);
     this.registry.reload(saved);
-    await this.status.probeAll(saved);
+    if (options.probe !== false) await this.status.probeAll(saved);
     this.worker.poke();
     return saved;
   }

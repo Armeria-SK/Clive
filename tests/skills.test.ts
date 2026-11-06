@@ -8,8 +8,8 @@ import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
 import { parseRoute, routeHash } from '../web/src/routes.ts';
 import {
-  addRoot, broadKind, DEFAULT_DENY, EFFECT_LABEL, findDraft, foldersFromConfig, removeRoot, setRootMode,
-  skillDraftLink, skillFileText, skillRows, TOOL_CATALOG, wideningChanges, type FolderDraft,
+  addRoot, broadKind, DEFAULT_DENY, EFFECT_LABEL, findDraft, foldersFromConfig, POLICY_LABEL, removeRoot, setRootMode,
+  orderTools, skillDraftLink, skillFileText, skillRows, TOOL_LOOKS, toolLook, wideningChanges, type FolderDraft,
 } from '../web/src/skills-meta.ts';
 import { toTab } from '../web/src/tabs.ts';
 import { startScreenServer } from './screen-server.ts';
@@ -64,17 +64,32 @@ test('通知のリンク: スキルの下書きの通知（#/review）は、そ�
   assert.equal(skillDraftLink({ link: null, title: 'x: y' }), null);
 });
 
-test('道具の一覧: 組み込みの道具 24 個と、名前・効果が一致し、説明は ja と en の辞書にある', () => {
+test('道具の一覧: サーバーの一覧（GET /api/tools）の 24 個すべてに、画面の絵と説明（ja と en の辞書）がある。画面にあってサーバーに無い道具も無い', async t => {
+  const s = await startScreenServer(t);
+  const { tools } = (await (await s.api('/api/tools')).json()) as { tools: Array<{ name: string; effect: keyof typeof EFFECT_LABEL }> };
   const server = builtinTools();
-  assert.equal(TOOL_CATALOG.length, server.length);
-  assert.deepEqual(TOOL_CATALOG.map(c => c.name).sort(), server.map(s => s.name).sort());
-  for (const entry of TOOL_CATALOG) {
-    assert.equal(entry.effect, server.find(s => s.name === entry.name)!.effect, `${entry.name} の効果`);
-    assert.ok(entry.desc in ja && entry.desc in en, `${entry.desc} の辞書`);
-    assert.equal(entry.desc, `tool.${entry.name}`);
-    assert.ok(EFFECT_LABEL[entry.effect] in ja && EFFECT_LABEL[entry.effect] in en);
+  assert.equal(tools.length, server.length);
+  assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(def => def.name).sort());
+  assert.deepEqual(Object.keys(TOOL_LOOKS).sort(), server.map(def => def.name).sort(), '絵と説明の辞書は、サーバーの道具と同じ名前');
+  for (const tool of tools) {
+    const look = toolLook(tool.name);
+    assert.equal(tool.effect, server.find(def => def.name === tool.name)!.effect, `${tool.name} の効果`);
+    assert.ok(look.desc !== null && look.desc in ja && look.desc in en, `${tool.name} の説明の辞書`);
+    assert.equal(look.desc, `tool.${tool.name}`);
+    assert.ok(EFFECT_LABEL[tool.effect] in ja && EFFECT_LABEL[tool.effect] in en, `${tool.effect} の辞書`);
   }
-  assert.equal(new Set(TOOL_CATALOG.map(c => c.name)).size, TOOL_CATALOG.length, '名前の重複なし');
+  for (const key of Object.values(POLICY_LABEL)) assert.ok(key in ja && key in en, key);
+  assert.deepEqual(toolLook('mystery_tool'), { icon: 'wrench', desc: null }, 'あとから増えた道具は、汎用の絵で説明なし');
+  assert.deepEqual(toolLook('__proto__'), { icon: 'wrench', desc: null }, 'Object の予約された名前も、道具ではない');
+});
+
+test('道具の並び: 画面の辞書の順（ファイル → シェル → Web → …）。辞書に無い道具は、そのあとに名前順', () => {
+  const names = (list: Array<{ name: string }>) => list.map(tool => tool.name);
+  const server = builtinTools().map(def => ({ name: def.name }));
+  const ordered = names(orderTools(server));
+  assert.deepEqual(ordered, Object.keys(TOOL_LOOKS), 'サーバーの登録順によらず、辞書の順');
+  assert.deepEqual(names(orderTools([{ name: 'zeta_new' }, { name: 'shell_run' }, { name: 'alpha_new' }, { name: 'file_read' }])), ['file_read', 'shell_run', 'alpha_new', 'zeta_new']);
+  assert.deepEqual(names(orderTools([])), []);
 });
 
 test('skillFileText: サーバーが SKILL.md に書く形と同じ', () => {

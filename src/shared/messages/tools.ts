@@ -5,6 +5,7 @@ const ja = {
 
   'pipeline.tool_missing': 'ツール「{name}」はありません。使えるツール: {names}',
   'pipeline.tool_not_allowed': 'ツール「{name}」はこの種類の実行では使えません',
+  'pipeline.policy_blocked': 'ツール「{name}」は、持ち主が設定で止めているので使えません。別の方法を考えるか、ユーザーに相談してください',
   'pipeline.review_forbidden': '振り返りでは「{name}」は使えません',
   'pipeline.bad_json': '引数が JSON として読めません。正しい JSON で呼び直してください: {raw}',
   'pipeline.bad_args': '引数の形が正しくありません。直して呼び直してください:\n- {errors}',
@@ -148,6 +149,7 @@ const en: Record<keyof typeof ja, string> = {
 
   'pipeline.tool_missing': 'There is no tool "{name}". Available tools: {names}',
   'pipeline.tool_not_allowed': 'The tool "{name}" cannot be used in this kind of run',
+  'pipeline.policy_blocked': 'The tool "{name}" is turned off in the settings, so it cannot be used. Think of another way, or ask the user',
   'pipeline.review_forbidden': '"{name}" cannot be used during a review',
   'pipeline.bad_json': 'The arguments could not be read as JSON. Call it again with valid JSON: {raw}',
   'pipeline.bad_args': 'The shape of the arguments is not valid. Fix them and call again:\n- {errors}',

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Placement } from './hooks/scope.ts';
+import type { AskKind } from './types.ts';
 
 export type ApprovalDecision = 'once' | 'conversation' | 'deny';
 export type ApprovalOutcome = 'approved' | 'denied' | 'expired' | 'cancelled';
@@ -57,6 +58,10 @@ export interface ApprovalRequest {
   details: string[];
   // コードを動かす確かめ。「この会話では許可」を出さず、同じ文字のコマンドの許可を覚えない
   onceOnly?: boolean | undefined;
+  // 道具ごとの方針が ask の確かめ。毎回承認を求める（「この会話では許可」を出さず、送られても今回だけ）。コードを動かす確かめ（onceOnly）とは別
+  everyTime?: boolean | undefined;
+  // 確かめになった理由の種類（画面には渡さない）
+  kinds?: AskKind[] | undefined;
   preview?: PreviewFile[] | undefined;
   // 見つけたパスごとの判定（details の文と同じものを構造で渡す。無ければ空）
   paths?: ApprovalPath[] | undefined;
@@ -75,7 +80,7 @@ export interface ApprovalView extends ApprovalRequest {
 export function approvalPublic(v: ApprovalView) {
   return {
     id: v.id, tool: v.tool, title: v.title, body: v.body, cwd: v.cwd, reasons: v.reasons, details: v.details, expiresAt: v.expiresAt,
-    onceOnly: v.onceOnly === true, preview: v.preview ?? [], paths: v.paths ?? [], pathsMore: v.pathsMore ?? 0,
+    onceOnly: v.onceOnly === true, everyTime: v.everyTime === true, preview: v.preview ?? [], paths: v.paths ?? [], pathsMore: v.pathsMore ?? 0,
   };
 }
 
@@ -132,8 +137,8 @@ export class ApprovalBroker {
   decide(id: string, decision: ApprovalDecision): boolean {
     const pending = this.#pending.get(id);
     if (!pending) return false;
-    // コードを動かす確かめは、古い画面から「この会話では許可」が送られても今回だけとして扱う
-    const scope = decision === 'conversation' && pending.view.onceOnly ? 'once' : decision;
+    // コードを動かす確かめと、方針が ask の確かめは、古い画面から「この会話では許可」が送られても今回だけとして扱う
+    const scope = decision === 'conversation' && (pending.view.onceOnly || pending.view.everyTime) ? 'once' : decision;
     if (scope === 'conversation') this.#conversationGrants.add(`${pending.view.conversationId}:${pending.view.inputHash}`);
     this.#db.prepare('UPDATE approvals SET scope = ? WHERE id = ?').run(scope, id);
     pending.resolve(decision === 'deny' ? 'denied' : 'approved');

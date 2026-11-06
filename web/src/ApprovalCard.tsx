@@ -67,7 +67,7 @@ function ApprovalPanel({ approval, hint, position, onDetails }: PanelProps) {
       {error && <div className="chat-approval-error" role="alert">{error}</div>}
       <div className="chat-approval-actions">
         <button type="button" className="btn btn-ghost chat-plain" disabled={busy} onClick={() => void decide('deny')}>{t('approval.deny')}</button>
-        {!approval.onceOnly && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
+        {!approval.onceOnly && !approval.everyTime && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide('once')}>
           {hint && !approval.onceOnly ? <>{t('approval.run')}<span className="chat-approval-key">↵</span></> : t('approval.once')}
         </button>
@@ -92,7 +92,7 @@ function ApprovalDetails({ approval, onClose }: { approval: Approval; onClose: (
       actions={(
         <>
           <button type="button" className="btn btn-ghost chat-plain" disabled={busy} onClick={() => void decide('deny')}>{t('approval.deny')}</button>
-          {!approval.onceOnly && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
+          {!approval.onceOnly && !approval.everyTime && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide('once')}>{t('approval.once')}</button>
         </>
       )}

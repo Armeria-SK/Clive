@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { Value } from '@sinclair/typebox/value';
 import { parseAllowEntry } from '../tools/hooks/allow-entry.ts';
 import { checkBaseUrl } from '../shared/url.ts';
+import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
 import { AppConfig, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
 const ToolsSchema = ToolsConfigSchema();
@@ -87,6 +88,9 @@ function findings(config: AppConfig): Finding[] {
   config.tools.shell.allow.forEach((entry, i) => {
     if (!parseAllowEntry(entry)) add('tools.shell.allow', `${i + 1} 番目の「${entry}」は書けない形です。決まったコマンドだけ（引用符・変数・ワイルドカード・置換・リダイレクト・区切りを含まない、1 つの文）を書いてください`);
   });
+  for (const name of Object.keys(config.tools.policies)) {
+    if (!TOOL_NAME_PATTERN.test(name)) add('tools.policies', `「${name}」は道具の名前として書けません（英小文字で始まり、英小文字・数字・_ だけ、64 文字まで）`);
+  }
   for (const origin of config.server.origins) {
     try { if (new URL(origin).origin !== origin) add('server.origins', `「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
     catch { add('server.origins', `「${origin}」が URL として読めません`); }
