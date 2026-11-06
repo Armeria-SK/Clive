@@ -3,15 +3,16 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
-import type { RunEvent } from '../src/engine/types.ts';
+import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { Conversations } from '../src/db/conversations.ts';
 import { openDatabase } from '../src/db/database.ts';
 import { MIGRATIONS } from '../src/db/migrations.ts';
 import { searchHistory } from '../src/memory/history.ts';
 import { inputHash } from '../src/tools/approvals.ts';
+import { checklistKey } from '../src/tools/builtin/checklist-core.ts';
 import { replyLanguageKey, snapshotLanguageKey } from '../src/engine/prompts.ts';
 import { fakeModel, startApp, uuid, waitFor } from './app-setup.ts';
-import { reply } from './helpers.ts';
+import { reply, type Script } from './helpers.ts';
 
 const TARGET = uuid(10);
 const OTHER = uuid(11);
@@ -49,6 +50,8 @@ async function populate(s: Awaited<ReturnType<typeof startApp>>) {
   // kv
   for (const key of [snapshotLanguageKey(TARGET), replyLanguageKey(TARGET), `review:upto:${TARGET}`]) app.kv.set(key, '1');
   for (const key of [snapshotLanguageKey(OTHER), `review:upto:${OTHER}`, 'calibration:m1']) app.kv.set(key, '1');
+  app.kv.set(checklistKey(TARGET), JSON.stringify({ items: [{ text: `${SECRET} を調べる`, status: 'pending' }], tainted: false, updatedAt: 1 }));
+  app.kv.set(checklistKey(OTHER), JSON.stringify({ items: [{ text: '別の作業', status: 'done' }], tainted: false, updatedAt: 1 }));
   // 残すもの: 記憶・スキルの下書き・その会話から作ったタスク
   app.db.prepare(`INSERT INTO memories (book, content, origin, source_conversation_id, source_message_id, created_at, updated_at) VALUES ('notes', '覚えたこと', 'chat', ?, 1, 1, 1)`).run(TARGET);
   app.db.prepare(`INSERT INTO skill_drafts (name, description, body, status, conversation_id, run_id, created_at) VALUES ('s', 'd', 'b', 'pending', ?, 'run-t', 1)`).run(TARGET);
@@ -112,6 +115,8 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
   const keys = (app.db.prepare('SELECT key FROM kv').all() as Array<{ key: string }>).map(r => r.key);
   assert.ok(!keys.some(k => k.includes(TARGET)), `会話ごとの kv が残っている: ${keys.join(', ')}`);
   assert.ok(keys.includes(snapshotLanguageKey(OTHER)) && keys.includes(`review:upto:${OTHER}`) && keys.includes('calibration:m1'), 'ほかの kv は残る');
+  assert.equal(app.kv.get(checklistKey(TARGET)), undefined, '作業の一覧（checklist:<会話ID>）も消える');
+  assert.ok(app.kv.get(checklistKey(OTHER)), 'ほかの会話の作業の一覧は残る');
   // 残すもの
   assert.deepEqual((app.db.prepare("SELECT content, source_conversation_id AS c, source_message_id AS m FROM memories").all() as object[]).map(r => ({ ...r })), [{ content: '覚えたこと', c: null, m: null }], '記憶は残し、会話への結び付きだけ外す');
   assert.equal((app.db.prepare('SELECT conversation_id AS c FROM skill_drafts').get() as { c: string | null }).c, null);
@@ -149,6 +154,46 @@ test('削除: 発言・添付・要約・固定の system・承認・kv・検索
     }
   }
   assert.deepEqual(leftovers, [], '消した会話の ID や本文が、どこかの表に残っている');
+});
+
+const callTool = (name: string, args: unknown): Script => async function* () {
+  const call: ToolCall = { id: `call_${Math.random().toString(36).slice(2)}`, name, arguments: args };
+  yield { type: 'tool_call', call };
+  yield { type: 'done', stop: 'tool_use' as StopReason };
+};
+
+test('削除: その会話で notify_owner が出した通知は、題も本文も含めて消える。タスクの実行が出した通知・ほかの会話の通知は残る', async t => {
+  const s = await startApp(t);
+  const { app } = s;
+  const notifyIn = async (conversationId: string, title: string, body: string) => {
+    s.adapter().scripts = [callTool('notify_owner', { title, body }), reply('知らせました')];
+    const sent = await s.json(`/api/conversations/${conversationId}/messages`, 'POST', { text: '知らせて' });
+    assert.equal(sent.status, 202);
+    await waitFor(() => app.runs.get(sent.body.runId)?.ended_at != null, 'run ended');
+  };
+  await notifyIn(TARGET, `${SECRET} の件`, `${SECRET} が見つかりました`);
+  await notifyIn(OTHER, '別の件', '別の会話の知らせ');
+  const mine = app.notifications.list().filter(n => n.title.includes(SECRET));
+  assert.equal(mine.length, 1, '前提: 道具の呼び出しで、この会話の通知が 1 件できている');
+  assert.equal(mine[0]!.link, `#/c/${TARGET}`);
+  assert.ok(mine[0]!.dedup_key?.startsWith('owner:'), '前提: owner: の印が付く');
+  assert.ok(mine[0]!.body?.includes(SECRET));
+  // タスクの実行が出した通知（リンクはタスク）と、会話を指すだけで notify_owner ではない通知
+  const task = app.tasks.create({ title: '残るタスク', origin: 'self', actor: 'clive', createdInConversation: TARGET });
+  app.notifications.notify({ kind: 'info', title: 'Clive より: タスクの区切り', body: 'タスクの知らせ', link: `#/tasks/${task.id}`, dedupKey: 'owner:task-run' });
+  app.notifications.notify({ kind: 'task_done', title: 'ほかの知らせ', link: `#/c/${TARGET}`, dedupKey: 'done:1' });
+
+  assert.equal((await s.json(`/api/conversations/${TARGET}`, 'DELETE')).status, 200);
+
+  const rows = app.db.prepare('SELECT title, link, dedup_key AS k FROM notifications ORDER BY id').all() as Array<{ title: string; link: string | null; k: string }>;
+  assert.deepEqual(rows.map(r => ({ ...r })), [
+    { title: 'Clive より: 別の件', link: `#/c/${OTHER}`, k: rows[0]!.k },
+    { title: 'Clive より: タスクの区切り', link: `#/tasks/${task.id}`, k: 'owner:task-run' },
+    { title: 'ほかの知らせ', link: null, k: 'done:1' },
+  ], 'この会話の notify_owner の通知だけ消える。ほかの会話・タスクの通知は残り、会話を指すだけの通知はリンクが外れる');
+  assert.ok(rows[0]!.k.startsWith('owner:'));
+  assert.ok(!JSON.stringify(app.notifications.list()).includes(SECRET), '画面が読む通知に本文が残らない');
+  assert.equal(app.notifications.unread(), 3);
 });
 
 test('削除: 返事を作っている最中の会話は消せない（409）。何も消えない', async t => {
@@ -195,8 +240,8 @@ test('モデルの道具には、会話を消すものが無い（道具の一�
   const tools = builtinTools();
   const names = tools.map(t => t.name).sort();
   assert.deepEqual(names, [
-    'ask_user', 'calculate', 'curiosity_add', 'curiosity_list', 'curiosity_update', 'date_calc', 'file_edit', 'file_list', 'file_read', 'file_search', 'file_write', 'history_read', 'history_search',
-    'memory_forget', 'memory_save', 'memory_search', 'memory_update', 'shell_run', 'skill_draft', 'skill_view', 'task_checkpoint', 'task_complete',
+    'ask_user', 'calculate', 'checklist_write', 'curiosity_add', 'curiosity_list', 'curiosity_update', 'date_calc', 'file_edit', 'file_list', 'file_read', 'file_search', 'file_write', 'history_read', 'history_search',
+    'memory_forget', 'memory_save', 'memory_search', 'memory_update', 'notify_owner', 'shell_run', 'skill_draft', 'skill_view', 'task_checkpoint', 'task_complete',
     'task_create', 'task_list', 'task_update', 'web_fetch', 'web_search',
   ], '道具を足したら、会話を消せないことを確かめ直す');
   assert.ok(!names.some(n => /conversation|chat/iu.test(n)));

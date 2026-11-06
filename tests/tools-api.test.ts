@@ -11,13 +11,13 @@ const patch = (s: Awaited<ReturnType<typeof startScreenServer>>, name: string, b
   s.api(`/api/tools/${name}`, { method: 'PATCH', body: JSON.stringify(body), headers });
 const fileOf = (s: Awaited<ReturnType<typeof startScreenServer>>) => JSON.parse(readFileSync(s.app.paths.config, 'utf8')) as { tools: { policies?: Record<string, string> } };
 
-test('GET /api/tools: 組み込みの道具 27 個を、名前・効果・使える場面・方針・方針を持てるかで返す（既定はすべて allow）', async t => {
+test('GET /api/tools: 組み込みの道具 29 個を、名前・効果・使える場面・方針・方針を持てるかで返す（既定はすべて allow）', async t => {
   const s = await startScreenServer(t);
   const res = await s.api('/api/tools');
   assert.equal(res.status, 200);
   const { tools } = (await res.json()) as { tools: ToolRow[] };
   const server = builtinTools();
-  assert.equal(tools.length, 27);
+  assert.equal(tools.length, 29);
   assert.deepEqual(tools.map(tool => tool.name).sort(), server.map(tool => tool.name).sort());
   for (const tool of tools) {
     const def = server.find(d => d.name === tool.name)!;

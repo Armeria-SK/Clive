@@ -1,3 +1,5 @@
+import { arrangeNotifications, NOTIFICATION_LIST_LIMIT } from '../../src/shared/notification-list.ts';
+import type { NotificationItem } from './api.ts';
 import type { IconName } from './icon-paths.ts';
 import type { PlainKey } from './i18n/index.ts';
 import { parseRoute, routeHash } from './routes.ts';
@@ -27,3 +29,11 @@ export function notificationLink(link: string | null): string | null {
   if (canonical === '#/') return link === '#/' ? link : null;
   return link === canonical || link.startsWith(`${canonical}/`) ? link : null;
 }
+
+// 画面の一覧に、届いた通知を足す。サーバーの一覧と同じ並べ方（承認待ちなどの未読は先頭に残る）
+export const withNotification = (list: readonly NotificationItem[] | null, added: NotificationItem): NotificationItem[] =>
+  arrangeNotifications([added, ...(list ?? [])], NOTIFICATION_LIST_LIMIT);
+
+// ids を既読にする（ids が無ければ全部）。既読になった通知は先頭から外れる。新しい 50 件の中なら新しい順の場所に戻り、それより古いものは一覧から消える
+export const withRead = (list: readonly NotificationItem[] | null, ids: readonly number[] | undefined, now: number): NotificationItem[] | null =>
+  list && arrangeNotifications(list.map(n => (!ids || ids.includes(n.id) ? { ...n, read_at: n.read_at ?? now } : n)), NOTIFICATION_LIST_LIMIT);

@@ -14,14 +14,14 @@ import { useContextUsage } from './use-context-usage.ts';
 import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
-import { mergeNotice, recountsUsage } from './chat-logic.ts';
+import { mergeNotice, recountsUsage, withChecklistEvent, type ChecklistView } from './chat-logic.ts';
 import { LanguagePrompt } from './LanguagePrompt.tsx';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
 import { undoMemoryEvent } from './memory-undo.ts';
 import { NarrowHeader } from './NarrowHeader.tsx';
 import { NotificationBubble } from './NotificationBubble.tsx';
-import { notificationLink } from './notification-meta.ts';
+import { notificationLink, withNotification, withRead } from './notification-meta.ts';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { Palette } from './Palette.tsx';
 import { PAGE_META, pickChatModelView } from './pages.ts';
@@ -59,6 +59,8 @@ export function App() {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [notices, setNotices] = useState<Record<string, RunNotice[]>>({});
   const [revisions, setRevisions] = useState<Record<string, number>>({});
+  // 会話ごとの作業の一覧の、いちばん新しい出来事（checklist.updated）。開いている会話のぶんだけを Chat へ渡す
+  const [checklists, setChecklists] = useState<ReadonlyMap<string, ChecklistView>>(() => new Map());
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
@@ -230,7 +232,7 @@ export function App() {
     void api.readNotifications(ids).then(r => {
       setUnread(r.unread);
       const now = Date.now();
-      setNotifications(list => list?.map(n => (!ids || ids.includes(n.id) ? { ...n, read_at: n.read_at ?? now } : n)) ?? null);
+      setNotifications(list => withRead(list, ids, now));
     }).catch(() => undefined);
   }, []);
   const readAllNotifications = useCallback(() => markRead(), [markRead]);
@@ -332,6 +334,9 @@ export function App() {
       case 'approval.resolved':
         setApprovals(list => list.filter(a => a.id !== e.approvalId));
         break;
+      case 'checklist.updated':
+        setChecklists(state => withChecklistEvent(state, e));
+        break;
       case 'memory.changed':
         setMemoryRevision(n => n + 1);
         addNotice(e.conversationId, { runId: e.runId, kind: 'memory', message: t(MEMORY_NOTICE[e.action], e.content), eventId: e.eventId });
@@ -383,6 +388,7 @@ export function App() {
         bump(e.conversationId);
         if (e.change === 'archived' || e.change === 'deleted') tabState.close(`chat:${e.conversationId}`);
         if (e.change === 'deleted' && currentRef.current === e.conversationId) location.hash = '#/';
+        if (e.change === 'deleted') refreshNotifications(); // 消した会話の Clive からの知らせは、サーバーで消えている
         break;
       case 'task.changed': {
         setTaskRevision(n => n + 1);
@@ -410,17 +416,22 @@ export function App() {
       }
       case 'notification':
         setUnread(n => n + 1);
-        setNotifications(list => [e.notification, ...(list ?? []).filter(n => n.id !== e.notification.id)].slice(0, 50));
+        setNotifications(list => withNotification(list, e.notification));
         setNotificationRevision(n => n + 1);
         if (BROWSER_NOTIFY.has(e.notification.kind) && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
           new Notification(t('browser.notification', e.notification.title), { body: e.notification.body ?? '' });
         }
+        break;
+      case 'notification.read': // 承認や返事が片づいて、サーバーが既読にした
+        setUnread(e.unread);
+        setNotifications(list => withRead(list, e.ids, Date.now()));
         break;
     }
   }, [t, refreshList, refreshWorker, approvalTarget, tabState.close]);
 
   const onResync = useCallback((serverDrafts: Draft[]) => {
     setDrafts(serverDrafts);
+    setChecklists(new Map());
     setRevisions(state => Object.fromEntries(Object.entries(state).map(([k, v]) => [k, v + 1])));
     setTaskRevision(n => n + 1);
     refreshList(); refreshApprovals(); refreshWorker(); refreshTasks(); refreshMeta(); refreshNotifications();
@@ -523,6 +534,7 @@ export function App() {
                 runStarts={runStarts}
                 notices={current ? notices[current] ?? [] : []}
                 approvals={current ? approvals.filter(a => a.conversationId === current) : []}
+                checklist={current ? checklists.get(current) : undefined}
                 revision={current ? revisions[current] ?? 0 : 0}
                 onCreated={id => { location.hash = chatHash(id); refreshList(); }}
                 onClearNotices={id => setNotices(n => ({ ...n, [id]: [] }))}
