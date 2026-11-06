@@ -426,3 +426,53 @@ test('終了するとき、待たせている発言は保存だけして残す�
     assert.equal(second.runs.recent(10).length, 1, '終了のときに新しい実行は始めない');
   } finally { second.close(); }
 });
+
+// 止められたあとも、gate が開くまで終わらない台本（止めたあと、実行がまだ残っている状態を作る）
+const slowToStop = (g: { promise: Promise<void> }): Script => async function* (req) {
+  await new Promise<void>(resolve => req.signal.addEventListener('abort', () => resolve(), { once: true }));
+  await g.promise;
+  throw req.signal.reason;
+};
+
+test('止めたあとに送った発言は、止めた実行が終わるのを待って新しい実行を始める（止める前に待たせた発言は保存だけ）', async t => {
+  const s = await startApp(t);
+  const g = gate();
+  const seen: ModelRequest[] = [];
+  const events: RunEvent[] = [];
+  s.app.bus.subscribe(e => events.push(e.event));
+  s.adapter().scripts = [slowToStop(g), spy(say('止めたあとの返事'), seen)];
+  const first = await post(s, '長い作業');
+  assert.equal((await post(s, '止める前に待たせた発言')).body.queued, true);
+  assert.equal((await s.json(`/api/runs/${first.body.runId}/stop`, 'POST', {})).body.stopped, true);
+  assert.equal(s.app.engine.activeRuns().length, 1, '止めたあとも、実行はまだ終わっていない');
+  const afterStop = await post(s, '止めたあとに送る発言');
+  assert.equal(afterStop.status, 202);
+  assert.equal(afterStop.body.queued, true, '実行が残っているあいだは待たせる');
+  g.open();
+  await s.app.engine.wait(first.body.runId);
+  const next = s.app.engine.activeRuns().find(r => r.conversationId === CONVERSATION);
+  assert.ok(next && next.runId !== first.body.runId, '止めた実行が終わった瞬間に、止めたあとに送った発言で新しい実行が始まる');
+  await settled(s.app, next.runId);
+  assert.deepEqual(roles(s), ['user:長い作業', 'user:止める前に待たせた発言', 'user:止めたあとに送る発言', 'assistant:止めたあとの返事']);
+  assert.equal(runsOf(s)[0]!.error_kind, 'cancelled');
+  assert.equal(runsOf(s).length, 2);
+  assert.equal((seen[0]!.messages.at(-1) as { content: string }).content, '止めたあとに送る発言');
+  const saved = events.filter(e => e.type === 'warning' && e.code === 'queued_saved');
+  assert.equal(saved.length, 1, '止める前に待たせた発言だけが「保存だけ」のお知らせになる');
+  assert.deepEqual((saved[0] as { params?: unknown }).params, { count: 1 });
+});
+
+test('止めたあとに何も送らなければ、止める前に待たせた発言は保存だけ（新しい実行は始めない）', async t => {
+  const s = await startApp(t);
+  const g = gate();
+  s.adapter().scripts = [after(g, say('届かない返事')), say('始まらないはずの返事')];
+  const first = await post(s, '長い作業');
+  await post(s, '止める前に待たせた発言');
+  assert.equal((await s.json(`/api/runs/${first.body.runId}/stop`, 'POST', {})).body.stopped, true);
+  await settled(s.app, first.body.runId);
+  await waitFor(() => roles(s).length === 2, '保存');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual(roles(s), ['user:長い作業', 'user:止める前に待たせた発言']);
+  assert.equal(runsOf(s).length, 1);
+  assert.equal(s.app.engine.activeRuns().length, 0);
+});
