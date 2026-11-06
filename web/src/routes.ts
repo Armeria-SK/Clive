@@ -6,7 +6,8 @@ export type Route =
   | { page: 'tasks'; taskId: string | null; section?: 'curiosity' }
   | { page: 'today' } | { page: 'notifications' } | { page: 'settings' } | { page: 'memory' }
   | { page: 'runs'; tab?: RunsTab }
-  | { page: 'review' } | { page: 'skills'; target?: SkillTarget };
+  | { page: 'review' } | { page: 'skills'; target?: SkillTarget }
+  | { page: 'archived' };
 
 export type Page = Route['page'];
 
@@ -26,6 +27,7 @@ export function parseRoute(hash: string): Route {
   if (hash.startsWith('#/today')) return { page: 'today' };
   if (hash.startsWith('#/notifications')) return { page: 'notifications' };
   if (hash.startsWith('#/review')) return { page: 'review' };
+  if (hash.startsWith('#/archived')) return { page: 'archived' };
   if (hash.startsWith('#/skills')) return skillsRoute(hash);
   if (hash.startsWith('#/curiosity')) return { page: 'tasks', taskId: null, section: 'curiosity' };
   const task = /^#\/tasks(?:\/([^/]+))?$/u.exec(hash);

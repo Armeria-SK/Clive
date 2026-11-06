@@ -2,7 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { api, type Approval, type Conversation, type ModelView, type NotificationItem, type Profile, type WorkerStatus } from './api.ts';
 import { ActivityPanel } from './ActivityPanel.tsx';
 import { presenceOf } from './avatar.ts';
-import { Chat, type ConversationChange, type RunNotice } from './Chat.tsx';
+import { Chat, type RunNotice } from './Chat.tsx';
+import { ArchivedPage } from './ArchivedPage.tsx';
+import { archiveConversation, unarchiveConversation, type ConversationChange } from './conversation-actions.ts';
+import { RenameDialog } from './RenameDialog.tsx';
+import { SummaryDialog } from './SummaryDialog.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
 import { useEscapeLayer, useExit } from './hooks.ts';
 import { useContextUsage } from './use-context-usage.ts';
@@ -86,6 +90,9 @@ export function App() {
   const setupChecked = useRef(false);
   const keptSettings = useRef<KeptEdits | null>(null);
   const taskConversations = useRef(new Map<string, string>());
+  const [renaming, setRenaming] = useState<Conversation | null>(null);
+  const [summaryFor, setSummaryFor] = useState<Conversation | null>(null);
+  const [archivedRevision, setArchivedRevision] = useState(0);
 
   const refreshList = useCallback(() => {
     void api.conversations().then(r => { setConversations(r.conversations); setConversationsLoaded(true); }).catch(() => undefined);
@@ -259,6 +266,7 @@ export function App() {
 
   const onConversationChanged = useCallback((change: ConversationChange) => {
     refreshList();
+    setArchivedRevision(n => n + 1);
     if (change.kind === 'archived') tabState.close(`chat:${change.id}`);
     if (change.kind === 'unarchived') tabState.openChat(change.id);
     // モデルを替えたら、使用量の輪を、替えたモデルで数え直す
@@ -357,6 +365,13 @@ export function App() {
         }
         break;
       }
+      case 'conversation.changed':
+        // ほかの画面で題・アーカイブが変わった。一覧を読み直し、アーカイブした会話のタブは閉じる
+        refreshList();
+        setArchivedRevision(n => n + 1);
+        bump(e.conversationId);
+        if (e.change === 'archived') tabState.close(`chat:${e.conversationId}`);
+        break;
       case 'task.changed': {
         setTaskRevision(n => n + 1);
         setWaiting(state => {
@@ -390,7 +405,7 @@ export function App() {
         }
         break;
     }
-  }, [t, refreshList, refreshWorker, approvalTarget]);
+  }, [t, refreshList, refreshWorker, approvalTarget, tabState.close]);
 
   const onResync = useCallback((serverDrafts: Draft[]) => {
     setDrafts(serverDrafts);
@@ -469,6 +484,7 @@ export function App() {
           waitingCount={waiting.size} restartRequired={restartRequired}
           setupPending={onboarding !== null && !onboarding.done && !setupOpen} onSetup={() => openSetupAt(onboarding ? resumeStep(onboarding.steps) : 'language')}
           onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
+          onRename={setRenaming} onSummary={setSummaryFor} onArchive={c => void archiveConversation(c.id, c.title, t, onConversationChanged)}
         />
         {narrow && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
         <main className="main">
@@ -515,6 +531,7 @@ export function App() {
             {shown.page === 'runs' && <Runs tab={shown.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
             {shown.page === 'memory' && <Memory revision={memoryRevision} />}
             {shown.page === 'skills' && <SkillsPage target={shown.target} revision={notificationRevision} />}
+            {shown.page === 'archived' && <ArchivedPage revision={archivedRevision} onRestore={c => void unarchiveConversation(c.id, t, onConversationChanged)} />}
           </div>
         </main>
         {!narrow && pane}
@@ -536,6 +553,8 @@ export function App() {
         open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
         onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
+      {renaming && <RenameDialog conversation={renaming} onClose={() => setRenaming(null)} onRenamed={id => onConversationChanged({ kind: 'renamed', id })} />}
+      {summaryFor && <SummaryDialog conversationId={summaryFor.id} title={summaryFor.title} onClose={() => setSummaryFor(null)} />}
       {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} kept={keptSettings} onRerunSetup={rerunSetup} />}
       {setupExit.mounted && <Onboarding leaving={setupExit.leaving} start={setupStart} profile={profile} onProfile={setProfile} onLater={laterSetup} onFinished={finishSetup} />}
       <InertContext.Provider value={settingsCovers}><NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} /></InertContext.Provider>

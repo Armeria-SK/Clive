@@ -7,6 +7,7 @@ import {
   type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
+import { archiveConversation, unarchiveConversation, type ConversationChange } from './conversation-actions.ts';
 import { ModelMenu, OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
 import { SummaryDialog } from './SummaryDialog.tsx';
 import {
@@ -36,7 +37,7 @@ export interface RunNotice {
   required?: number | undefined;
 }
 
-export type ConversationChange = { kind: 'renamed' | 'archived' | 'unarchived' | 'model'; id: string };
+export type { ConversationChange } from './conversation-actions.ts';
 
 interface Props {
   conversationId: string | null;
@@ -104,6 +105,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   const [effort, setEffort] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [archivedNow, setArchivedNow] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const thread = useRef<HTMLDivElement>(null);
@@ -122,6 +124,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       const result = await api.messages(conversationId);
       setMessages(result.messages);
       setTitle(result.conversation.title);
+      setArchivedNow(result.conversation.archived === 1);
       setModelId(result.conversation.model_id ?? null);
       setEffort(result.conversation.effort ?? null);
       setLoaded(true);
@@ -230,27 +233,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   async function archive(): Promise<void> {
     setConfirmArchive(false);
     if (!conversationId) return;
-    const archivedId = conversationId;
-    try {
-      await api.archiveConversation(archivedId);
-      toast({
-        kind: 'info', icon: 'archive', title: t('chat.archive.done'), ...(title ? { body: title } : {}),
-        action: { label: t('chat.archive.undo'), run: () => { void unarchive(archivedId); } },
-      });
-      onConversationChanged({ kind: 'archived', id: archivedId });
-    } catch (error) {
-      toast({ kind: 'info', icon: 'alert', title: t('chat.archive.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
-    }
-  }
-
-  async function unarchive(id: string): Promise<void> {
-    try {
-      await api.unarchiveConversation(id);
-      toast({ kind: 'info', icon: 'undo', title: t('chat.unarchive.done') });
-      onConversationChanged({ kind: 'unarchived', id });
-    } catch (error) {
-      toast({ kind: 'info', icon: 'alert', title: t('chat.unarchive.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
-    }
+    await archiveConversation(conversationId, title, t, onConversationChanged);
   }
 
   async function send(preset?: string): Promise<void> {
@@ -363,6 +346,12 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
         onScroll={e => { stick.current = isNearBottom(e.currentTarget); }}
       >
         <div className="chat-col">
+          {archivedNow && conversationId && (
+            <div className="chat-archived-note" role="note">
+              <span>{t('archived.note')}</span>
+              <button type="button" className="btn btn-secondary" onClick={() => { setArchivedNow(false); void unarchiveConversation(conversationId, t, onConversationChanged); }}>{t('archived.restore')}</button>
+            </div>
+          )}
           {empty && <EmptyChat profile={profile} onPick={text => void send(text)} />}
           {items.map((item, index) => {
             const indent = item.kind === 'tool' || item.kind === 'run' || item.kind === 'note' || item.kind === 'fail';

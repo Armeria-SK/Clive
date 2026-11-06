@@ -7,6 +7,8 @@ export interface Conversation {
   id: string; title: string | null; created_at: number; last_message_at: number;
   // 要約があるか（全文は api.summary で読む）
   has_summary?: boolean;
+  // アーカイブしているか（1 / 0）。会話を開いたときの応答にだけ付く
+  archived?: number;
   // 会話で選んだモデルと考える深さ（null は自動・モデルの既定）
   model_id?: string | null; effort?: string | null;
 }
@@ -133,6 +135,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   conversations: () => call<{ conversations: Conversation[] }>('/api/conversations'),
+  archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),

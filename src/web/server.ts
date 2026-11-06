@@ -107,7 +107,12 @@ export function createWebServer(app: App): WebServer {
   router.add('GET', '/api/events', ({ req, res, url }) => streams.open(req, res, url));
 
   // ── 会話 ──
-  router.add('GET', '/api/conversations', ({ res }) => sendJson(res, 200, { conversations: app.conversations.list() }));
+  // ?archived=1 でアーカイブした会話（q は題の部分一致）
+  router.add('GET', '/api/conversations', ({ res, url }) => {
+    const archived = ['1', 'true'].includes(url.searchParams.get('archived') ?? '');
+    const query = (url.searchParams.get('q') ?? '').slice(0, 100);
+    sendJson(res, 200, { conversations: app.conversations.list(archived ? 200 : 100, { archived, ...(query.trim() ? { query } : {}) }) });
+  });
   router.add('POST', '/api/conversations', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     const title = requireString(body, 'title', { optional: true, max: 200 });
@@ -123,10 +128,11 @@ export function createWebServer(app: App): WebServer {
       throw problem(400, 'invalid_field', 'bad_bool', { field: 'archived', params: { field: 'archived' } });
     }
     const { choice, effortReset } = readChoice(app, body, current);
-    if (title) app.conversations.rename(id, title);
+    const changed = (change: 'renamed' | 'archived' | 'unarchived') => app.bus.publish({ type: 'conversation.changed', conversationId: id, change });
+    if (title) { app.conversations.rename(id, title); changed('renamed'); }
     app.conversations.setChoice(id, choice);
-    if (body.archived === true) app.conversations.archive(id);
-    if (body.archived === false) app.conversations.unarchive(id);
+    if (body.archived === true) { app.conversations.archive(id); changed('archived'); }
+    if (body.archived === false) { app.conversations.unarchive(id); changed('unarchived'); }
     sendJson(res, 200, { conversation: app.conversations.get(id), ...(effortReset ? { effortReset: true } : {}) });
   });
   // 要約（読むだけ）。要約が無い会話は summary が null

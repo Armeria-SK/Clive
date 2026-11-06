@@ -90,5 +90,7 @@ export type RunEvent =
     type: 'run.end'; runId: string; conversationId: string; ok: boolean;
     errorKind?: EngineErrorKind; errorMessage?: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail;
   }
+  // 会話の題・アーカイブ・削除が変わった（開いているほかの画面が一覧を読み直すため）
+  | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: TaskView }
   | { type: 'notification'; notification: Notification };
