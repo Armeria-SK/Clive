@@ -388,6 +388,7 @@ export function App() {
         bump(e.conversationId);
         if (e.change === 'archived' || e.change === 'deleted') tabState.close(`chat:${e.conversationId}`);
         if (e.change === 'deleted' && currentRef.current === e.conversationId) location.hash = '#/';
+        if (e.change === 'deleted') refreshNotifications(); // 消した会話の Clive からの知らせは、サーバーで消えている
         break;
       case 'task.changed': {
         setTaskRevision(n => n + 1);
