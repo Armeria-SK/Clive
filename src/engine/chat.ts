@@ -4,7 +4,7 @@ import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
 import type { AppPaths } from '../paths.ts';
-import { redactSecrets } from '../shared/redaction.ts';
+import { redactExact, redactSecrets } from '../shared/redaction.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { EndpointLimiter } from '../providers/limiter.ts';
 import { UPSTREAM_KEEP, upstreamText } from '../providers/http.ts';
@@ -676,7 +676,8 @@ export class ChatEngine {
         if (event.type === 'text') text += event.delta;
         else if (event.type === 'done' && event.stop === 'max_tokens') throw new TruncatedReply();
       }
-      return text;
+      // 返事の短い理由は承認の記録・画面の出来事・実行ログの API に出るので、API キーそのものは、読む前に伏せる
+      return redactExact(text, d.registry.secrets());
     } finally { release?.(); }
   }
 
