@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
+import { contextAvailable } from '../src/engine/context-budget.ts';
 import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
 import { resolvePaths } from '../src/paths.ts';
 import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
@@ -144,9 +145,10 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   const results = small.app.conversations.messages('c1').filter(m => m.role === 'tool').map(m => m.text);
   assert.equal(results.length, 3);
   for (const text of results) {
-    assert.ok(text.length < 9100, `16k のモデルでは、1 つの結果を約 8,700 文字までにする: ${text.length}`);
-    assert.match(text, /文字中 8,\d{3} 文字だけを返しました/u);
+    assert.ok(text.length < 9100, `16k のモデルでは、1 つの結果は、道具の仕様と今のやり取りを引いた残りの一部（約 8,700 文字より小さい）: ${text.length}`);
+    assert.match(text, /文字中 \d,\d{3} 文字だけを返しました/u);
   }
+  assert.ok(results[0]!.length > results[1]!.length && results[1]!.length > results[2]!.length, '結果が積まれるほど、次の結果に許す量は小さくなる');
   const last = small.adapter().calls.at(-1)!;
   assert.ok(last.messages.length >= 7, '3 回分の結果が入っている');
   assert.equal(small.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), false, '古い発言を削らずに収まる');
@@ -157,6 +159,50 @@ test('道具の結果は、モデルのコンテキストに合わせて切る�
   assert.ok((await (await large.send('一覧を読んで')).done).ok);
   const big = large.app.conversations.messages('c1').find(m => m.role === 'tool')!.text;
   assert.match(big, /文字中 16,000 文字だけを返しました/u, '大きなコンテキストでは、今までどおり 16,000 文字');
+});
+
+// 道具の数が 24 → 31 に増えて、固定の分（system と道具の仕様）が 16k の約 4 割になっても、結果が入りきらなくならない。
+// 結果の量を「モデルの境目の 2 割」と決めていたころは、英数字の一覧で 3 つ目、日本語の本文だと 1 つ目で、入りきらなくなった
+test('道具の結果: 固定の分が大きい 16k のモデルでも、結果を何度受け取っても入りきる（英数字も日本語も）', async t => {
+  const lines = Array.from({ length: 600 }, (_, i) => `remotion-app/node_modules/@remotion/renderer/dist/esm/file${i}.js`).join('\n');
+  const minutes = Array.from({ length: 900 }, (_, i) => `第${i}回議事録: 予算の見直しと来期の採用計画について話し合い、各部門の担当者が持ち帰って検討することになった。`).join('\n');
+  for (const [name, text, count] of [['英数字', lines, 5], ['日本語', minutes, 5]] as const) {
+    const s = await setup(t, { contextLength: 16384, minContext: 4096, maxOutputTokens: 1024 });
+    writeFileSync(join(s.paths.workspace, 'listing.txt'), text);
+    s.adapter().scripts.push(...Array.from({ length: count }, () => toolCall('file_read', { path: 'listing.txt' })), reply('読みました'));
+    const result = await (await s.send('一覧を読んで')).done;
+    assert.ok(result.ok, `${name}: ${JSON.stringify(result)}`);
+    assert.equal(s.app.conversations.messages('c1').filter(m => m.role === 'tool').length, count);
+    assert.equal(s.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), false, `${name}: 古い発言を削らずに収まる`);
+    const available = contextAvailable(16384, s.app.config().models[0]!);
+    const run = s.app.runs.get(result.runId)!;
+    const estimate = run.est_prompt_tokens ?? 0;
+    assert.ok(estimate > 0 && estimate <= available, `${name}: 最後の呼び出しの見積もり ${estimate} が使える量 ${available} に収まる`);
+  }
+});
+
+// 古いやり取りは、次の呼び出しで外せる（fit.ts）ので、結果の量を決める「削れない分」には数えない。数えると、長い会話ほど結果が小さくなってしまう
+test('道具の結果の量は、削れない分だけから決まる: 古いやり取りが長くても小さくならず、入りきらない分は古い発言を外して収める', async t => {
+  const lines = Array.from({ length: 600 }, (_, i) => `remotion-app/node_modules/@remotion/renderer/dist/esm/file${i}.js`).join('\n');
+  const model = { contextLength: 16384, minContext: 4096, maxOutputTokens: 1024 };
+  const toolText = (s: Awaited<ReturnType<typeof setup>>) => s.app.conversations.messages('c1').find(m => m.role === 'tool')!.text;
+
+  const fresh = await setup(t, model);
+  writeFileSync(join(fresh.paths.workspace, 'listing.txt'), lines);
+  fresh.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
+  assert.ok((await (await fresh.send('一覧を読んで')).done).ok);
+
+  const long = await setup(t, model);
+  writeFileSync(join(long.paths.workspace, 'listing.txt'), lines);
+  for (const question of ['一つ目', '二つ目', '三つ目']) {
+    long.adapter().scripts.push(reply('あ'.repeat(2300)));
+    assert.ok((await (await long.send(question)).done).ok);
+  }
+  long.adapter().scripts.push(toolCall('file_read', { path: 'listing.txt' }), reply('読みました'));
+  const result = await (await long.send('一覧を読んで')).done;
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.ok(Math.abs(toolText(long).length - toolText(fresh).length) <= 60, `長い会話でも同じ量: ${toolText(long).length} と ${toolText(fresh).length}`);
+  assert.equal(long.events.some(e => e.type === 'warning' && e.code === 'context_trimmed'), true, '入りきらない分は、結果を小さくするのでなく古い発言を外して収める');
 });
 
 test('本文に書かれたツール呼び出し（<tool_call>）も拾って実行する', async t => {

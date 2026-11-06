@@ -11,6 +11,19 @@ export function estimateTextTokens(text: string): number {
   return Math.ceil(cjk + other / 3.5);
 }
 
+// text の先頭から、estimateTextTokens が maxTokens 以下で、かつ maxChars 以下になる長さ（UTF-16 の単位。文字の途中では切らない）。
+// 日本語は 1 文字 1 トークン、それ以外は 3.5 文字 1 トークンと見積もるので、同じ文字数でも日本語の方がずっと早く尽きる
+export function prefixLength(text: string, maxChars: number, maxTokens: number): number {
+  let cjk = 0; let other = 0; let length = 0;
+  for (const ch of text) {
+    if (length + ch.length > maxChars) break;
+    if (CJK.test(ch)) cjk++; else other++;
+    if (cjk + other / 3.5 > maxTokens) break;
+    length += ch.length;
+  }
+  return length;
+}
+
 export function estimateMessageTokens(message: ChatMessage): number {
   let tokens = 4;
   if (message.role === 'user') {
