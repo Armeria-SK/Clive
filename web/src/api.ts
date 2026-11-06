@@ -74,6 +74,8 @@ export interface ToolCallRow {
   id: string; run_id: string; conversation_id: string | null; tool: string; input: string;
   decision: 'allow' | 'ask' | 'deny'; decided_by: string; approval_id: string | null; ok: number | null;
   duration_ms: number | null; output_preview: string | null; full_ref: string | null; created_at: number;
+  // 自動承認が許した呼び出しで、判定役の短い理由（ほかは null）
+  autoReason: string | null;
 }
 
 export type Book = 'user' | 'notes';

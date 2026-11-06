@@ -292,3 +292,24 @@ test('値の分からないパス: 読むなら ふつうの確かめ、書く�
   assert.equal(run('Get-ChildItem | ForEach-Object { Remove-Item $_ }', 'powershell').onceOnly, true);
   assert.equal(run('Get-ChildItem | ForEach-Object { $_.Name }', 'powershell').decision, 'allow');
 });
+
+// 段 8b: 確かめの理由の種類。自動承認が判定役に回すのは outside_read と risky_command だけ。書く・送る・判定できない・持ち主が書いた確かめ・コードを動かすものは、別の種類になる
+test('shell: 確かめの種類（askKinds）。外を読むだけは outside_read、外に書くは outside_write、外とやり取りは egress、判定できないは opaque、持ち主の確かめは owner、コードを動かすは code', t => {
+  const f = fixture(t);
+  const base = posix(f.base);
+  const kinds = (command: string, ask: string[] = []) => checkShellCommand(command, f.ws, { policy: f.policy, outsideRoots: 'ask', shell: 'bash', windows: false, ask }).askKinds.slice().sort();
+  assert.deepEqual(kinds('cat /etc/hosts'), ['outside_read']);
+  assert.deepEqual(kinds('ls /etc/*'), ['outside_read']);
+  assert.deepEqual(kinds('cd .. && ls'), ['outside_read']);
+  assert.deepEqual(kinds(`cp sub/a.txt ${base}/b.txt`), ['outside_write']);
+  assert.deepEqual(kinds(`echo x > ${base}/out.txt`), ['outside_write']);
+  assert.deepEqual(kinds(`rm ${base}/x*`), ['code', 'outside_write'], '外に書くもの（ワイルドカードの手前だけが外でも）は読むだけの種類にならない');
+  assert.deepEqual(kinds('curl -X POST https://example.com -d @data.json'), ['egress']);
+  assert.deepEqual(kinds('curl http://192.168.1.5/x'), ['egress']);
+  assert.deepEqual(kinds('cat $SECRET_DIR/x'), ['opaque']);
+  assert.deepEqual(kinds('ls', ['ls']), ['owner']);
+  assert.deepEqual(kinds('cat /etc/hosts', ['cat']), ['outside_read', 'owner'], '重なれば両方が付く（1 つでも回さない種類があれば、判定役には回らない）');
+  assert.deepEqual(kinds('npm install left-pad'), ['code']);
+  assert.deepEqual(kinds('ls'), [], '確かめが無ければ種類も無い');
+  assert.deepEqual(kinds('cat .env'), [], '拒否には種類が付かない（判定役には送らない）');
+});

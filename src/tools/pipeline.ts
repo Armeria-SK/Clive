@@ -4,10 +4,12 @@ import { Value } from '@sinclair/typebox/value';
 import type { RunEvent, ToolCall } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { languageOf } from '../shared/language.ts';
+import { stricterMode, type PermissionMode } from '../shared/permission-mode.ts';
 import { guardText } from '../shared/messages/guard.ts';
 import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import { inputHash, type ApprovalBroker } from './approvals.ts';
+import { autoDecide, mayClassify, type ClassifierPrompt } from './auto-approve.ts';
 import { runCommandHook } from './hooks/command-hook.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import type { ToolRegistry } from './registry.ts';
@@ -25,6 +27,14 @@ export interface PipelineDeps {
   emit: (event: RunEvent) => void;
   // いまの設定。実行の途中で道具の方針が厳しくなったら、その場から効かせる（緩くなったときは、実行を始めたときの設定のまま = 次の実行から）
   config?: (() => AppConfig) | undefined;
+  // 会話のいまの権限モード。実行に効くのは、実行を始めたときのモード（ctx.permissionMode）との厳しい方（effectiveMode）
+  permissionMode?: (() => PermissionMode) | undefined;
+  // 自動承認の判定役（モデル）を 1 回呼ぶ。返事の文字を返し、呼べなければ投げる。無ければ、自動承認は何も許さない
+  autoClassify?: ((prompt: ClassifierPrompt, signal: AbortSignal) => Promise<string>) | undefined;
+  // 判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）
+  lastUserRequest?: (() => string) | undefined;
+  // 判定役を待つ時間の上限（ミリ秒。試験用。既定 20 秒）
+  autoTimeoutMs?: number | undefined;
 }
 
 export interface ToolCallOutcome {
@@ -50,6 +60,16 @@ function policyFor(name: string, ctx: ToolContext, deps: PipelineDeps): ToolPoli
   return effectivePolicy(name, now ?? ctx.config, ctx.config);
 }
 
+// この呼び出しに効く権限モード: 実行を始めたときのモードと、会話のいまのモードの厳しい方（厳しい向きはその場から、緩む向きは次の実行から）。
+// 会話（チャット）の実行だけ。タスク・振り返りは、会話のモードに関係なくふつう
+export function effectiveMode(ctx: ToolContext, deps: PipelineDeps): PermissionMode {
+  if (ctx.kind !== 'chat') return 'normal';
+  const start = ctx.permissionMode ?? 'normal';
+  let now: PermissionMode = start;
+  if (deps.permissionMode) { try { now = deps.permissionMode(); } catch { now = 'normal'; } }
+  return stricterMode(start, now);
+}
+
 export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: PipelineDeps): Promise<ToolCallOutcome> {
   const id = randomUUID();
   const language = languageOf(ctx.config);
@@ -58,6 +78,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const shownInput = redactSecrets(JSON.stringify(call.arguments ?? call.raw ?? null)).slice(0, 4000);
   deps.emit({ type: 'tool.call', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, input: shownInput });
 
+  // 自動承認の判定役が許したときの短い理由（結果の知らせに添える）
+  let autoWhy: string | undefined;
   const finish = (outcome: ToolCallOutcome, approvalId?: string): ToolCallOutcome => {
     const output = capOutput(outcome.output, language, ctx.outputLimit ?? TOOL_OUTPUT_LIMIT);
     deps.db.prepare(`INSERT INTO tool_calls (id, run_id, conversation_id, tool, input, decision, decided_by, approval_id, ok, duration_ms, output_preview, full_ref, created_at)
@@ -65,7 +87,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       id, ctx.runId, ctx.conversationId, call.name, shownInput, outcome.decision, outcome.decidedBy, approvalId ?? null,
       output.isError ? 0 : 1, Date.now() - started, output.content.slice(0, 2000), output.fullRef ?? null, started,
     );
-    deps.emit({ type: 'tool.result', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, ok: !output.isError, decision: outcome.decision, preview: output.content.slice(0, 1500) });
+    deps.emit({ type: 'tool.result', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, ok: !output.isError, decision: outcome.decision, preview: output.content.slice(0, 1500), ...(autoWhy !== undefined && outcome.decidedBy === 'auto-mode' && outcome.decision === 'allow' ? { autoReason: autoWhy } : {}) });
     return { ...outcome, output };
   };
   const refuse = (decision: Decision, decidedBy: string, message: string, invalid = false) =>
@@ -98,13 +120,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       const pre = await tool.preCheck(args, ctx);
       first = pre;
       decision = pre.decision; reasons.push(...pre.reasons); details = pre.details ?? [];
-      if (pre.decision === 'ask') { askKinds.add('precheck'); for (const kind of pre.askKinds ?? []) askKinds.add(kind); }
+      // 事前の判定が理由ごとに付けた種類。何も付けていない確かめは precheck（細かい種類なし）で、自動承認の判定役には回らない
+      if (pre.decision === 'ask') { for (const kind of pre.askKinds ?? []) askKinds.add(kind); if (!pre.askKinds?.length) askKinds.add('precheck'); }
     } catch (error) {
       decision = 'deny'; reasons.push(guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message }));
     }
   }
-  if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint) && decision === 'allow') {
-    decision = 'ask';
+  // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる（自動承認が、外を読んだあとのものを判定役に回さないため）。拒否は拒否のまま
+  if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint) && decision !== 'deny') {
+    decision = worst(decision, 'ask');
     askKinds.add('taint');
     reasons.push(guardText(language, 'pipeline.taint', { sources: ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep')) }));
   }
@@ -118,6 +142,13 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       askKinds.add('policy');
       reasons.push(guardText(language, 'pipeline.policy_ask', { name: tool.name }));
     }
+  }
+  // 自動承認で許可フォルダの外を読んだ実行では、その残りのあいだ、通信の道具は確かめる（外で読んだ中身を、確かめなしに外へ送らせない）
+  const afterAutoRead = ctx.autoReadOutside === true && tool.effect === 'network' && decision !== 'deny';
+  if (afterAutoRead) {
+    decision = worst(decision, 'ask');
+    askKinds.add('egress');
+    reasons.push(guardText(language, 'pipeline.auto_egress'));
   }
   for (const hook of ctx.config.tools.hooks.preToolUse) {
     if (!matches(hook.matcher, tool.name) || decision === 'deny') continue;
@@ -133,11 +164,37 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const hash = inputHash(tool.name, args);
   // コードを動かす確かめは中身が変わりうるので、前に同じ文字のコマンドを「この会話では許可」にしていても、また確かめる。方針が ask の確かめも、毎回確かめる
   const onceOnly = first?.onceOnly === true;
-  const everyTime = askKinds.has('policy');
+  const everyTime = askKinds.has('policy') || afterAutoRead;
   if (decision === 'ask' && !onceOnly && !everyTime && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
   if (decision === 'deny') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
 
   let approvalId: string | undefined;
+  // ── 自動承認（段 8b）: 判定役に回してよい確かめだけを、判定役に聞く。許せば実行、確かめる・失敗・時間切れ・読めない返事なら、いつもの承認の札 ──
+  if (decision === 'ask' && deps.autoClassify && mayClassify({ mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime, tainted: ctx.taint.tainted })) {
+    const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
+    const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
+      deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
+    autoEvent('checking');
+    const verdict = await autoDecide({
+      userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, paths: first?.paths ?? [],
+    }, deps.autoClassify, ctx.signal, deps.autoTimeoutMs);
+    if (ctx.signal.aborted) {
+      autoEvent('asked');
+      return finish({ output: { content: toolText(language, 'pipeline.cancelled'), isError: true }, decision: 'ask', decidedBy: 'auto-mode', invalidArguments: false });
+    }
+    const why = verdict.reason || guardText(language, 'pipeline.auto_no_reason');
+    if (verdict.decision === 'allow') {
+      approvalId = deps.approvals.recordAuto({
+        runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, details, kinds: [...askKinds],
+      }, why);
+      decision = 'allow'; decidedBy = 'auto-mode'; autoWhy = why;
+      if (askKinds.has('outside_read')) ctx.autoReadOutside = true;
+      autoEvent('allowed', why);
+    } else {
+      reasons.push(verdict.failed ? guardText(language, 'pipeline.auto_failed') : guardText(language, 'pipeline.auto_asked', { reason: why }));
+      autoEvent('asked');
+    }
+  }
   let approvedOnce = false;
   if (decision === 'ask') {
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };

@@ -195,6 +195,10 @@ const ja = {
   'pipeline.taint_sep': '、',
   'pipeline.policy_ask': '道具「{name}」は、設定で「承認を求める」にしてあるので、毎回確認します',
   'pipeline.policy_review': '道具「{name}」は「承認を求める」にしてありますが、振り返り（裏の作業）では承認する人がいないので使えません',
+  'pipeline.auto_no_reason': '理由は書かれていません',
+  'pipeline.auto_asked': '自動承認の判定役が「確かめる」と判断しました: {reason}',
+  'pipeline.auto_failed': '自動承認の判定役が答えられなかったので、確認します',
+  'pipeline.auto_egress': '自動承認で許可フォルダの外を読んだあとなので、外への送信は確認します',
 
   'hook.failed': 'フック「{name}」が失敗しました（{reason}）',
   'hook.spawn': '起動できません: {detail}',
@@ -399,6 +403,10 @@ const en: Record<keyof typeof ja, string> = {
   'pipeline.taint_sep': ', ',
   'pipeline.policy_ask': 'The tool "{name}" is set to "ask for approval" in the settings, so it is checked with you every time',
   'pipeline.policy_review': 'The tool "{name}" is set to "ask for approval", but a review (background work) has nobody to approve it, so it cannot be used',
+  'pipeline.auto_no_reason': 'No reason was given',
+  'pipeline.auto_asked': 'The auto-approve checker decided this needs your approval: {reason}',
+  'pipeline.auto_failed': 'The auto-approve checker could not give an answer, so this is checked with you',
+  'pipeline.auto_egress': 'Auto-approve has read something outside the allowed folders in this run, so sending anything out is checked with you',
 
   'hook.failed': 'The hook "{name}" failed ({reason})',
   'hook.spawn': 'Cannot start it: {detail}',

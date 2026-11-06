@@ -67,6 +67,14 @@ function settingsView(app: App) {
   };
 }
 
+function autoReasonOf(reasons: string | null): string | null {
+  if (reasons === null) return null;
+  try {
+    const list = JSON.parse(reasons) as unknown;
+    return Array.isArray(list) && typeof list.at(-1) === 'string' ? list.at(-1) as string : null;
+  } catch { return null; }
+}
+
 function isLanguage(value: string): value is Language {
   return (LANGUAGES as readonly string[]).includes(value);
 }
@@ -317,7 +325,10 @@ export function createWebServer(app: App): WebServer {
   });
   router.add('GET', '/api/tool-calls', ({ res, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
-    sendJson(res, 200, { toolCalls: app.db.prepare('SELECT * FROM tool_calls ORDER BY created_at DESC LIMIT ?').all(limit) });
+    // 自動承認が許した呼び出しには、判定役の短い理由 autoReason を添える（承認の記録 scope = 'auto' の reasons の最後の要素。ほかは null）
+    const rows = app.db.prepare(`SELECT t.*, a.reasons AS auto_reasons FROM tool_calls t LEFT JOIN approvals a ON a.id = t.approval_id AND a.scope = 'auto'
+      ORDER BY t.created_at DESC LIMIT ?`).all(limit) as Array<Record<string, unknown> & { auto_reasons: string | null }>;
+    sendJson(res, 200, { toolCalls: rows.map(({ auto_reasons, ...row }) => ({ ...row, autoReason: autoReasonOf(auto_reasons) })) });
   });
 
   // ── 記憶と履歴 ──

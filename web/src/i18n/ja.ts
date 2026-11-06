@@ -935,6 +935,7 @@ export const ja = {
   'runs.by.grant': 'この会話の許可',
   'runs.by.recheck': '承認のあとの再確認',
   'runs.by.policy': '道具の設定',
+  'runs.by.auto': '自動承認',
   'runs.by.hook': (name: string) => `フック ${name}`,
   'runs.toolResult.ok': '成功',
   'runs.toolResult.failed': '失敗',

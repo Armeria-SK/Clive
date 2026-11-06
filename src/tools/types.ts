@@ -12,13 +12,19 @@ import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
 import type { ScopePolicy } from './hooks/scope.ts';
 import type { ApprovalPath, PreviewFile } from './approvals.ts';
+import type { PermissionMode } from '../shared/permission-mode.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
-// 確かめ（ask）になった理由の種類。段 8b の自動承認は、これを見て判定役に回すかを決める。
-// precheck: 道具の事前の判定（まだ細かい種類が無い理由）/ code: コードを動かす / taint: 外から読んだ内容のあと / policy: 道具ごとの方針の ask / hook: 実行前フック。
+// 確かめ（ask）になった理由の種類。段 8b の自動承認は、これを見て判定役に回すかを決める。回してよい種類は auto-approve.ts の CLASSIFIABLE_KINDS だけ。
+// precheck: 道具の事前の判定で、細かい種類が付いていない理由（回さない）/ code: コードを動かす / taint: 外から読んだ内容のあと / policy: 道具ごとの方針の ask / hook: 実行前フック。
+// 事前の判定が付ける細かい種類 — outside_read: 許可フォルダの外を読む / outside_write: 外に書く / risky_command: サービスの操作・リモートの設定 /
+// egress: 外とやり取りする・外のコードを入れる・外を読んだあとの送信 / git_write: git が書く / opaque: 中身や行き先が判定できない / persona: 人格・スキルの書き込み /
+// owner: 持ち主が書いた確かめ / web: Web の道具の事前の確かめ。
 // 種類の付かない理由・知らない種類は、自動では通さない（新しい確かめを足したときに、黙って自動になることを防ぐ）
-export type AskKind = 'precheck' | 'code' | 'taint' | 'policy' | 'hook';
+export type AskKind =
+  | 'precheck' | 'code' | 'taint' | 'policy' | 'hook'
+  | 'outside_read' | 'outside_write' | 'risky_command' | 'egress' | 'git_write' | 'opaque' | 'persona' | 'owner' | 'web';
 
 export type RunKind = 'chat' | 'task' | 'review';
 
@@ -38,7 +44,8 @@ export interface PreCheck {
   pathsMore?: number;
   // コードを動かす確かめ（種類 'code'）を含む。会話の許可を越えず、毎回確かめる
   onceOnly?: boolean;
-  askKinds?: Array<'code'>;
+  // ask の理由の種類（理由ごとに付ける。付けなければ pipeline が precheck とみなして、自動では通さない）
+  askKinds?: AskKind[];
   // 確かめの札で見せるコードのファイル
   preview?: PreviewFile[];
   // 見せたファイルの中身の指紋。承認のあと実行の前にもう一度判定して、変わっていたら実行しない
@@ -86,6 +93,10 @@ export interface ToolContext {
   outputLimit?: number | undefined;
   // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）
   forbiddenTools?: ReadonlySet<string> | undefined;
+  // 会話のチャットの実行が始まったときの権限モード（段 8b）。無ければふつう。実行に効くのは、これと会話のいまのモードの厳しい方（pipeline.ts の effectiveMode）
+  permissionMode?: PermissionMode | undefined;
+  // 自動承認で「許可フォルダの外を読む」を許した。この実行の残りのあいだ、通信の道具（network）は確かめる（外で読んだ中身を、確かめなしに外へ送らせない）
+  autoReadOutside?: boolean | undefined;
 }
 
 export type TaskControl =

@@ -147,7 +147,7 @@ test('A3: ask は会話の許可（ほかの理由で前に「この会話では
   const next = s.call('shell_run', { command: 'echo needs-approval' }, { ...s.ctx, config: strict });
   const request = await waitPending(s);
   assert.equal(request.everyTime, true);
-  assert.deepEqual([...(request.kinds ?? [])].sort(), ['policy', 'precheck'], '許可を覚えた理由（持ち主の確かめ）と方針の理由が重なっている');
+  assert.deepEqual([...(request.kinds ?? [])].sort(), ['owner', 'policy'], '許可を覚えた理由（持ち主の確かめ）と方針の理由が重なっている');
   s.approvals.decide(request.id, 'deny');
   assert.equal((await next).decidedBy, 'user', '会話の許可（conversation-grant）では通らず、承認を求めた');
 });
@@ -255,7 +255,7 @@ test('A3: 実行の途中で設定が厳しくなったら、その場から効�
   await pending;
 });
 
-test('A3: ask の理由には種類が付く（事前の判定 precheck・外から読んだ内容 taint・方針 policy・フック hook・コードを動かす code）。付かない理由を自動で通さないための土台', async t => {
+test('A3: ask の理由には種類が付く（外を読む outside_read・外から読んだ内容 taint・方針 policy・フック hook・コードを動かす code。細かい種類が無い事前の判定は precheck）。付かない理由を自動で通さないための土台', async t => {
   const dir = tempDir(t);
   const askHook = join(dir, 'ask.mjs');
   writeFileSync(askHook, `process.stdin.resume();process.stdin.on('end',()=>{process.stdout.write(JSON.stringify({hookSpecificOutput:{permissionDecision:'ask',permissionDecisionReason:'念のため確認'}}))})`);
@@ -271,7 +271,7 @@ test('A3: ask の理由には種類が付く（事前の判定 precheck・外か
   const plain = setup(t);
   const outside = join(plain.paths.data, 'outside.txt');
   writeFileSync(outside, 'x');
-  assert.deepEqual(await kindsOf(plain, 'shell_run', { command: process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"` }), ['precheck'], '許可フォルダの外を読む');
+  assert.deepEqual(await kindsOf(plain, 'shell_run', { command: process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"` }), ['outside_read'], '許可フォルダの外を読む');
   writeFileSync(join(plain.paths.workspace, 'put.js'), "console.log('x');\n");
   assert.ok((await kindsOf(plain, 'shell_run', { command: 'node put.js' })).includes('code'), 'コードを動かす');
   assert.deepEqual(await kindsOf(plain, 'file_write', { path: 'a.md', content: 'x' }, { ...plain.ctx, taint: { tainted: true, sources: ['web_fetch'] } }), ['taint']);

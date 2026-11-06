@@ -938,6 +938,7 @@ export const en: Dict = {
   'runs.by.grant': 'Granted for this chat',
   'runs.by.recheck': 'Re-check after approval',
   'runs.by.policy': 'Tool setting',
+  'runs.by.auto': 'Auto-approve',
   'runs.by.hook': name => `Hook ${name}`,
   'runs.toolResult.ok': 'Success',
   'runs.toolResult.failed': 'Failed',

@@ -11,6 +11,7 @@ import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
+import { USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
 import { REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
@@ -542,6 +543,7 @@ export class ChatEngine {
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
+      ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'normal' } : {}),
     };
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider));
     ctx.localOnly = kind === 'chat' ? isLocalPinned(config, d.conversations.get(conversationId)?.model_id) : task?.task.local_only === 1;
@@ -599,7 +601,12 @@ export class ChatEngine {
         const toolModel = lastRoute.model;
         const toolCapacity = d.status.get(toolModel.id)?.effective ?? toolModel.contextLength ?? 0;
         ctx.outputLimit = toolCapacity > 0 ? toolOutputLimit(contextAvailable(toolCapacity, toolModel), TOOL_OUTPUT_LIMIT) : undefined;
-        const outcome = await runToolCall(toolCall, ctx, { registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config });
+        const outcome = await runToolCall(toolCall, ctx, {
+          registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
+          permissionMode: () => d.conversations.modeOf(conversationId),
+          autoClassify: (prompt, classifierSignal) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal),
+          lastUserRequest: () => this.#lastUserRequest(conversationId),
+        });
         recordTaint();
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {
@@ -626,6 +633,38 @@ export class ChatEngine {
     const saved = d.conversations.append(conversationId, { role: 'assistant', content: text }, runId);
     d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
     return finishOk(text, 'other', { nextAction: wrapped ? nextStepOf(wrapped) : undefined });
+  }
+
+  // 自動承認の判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）。無ければ空（判定役には回らず、確かめる）
+  #lastUserRequest(conversationId: string): string {
+    const stored = this.#d.conversations.messages(conversationId, 50);
+    for (let i = stored.length - 1; i >= 0; i--) {
+      const message = stored[i]!.message;
+      if (message.role === 'user') return stripAttachments(message.content).slice(0, USER_REQUEST_LIMIT);
+    }
+    return '';
+  }
+
+  // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。
+  // 使うのは、この実行がいま使っているモデル（route）だけで、ほかのモデルは探さない。手元のモデルを選んだ会話（ctx.localOnly）は、手元のモデルのときだけ。道具は渡さない。
+  // 判定役の呼び出しは engine_runs に入れず、会話も作らない
+  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal): Promise<string> {
+    const d = this.#d;
+    const { model, provider } = route;
+    if (ctx.localOnly && !isLocalProvider(provider)) throw new Error('the classifier model must be local for a local conversation');
+    const adapter = d.registry.get(provider.id);
+    if (!adapter) throw new Error('no adapter for the classifier model');
+    let release: (() => void) | undefined;
+    try {
+      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, signal);
+      let text = '';
+      for await (const event of adapter.stream({
+        model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, model.maxOutputTokens), signal,
+      })) {
+        if (event.type === 'text') text += event.delta;
+      }
+      return text;
+    } finally { release?.(); }
   }
 
   // 上限で止まった会話のまとめ。道具を渡さず、直近のやり取りを文字の記録にして 1 通で渡す（道具の呼び出しの履歴を送ると、道具の定義が要るプロバイダがあるため）。

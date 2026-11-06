@@ -139,6 +139,16 @@ export class ApprovalBroker {
     });
   }
 
+  // 自動承認（判定役）が許したことを記録する。札は出さない。status は approved、scope は auto。reasons には、元の確かめの理由のあとに判定役の理由を 1 つ足す（最後の要素）。
+  // 戻り値の id を、道具の記録（tool_calls.approval_id）につなぐ
+  recordAuto(req: ApprovalRequest, classifierReason: string): string {
+    const now = Date.now();
+    const id = randomUUID();
+    this.#db.prepare(`INSERT INTO approvals (id, run_id, conversation_id, tool, input, input_hash, reasons, status, scope, created_at, expires_at, decided_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', 'auto', ?, ?, ?)`).run(id, req.runId, req.conversationId, req.tool, JSON.stringify(req.input), inputHash(req.tool, req.input), JSON.stringify([...req.reasons, classifierReason]), now, now, now);
+    return id;
+  }
+
   decide(id: string, decision: ApprovalDecision): boolean {
     const pending = this.#pending.get(id);
     if (!pending) return false;
