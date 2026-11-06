@@ -80,7 +80,8 @@ for (const language of ['ja', 'en'] as const) {
     s.app.skills.draft({ name: 'weekly-report', description: 'd', body: 'b', reason: 'r' });
     assert.equal(s.linkOf('info'), '#/skills/draft/weekly-report');
     s.app.skills.onDraft!({ id: 99, name: 'a b/é', description: 'd', body: 'b', reason: null, status: 'pending', conversation_id: null, run_id: null, created_at: 0, decided_at: null });
-    assert.equal(s.app.notifications.list()[0]!.link, `#/skills/draft/${encodeURIComponent('a b/é')}`, '名前は URL 用に符号化する');
+    const newest = s.app.notifications.list().reduce((a, b) => (b.id > a.id ? b : a));
+    assert.equal(newest.link, `#/skills/draft/${encodeURIComponent('a b/é')}`, '名前は URL 用に符号化する');
 
     // モデルの不調
     for (let i = 0; i < 3; i++) s.app.bus.publish({ type: 'model.switch', runId: 'r', conversationId: 'c', from: 'm', to: 'n', reason: 'timeout' });

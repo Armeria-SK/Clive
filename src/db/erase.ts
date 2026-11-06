@@ -23,7 +23,8 @@ export interface EraseResult {
 const inside = (dir: string, path: string): boolean => { const base = resolve(dir) + sep; return resolve(path).startsWith(base); };
 
 // 会話を消す（元に戻せない）。消すもの: 会話・発言（検索の索引も）・要約と固定の system（会話の行にある）・承認の記録・
-// 会話ごとの kv（`<名前>:<会話ID>` の形のもの全部）・待っている振り返り・その会話だけが使う添付（行とファイル）と長い出力の全文ファイル。
+// 会話ごとの kv（`<名前>:<会話ID>` の形のもの全部）・待っている振り返り・その会話だけが使う添付（行とファイル）と長い出力の全文ファイル・
+// この会話で notify_owner が出した通知（題と本文に会話の内容を写していることがあるため。タスクの実行が出した通知は、残すタスクのものとして残す）。
 // 数字だけ残すもの: 実行の記録（会話との結び付きと本文を消す）と道具の記録（種類・結果・時間は残し、入力と出力の本文・結び付きを消す）。
 // 残すもの: 記憶・スキルの下書き・その会話から作ったタスク（結び付きだけ外す）。
 // この会話を材料にした振り返り（memory_jobs の conversation_id がこの会話の、振り返りの会話）も、同じやり方で消す（発言に、この会話の文が写っているため）。
@@ -77,6 +78,7 @@ function eraseOne(deps: EraseDeps, id: string, files: string[]): { messages: num
   db.prepare("UPDATE task_events SET content = REPLACE(content, ?, '-') WHERE content IS NOT NULL AND instr(content, ?) > 0").run(id, id);
   db.prepare("DELETE FROM memory_jobs WHERE conversation_id = ? AND status = 'pending'").run(id);
   db.prepare("UPDATE memory_jobs SET conversation_id = NULL, dedup_key = 'deleted:' || id WHERE conversation_id = ?").run(id);
+  db.prepare("DELETE FROM notifications WHERE substr(dedup_key, 1, 6) = 'owner:' AND link IN (?, ?)").run(`#/c/${id}`, `#/c/${encodeURIComponent(id)}`);
   db.prepare('UPDATE notifications SET link = NULL WHERE link IS NOT NULL AND instr(link, ?) > 0').run(id);
 
   // 添付は、ほかの会話の発言が使っていなければ消す

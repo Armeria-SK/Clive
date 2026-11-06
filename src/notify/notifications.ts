@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { arrangeNotifications, NOTIFICATION_LIST_LIMIT, PINNED_KINDS } from '../shared/notification-list.ts';
 
 export type NotificationKind = 'task_done' | 'task_waiting' | 'task_failed' | 'approval_needed' | 'health_alert' | 'info';
 
@@ -35,8 +36,11 @@ export class Notifications {
     return n;
   }
 
-  list(limit = 50): Notification[] {
-    return this.#db.prepare('SELECT * FROM notifications ORDER BY id DESC LIMIT ?').all(limit) as unknown as Notification[];
+  list(limit = NOTIFICATION_LIST_LIMIT): Notification[] {
+    const kinds = PINNED_KINDS.map(() => '?').join(', ');
+    const rows = this.#db.prepare(`SELECT * FROM notifications WHERE id IN (SELECT id FROM notifications ORDER BY id DESC LIMIT ?)
+      OR (read_at IS NULL AND kind IN (${kinds})) ORDER BY id DESC`).all(limit, ...PINNED_KINDS) as unknown as Notification[];
+    return arrangeNotifications(rows, limit);
   }
 
   unread(): number {

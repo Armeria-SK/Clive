@@ -21,7 +21,7 @@ import { Memory } from './Memory.tsx';
 import { undoMemoryEvent } from './memory-undo.ts';
 import { NarrowHeader } from './NarrowHeader.tsx';
 import { NotificationBubble } from './NotificationBubble.tsx';
-import { notificationLink } from './notification-meta.ts';
+import { notificationLink, withNotification, withRead } from './notification-meta.ts';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { Palette } from './Palette.tsx';
 import { PAGE_META, pickChatModelView } from './pages.ts';
@@ -232,7 +232,7 @@ export function App() {
     void api.readNotifications(ids).then(r => {
       setUnread(r.unread);
       const now = Date.now();
-      setNotifications(list => list?.map(n => (!ids || ids.includes(n.id) ? { ...n, read_at: n.read_at ?? now } : n)) ?? null);
+      setNotifications(list => withRead(list, ids, now));
     }).catch(() => undefined);
   }, []);
   const readAllNotifications = useCallback(() => markRead(), [markRead]);
@@ -415,7 +415,7 @@ export function App() {
       }
       case 'notification':
         setUnread(n => n + 1);
-        setNotifications(list => [e.notification, ...(list ?? []).filter(n => n.id !== e.notification.id)].slice(0, 50));
+        setNotifications(list => withNotification(list, e.notification));
         setNotificationRevision(n => n + 1);
         if (BROWSER_NOTIFY.has(e.notification.kind) && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
           new Notification(t('browser.notification', e.notification.title), { body: e.notification.body ?? '' });
