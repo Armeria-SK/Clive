@@ -63,6 +63,15 @@ const BYPASSES: Array<[string, string]> = [
   ['curl --request=PUT http://127.0.0.1:4777/api/settings', 'R1.9 + R1.7'],
   ['Invoke-WebRequest http://[::1]:4777/api/settings', 'R1.7 ::1'],
   ['curl http://2130706433:4777/api/settings', 'R1.7 10 進の 127.0.0.1'],
+  // 段 8・9（A3・A4）で足した API。モデルのシェルから呼べば、設定ファイルを直接書くのと同じく、中身を見せて人が確かめる
+  ['curl -X PATCH http://127.0.0.1:4777/api/tools/shell_run -d x', 'A3 道具の方針を API でゆるめる'],
+  ['Invoke-RestMethod -Method Patch http://localhost:4777/api/tools/file_write', 'A3 PowerShell から'],
+  ['node -e "fetch(\'http://127.0.0.1:4777/api/tools/shell_run\', { method: \'PATCH\' })"', 'A3 その場のコード'],
+  ['curl -X POST http://127.0.0.1:4777/api/server/apply', 'A4 サーバーの設定を反映する'],
+  ['curl -X POST http://[::1]:4777/api/server/apply', 'A4 ::1'],
+  ['curl -X POST http://localhost:4777/api/server/apply -d "{\\"force\\":true}"', 'A4 締め出しの確かめを押し切る'],
+  ['Invoke-WebRequest -Method Post http://127.0.0.1:4777/api/server/apply', 'A4 PowerShell から'],
+  ['python -c "import urllib.request as u; u.urlopen(u.Request(\'http://127.0.0.1:4777/api/server/apply\', method=\'POST\'))"', 'A4 python のその場のコード'],
   ['curl http://0x7f000001:4777/api/settings', 'R1.7 16 進'],
   ['python tool.py SOUL.md', 'R1.1（守るファイルを渡してもいる）'],
   // git の設定でコードを仕込む

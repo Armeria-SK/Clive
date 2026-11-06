@@ -42,12 +42,12 @@ test('字句 11.2.1: 入れ子が 4 段より深い・引用符や括弧の閉�
   assert.equal(failure('(Get-Date', 'pwsh'), 'unclosed');
 });
 
-test('字句 11.2.2: PowerShell は、バッククォート・--%・<# #>・@" "@・${…}・プロバイダ付きの名前・"$(…)" を止める', () => {
+test('字句 11.2.2: PowerShell は、バッククォート・--%・<# #>・@" "@・${…}・プロバイダ付きの名前・"$$(…)" を止める（"$(…)" は読む。tests/shell-dq-escapes.test.ts）', () => {
   const cases: Array<[string, LexCode]> = [
     ['n`o`de --eval=1', 'backtick'], ['echo `n', 'backtick'], ['echo "a`nb"', 'backtick'],
     ['cmd --% /c dir', 'parse_token'], ['<# x #> ls', 'block_comment'], ['@"\nx\n"@', 'here_string'],
     ['${function:x}', 'provider_var'], ['$function:x', 'provider_var'], ['$alias:ls', 'provider_var'], ['$variable:x', 'provider_var'], ['${x}', 'provider_var'],
-    ['Write-Host "$(Get-Date)"', 'ps_expand'], ['Write-Host "${x}"', 'ps_expand'],
+    ['Write-Host "$$(Get-Date)"', 'ps_expand'], ['Write-Host "${x}"', 'ps_expand'],
   ];
   for (const shell of ['powershell', 'pwsh'] as const) for (const [command, code] of cases) assert.equal(failure(command, shell), code, `${shell}: ${JSON.stringify(command)}`);
   assert.equal(failure('ls && ls', 'powershell'), 'chain_op', '5.1 は && を知らない');
@@ -57,7 +57,7 @@ test('字句 11.2.2: PowerShell は、バッククォート・--%・<# #>・@" "
 
 test('字句 11.2.3: bash は、\\・バッククォート・$\'…\'・${x:-y}・$(( )) の中の置換・fd のつなぎ替え・/dev/tcp・~名前・引用符なしの $ を含むヒアドキュメントを止める', () => {
   const cases: Array<[string, LexCode]> = [
-    ['n\\ode x', 'backslash'], ['echo "a\\nb"', 'backslash'], ['ls \\\n -la', 'backslash'], ['echo `date`', 'backtick'], ['echo "a`date`"', 'backtick'],
+    ['n\\ode x', 'backslash'], ['echo a\\nb', 'backslash'], ['ls \\\n -la', 'backslash'], ['echo `date`', 'backtick'], ['echo "a`date`"', 'backtick'],
     ["echo $'a'", 'ansi_c'], ['echo $"a"', 'ansi_c'], ['echo ${x:-y}', 'dollar_form'], ['echo ${!x}', 'dollar_form'], ['echo ${x/a/b}', 'dollar_form'],
     ['echo $(( $(ls) ))', 'dollar_form'], ['echo $((1; ls))', 'dollar_form'],
     ['echo hi >&3', 'fd'], ['exec 3<>/dev/tcp/127.0.0.1/4777', 'fd'], ['echo a 3>x', 'fd'], ['cat 3<x', 'fd'], ['echo a <> f', 'fd'],
@@ -231,4 +231,115 @@ test('字句 11.2.1: CRLF は LF と同じ 1 つの改行。語に CR は入ら�
     assert.ok(statements.every(s => s.words.every(w => !w.text.includes('\r'))), `${shell}: 語に CR が残っている`);
   }
   assert.deepEqual(read('Get-ChildItem\r\n  -Path x', 'powershell').map(line).length > 0, true);
+});
+
+// 最終審査で再現: bash は $( … ) の中を文として読むので、語の頭の # はコメントで、中の ) では閉じない。echo "$(# )<改行>./pwn.sh)" は ./pwn.sh を動かすのに、
+// コメントを知らない切り出しは ) で閉じて、./pwn.sh を引用符の中の文字として見逃した。$( … ) の終わりがずれうる形（コメント・引用符の中の括弧・case）は止める
+test('字句 11.2.3: bash の $( … ) と <( … ) の中の語の頭の # のコメント・引用符の中の括弧・case は、終わりの読み方がずれるので止める', () => {
+  const hidden = [
+    'echo "$(# )\n./pwn.sh)"', 'echo "$(echo a # )\n./pwn.sh)"', 'x="$(# )\n./pwn.sh)"', 'echo "a$(#)\n./pwn.sh\n)"', 'echo "$(: # ) ;\n./pwn.sh)"', 'echo $(# )\n./pwn.sh)', 'cat <(# )\n./pwn.sh)',
+    'echo "$(echo "$(# )\n./pwn.sh)")"', 'echo "$(true;#x\n)"', 'echo "$(echo a)$(echo b #c\n)"',
+    'echo "$(echo ")")"', "echo $(echo ')')", "echo \"$(grep -c '(' f)\"", 'echo "$(echo "(")"',
+    'echo "$(case x in x) ./pwn.sh;; esac)"', 'echo $(case x in x) echo hi;; esac)', 'echo "$(true; case x in x) ./pwn.sh;; esac)"',
+  ];
+  for (const shell of ['bash', 'sh'] as const) for (const command of hidden) assert.equal(failure(command, shell), 'bash_sub', `${shell}: ${JSON.stringify(command)}`);
+  for (const command of [
+    'echo "$(echo a#b)"', 'echo "$(echo $#)"', 'echo "$(echo "#")"', "echo \"$(echo '#')\"", 'echo $(printf "%s" "a # b")', 'echo "$(date) # not (a comment"', 'echo hi # comment ) (', 'echo $(date +%s)',
+    'echo "$(git log --oneline | head -n 5)"', 'echo "$(echo $(echo a))"', 'echo $(echo "a b" | wc -w) # ok )',
+  ]) assert.equal(failure(command, 'bash'), null, `${JSON.stringify(command)} は読める`);
+  assert.ok(read('case x in x) ls;; esac', 'bash').some(s => s.shapes.includes('control')), 'トップレベルの case は今までどおり読んで、今回だけにする');
+});
+
+test('字句 11.2.3: bash の $(( は、2 つ目の ( に対応する ) の次がまた ) のときだけ算術。そうでなければ $( の中の部分シェルとして、中の文を読む', () => {
+  for (const [command, expected] of [['echo $((1 + 2))', 'echo $((1 + 2))'], ['echo $(( (1 + 2) * 3 ))', 'echo $(( (1 + 2) * 3 ))'], ['echo "$((n * 2))"', 'echo $((n * 2))'], ['echo $((1+2))', 'echo $((1+2))']] as const) {
+    assert.deepEqual(read(command, 'bash').map(line), [expected], command);
+  }
+  for (const command of ['echo "$((true)\n./pwn.sh))"', 'x=$((true)\n./pwn.sh)', 'echo "$((true)\n/tmp/pwn))"', 'echo "$((true) ./pwn.sh)"']) {
+    const seen = read(command, 'bash').map(s => s.words[0]?.text);
+    assert.ok(seen.includes('true') && seen.some(w => w === './pwn.sh' || w === '/tmp/pwn'), `${JSON.stringify(command)}: 中の文を読んでいない ${JSON.stringify(seen)}`);
+  }
+  assert.deepEqual(read('echo $((1+2) + (3))', 'bash').map(line), ['1+2', '+', '3', 'echo $((1+2) + (3))'], '算術にならない $(( は、中を文として読む');
+  assert.equal(failure('echo $((true)', 'bash'), 'unclosed');
+  assert.equal(failure('echo $(( $(ls) ))', 'bash'), 'dollar_form');
+});
+
+test('字句 11.2.3: bash は [[ ]] の中でも語の頭の # をコメントに読む（中の引用符で、あとの文を引用符の中の文字に見せかけさせない）', () => {
+  for (const command of ['[[ -n x # "\n]] && ./pwn.sh; echo "a" # "\n]]', "[[ -n x # '\n]] && ./pwn.sh; echo '' # '\n]]"]) {
+    const seen = read(command, 'bash').map(s => s.words[0]?.text);
+    assert.ok(seen.includes('./pwn.sh'), `${JSON.stringify(command)}: ./pwn.sh を文として読んでいない ${JSON.stringify(seen)}`);
+  }
+  assert.equal(read('[[ -n x ]] && echo a#b', 'bash').length, 2);
+  assert.deepEqual(read('[[ "$a" == "#" ]] && echo ok', 'bash').map(line), ['[[ $a == # ]]', 'echo ok']);
+});
+
+// 最終審査のあとの確認で再現: [[ x ]]; の ]]; を閉じとして読まず、then のあとの文を [[ の引数に隠せた。bash は ]] のすぐあとの ; & | ( ) < > で閉じ、次の語を文の頭と見る（then・do も言葉）
+test('字句 11.2.3: bash の [[ … ]] は ]] のすぐあとの ; & | ( ) で閉じ、次の語は新しい文の頭（then のあとの文を [[ の引数に隠させない）', () => {
+  for (const command of ['if [[ -n x ]]; then pwn ]] ; fi', 'if [[ -n x ]] then pwn; fi', 'while [[ -n x ]] do pwn; done']) {
+    const seen = read(command, 'bash').map(s => s.words[0]?.text);
+    assert.ok(seen.includes('pwn'), `${JSON.stringify(command)}: pwn を文として読んでいない ${JSON.stringify(seen)}`);
+  }
+  assert.deepEqual(read('if [[ -f a ]]; then echo hi; fi', 'bash').map(line), ['[[ -f a ]]', 'echo hi'], 'ふつうの if [[ ]]; then は読める');
+  assert.deepEqual(read('[[ -f a ]] && echo yes || echo no', 'bash').map(line), ['[[ -f a ]]', 'echo yes', 'echo no']);
+  assert.deepEqual(read('( [[ a ]] ) | cat', 'bash').map(line), ['[[ a ]]', 'cat']);
+  assert.deepEqual(read('[[ x =~ (a|b) ]] && echo m', 'bash').map(line), ['[[ x =~ (a|b) ]]', 'echo m'], '中の ( | ) は、閉じる前なら語の一部');
+  assert.deepEqual(read('[[ -n x ]] > out.txt', 'bash')[0]!.redirects.map(r => [r.op, r.target?.text]), [['>', 'out.txt']]);
+});
+
+// 最終確認の乱数の試験で見つけた: [[ ]] の中の <( … ) >( … ) も、本物の bash はプロセス置換として中のコマンドを動かす。[[ の中では語を空白でだけ切るので、語の一部の文字として見逃していた
+test('字句 11.2.3: bash の [[ … ]] の中の <( … ) と >( … ) も、中の文を読む（プロセス置換は中のコマンドを動かす）', () => {
+  for (const command of ['[[ >(pwn) = a ]]', '[[ <(pwn) = a ]]', '[[ -n <(pwn) ]]', '[[ a == b || <(pwn) ]]', '[[ x == a<(pwn) ]]', '[[ x =~ >(pwn) ]]', 'if [[ -n <(pwn) ]]; then echo a; fi']) {
+    const seen = read(command, 'bash').map(s => s.words[0]?.text);
+    assert.ok(seen.includes('pwn'), `${JSON.stringify(command)}: pwn を文として読んでいない ${JSON.stringify(seen)}`);
+  }
+  assert.ok(read('[[ -n >(cat) ]]', 'bash').some(s => s.shapes.includes('process_out')), '>( … ) は書き込みの先が見えないので今回だけ');
+  assert.equal(failure('[[ -n <(pwn ]]', 'bash'), 'unclosed');
+  assert.deepEqual(read('[[ a < b ]] && echo lt', 'bash').map(line), ['[[ a < b ]]', 'echo lt'], '(  の付かない < は今までどおり文字列の比較');
+});
+
+// 同じく乱数の試験で見つけた: <( … ) >( … ) の閉じ ) のすぐあとに続く文字は、bash では同じ語の続き（# はコメントでなく語の一部）。
+// 字句の読み取りは、置換を 1 つの語として閉じてしまい、続きの # を語の頭のコメントと読んで、あとの文を隠していた（cat <(true)#; pwn）
+// 同じく乱数の試験で見つけた: >&2# の # は、本物の bash では語 2# の一部で（>&語 は、語が数字でなければ 2# というファイルへの書き込み）、コメントでない。字句の読み取りは >&2 を fd の複製と読んで、続きの # をコメントと読み、あとの文を隠していた。
+// NAME=( … ) の配列の代入も同じ: ech=()#o の # は語の一部（コメントでない）
+test('字句 11.2.3: bash の >&N のすぐあとに語の文字が続く形と、NAME=( … ) の配列の代入は、# の読み方がずれるので止める', () => {
+  for (const command of ['>&2# echo a | pwn', 'echo hi >&2#x; pwn', 'echo hi >&2x', 'echo hi 2>&1# ; pwn', 'echo hi >&-x', 'cat <&0# ; pwn', 'echo hi >&2.txt']) {
+    for (const shell of ['bash', 'sh'] as const) assert.equal(failure(command, shell), 'fd', `${shell}: ${JSON.stringify(command)}`);
+  }
+  for (const command of ['ech=()#o } a | pwn', 'x=(1 2 3)', 'x+=(a)', 'export x=(a)#; pwn', 'declare -a x=(a b); pwn', 'local x=(a)', 'readonly x=(a)#c; pwn']) {
+    for (const shell of ['bash', 'sh'] as const) assert.equal(failure(command, shell), 'unexpected', `${shell}: ${JSON.stringify(command)}`);
+  }
+  for (const command of ['echo hi >&2', 'echo hi 2>&1 | cat', 'echo hi >&2; pwn', 'echo hi >&2 # c', 'echo hi 1>&2>/dev/null', 'cat <&- | cat', 'echo hi >&2&', 'x=1; y=$(echo a)', 'f() { :; }; f']) {
+    assert.equal(failure(command, 'bash'), null, `${JSON.stringify(command)} は読める`);
+  }
+  assert.ok(read('echo hi >&2; pwn', 'bash').some(s => s.words[0]?.text === 'pwn'));
+});
+
+// 同じく乱数の試験で見つけた: "…" の中の \ 改行は消えるので、"$\<改行>(pwn)" は "$(pwn)" で置換として動く（"$\<改行>HOME" は $HOME）。字句の読み取りは $ を文字、\ 改行を読み飛ばして、(pwn) を文字と読んでいた
+test('字句 11.2.3: bash の "…" の中の $ のすぐあとの \\ 改行は、$ と次の文字をつなぐので止める。ほかの \\ 改行は今までどおり', () => {
+  for (const command of ['echo "$\\\n(pwn)"', 'echo "$\\\nHOME"', 'echo "a$\\\n{x}"', 'echo "$\\\n$(pwn)"', 'echo "x" "$\\\n(\npwn\n)"']) {
+    for (const shell of ['bash', 'sh'] as const) assert.equal(failure(command, shell), 'backslash', `${shell}: ${JSON.stringify(command)}`);
+  }
+  assert.deepEqual(read('echo "a\\\nb"', 'bash')[0]!.words.map(w => w.text), ['echo', 'ab']);
+  assert.deepEqual(read('echo "$HOME\\\nx"', 'bash')[0]!.words.map(w => w.text), ['echo', '$HOMEx']);
+  assert.deepEqual(read('echo "\\\n$HOME"', 'bash')[0]!.words.map(w => w.text), ['echo', '$HOME']);
+});
+
+test('字句 11.2.3: bash の <( … ) >( … ) のすぐあとの文字は同じ語の続き。# はコメントでなく、あとの文を隠さない', () => {
+  for (const command of ['cat <(true)#; pwn', 'cat <(true)# & pwn', 'cat <(true)##& { pwn; }', 'echo >(cat)#; pwn', 'cat <(true)x#y; pwn', 'cat <(true)"a"#; pwn', 't<(rue &x)##& { pwn; }']) {
+    const seen = read(command, 'bash').map(s => s.words[0]?.text);
+    assert.ok(seen.includes('pwn'), `${JSON.stringify(command)}: pwn を文として読んでいない ${JSON.stringify(seen)}`);
+  }
+  assert.deepEqual(read('cat <(true)x; ls', 'bash').map(line), ['true', 'cat <(true)x', 'ls']);
+  assert.deepEqual(read('diff <(ls a) <(ls b)', 'bash').map(line), ['ls a', 'ls b', 'diff <(ls a) <(ls b)'], '続きの無い置換は今までどおり');
+  assert.deepEqual(read('cat <(true) # comment', 'bash').map(line), ['true', 'cat <(true)'], '空白をはさんだ # は今までどおりコメント');
+});
+
+// 同じく: $[ … ] と (( … )) は、中が式として読まれて # がコメントにならず、$( … ) も展開される。echo $[1 # $(pwn)] や (( ls # )); pwn は、# 以降を字句の読み取りがコメントと読んで隠していた
+test('字句 11.2.3: bash の $[ … ] と (( … )) は、中の # がコメントにならないので止める', () => {
+  for (const command of ['echo $[1 # $(pwn)]', 'echo "$[1]"', 'echo $[1]', '(( ls # )); pwn', '((i++))', 'for ((i=0;i<3;i++)); do ls; done', 'x=1; ((x))']) {
+    for (const shell of ['bash', 'sh'] as const) assert.notEqual(failure(command, shell), null, `${shell}: ${JSON.stringify(command)}`);
+  }
+  assert.equal(failure('echo $[1]', 'bash'), 'dollar_form');
+  assert.equal(failure('((i++))', 'bash'), 'unexpected');
+  assert.deepEqual(read('( (ls) )', 'bash').map(line), ['ls'], '空白で離した入れ子の部分シェルは今までどおり');
+  assert.deepEqual(read('echo $((1 + 2)); (ls)', 'bash').map(line), ['echo $((1 + 2))', 'ls'], '$(( は算術のまま');
 });

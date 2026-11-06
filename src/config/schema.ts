@@ -38,6 +38,8 @@ export const ModelConfig = Type.Object({
   maxTools: Type.Optional(Type.Integer({ minimum: 0, maximum: 128 })),
   vision: Type.Boolean({ default: false }),
   temperature: Type.Optional(Type.Number({ minimum: 0, maximum: 2 })),
+  // 考える深さとして選べる値（reasoning_effort に送る）。OpenAI 互換のプロバイダのモデルだけで使う。書かなければ、サーバーが supported_reasoning_efforts で知らせた値を使う
+  efforts: Type.Optional(Type.Array(Type.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$' }), { maxItems: 8 })),
 }, { additionalProperties: false });
 
 export const ServerConfig = Type.Object({
@@ -105,6 +107,8 @@ export function ToolsConfig() {
       region: Type.String({ default: 'jp-jp', maxLength: 10 }),
       maxSearchesPerHour: Type.Integer({ minimum: 1, maximum: 600, default: 30 }),
     }, { additionalProperties: false, default: {} }),
+    // 道具ごとの方針（道具の名前 → allow / ask / block）。今の判定に厳しさを足すだけで、緩める道は無い。書かない道具は allow（src/tools/tool-policy.ts）
+    policies: Type.Record(Type.String(), Type.Union([Type.Literal('allow'), Type.Literal('ask'), Type.Literal('block')]), { default: {} }),
     // 1 回の実行で道具を呼べる回数。0 は制限なし（止めるのは、止めるボタン・取り消し・割り込み・承認の拒否や時間切れ・コンテキストの量だけ）
     maxIterations: Type.Integer({ minimum: 0, maximum: 100, default: 16 }),
   }, { additionalProperties: false, default: {} });

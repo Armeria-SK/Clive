@@ -34,7 +34,7 @@ export function checkFilePath(input: string, need: Need, ctx: ToolContext): { ab
   const protectedKind = need === 'write' ? writeApprovalKind(abs, ctx.policy) : undefined;
   // .git への書き込みはフックや設定というコードを書くことになるので、会話の許可を越えて毎回確かめる。人格・スキルは、中身が引数にあるので今までどおり
   if (protectedKind === 'git') return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS.git)], onceOnly: true, askKinds: ['code'] });
-  if (protectedKind) return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])] });
+  if (protectedKind) return result({ decision: 'ask', reasons: [guardText(language, FILE_KEYS[protectedKind])], askKinds: ['persona'] });
   // git・curl・wget・npm・シェルの起動ファイルなどの設定は、あとで動く許可済みのコマンドにコードを読み込ませられるので、毎回確かめる
   if (need === 'write' && isToolConfigPath(abs)) return result({ decision: 'ask', reasons: [guardText(language, 'file.tool_config')], onceOnly: true, askKinds: ['code'] });
   return result({ decision: 'allow', reasons: [] });
@@ -80,6 +80,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
     mode: Type.Optional(Type.Union([Type.Literal('overwrite'), Type.Literal('append'), Type.Literal('create')])),
   }, { additionalProperties: false }),
   effect: 'write',
+  folderGrant: true,
   allowedIn: ['chat', 'task'],
   preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_write', { path: input.path }), body: input.content.slice(0, 4000) }),
@@ -105,6 +106,7 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
   description: 'ファイルの一部を置き換える。old はファイル内でちょうど1回だけ現れる文字列にする（all=true なら全部置き換える）。',
   input: Type.Object({ path: PathArg, old: Type.String({ minLength: 1 }), new: Type.String(), all: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
   effect: 'write',
+  folderGrant: true,
   allowedIn: ['chat', 'task'],
   preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_edit', { path: input.path }), body: `- ${input.old.slice(0, 2000)}\n+ ${input.new.slice(0, 2000)}` }),

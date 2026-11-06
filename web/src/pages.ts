@@ -13,6 +13,7 @@ export const PAGE_META: Record<Page, { label: PlainKey; icon: IconName }> = {
   memory: { label: 'nav.memory', icon: 'bookmark' },
   review: { label: 'nav.review', icon: 'circleCheck' },
   skills: { label: 'nav.skills', icon: 'wrench' },
+  archived: { label: 'nav.archived', icon: 'archive' },
 };
 
 export type WorkerState = 'disabled' | 'paused' | 'running' | 'quiet' | 'idle';
@@ -29,9 +30,14 @@ export const WORKER_STATE_LABEL: Record<WorkerState, PlainKey> = {
   disabled: 'worker.disabled', paused: 'worker.paused', running: 'worker.running', quiet: 'worker.quiet', idle: 'worker.idle',
 };
 
-// 状態バーに出すモデル: チャットの並びの先頭で、使えるもの（なければ並びの先頭）。
-export function pickChatModel(models: readonly ModelView[], routing: { chat: readonly string[] }): string | null {
+// 状態バーと入力欄に出すモデル: 会話で選んだモデルがあればそれ（使えなくても、選んだとおりに出す）。
+// 自動なら、チャットの並びの先頭で、使えるもの（なければ並びの先頭）。
+export function pickChatModelView(models: readonly ModelView[], routing: { chat: readonly string[] }, pinned: string | null = null): ModelView | null {
+  if (pinned) return models.find(m => m.id === pinned) ?? null;
   const ordered = routing.chat.map(id => models.find(m => m.id === id)).filter((m): m is ModelView => m !== undefined);
-  const usable = ordered.find(m => m.probe?.status === 'ok') ?? ordered[0];
-  return usable ? usable.model : null;
+  return ordered.find(m => m.probe?.status === 'ok') ?? ordered[0] ?? null;
+}
+
+export function pickChatModel(models: readonly ModelView[], routing: { chat: readonly string[] }, pinned: string | null = null): string | null {
+  return pickChatModelView(models, routing, pinned)?.model ?? null;
 }

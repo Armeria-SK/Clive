@@ -8,16 +8,19 @@ export type RunEvent =
   | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: Record<string, unknown> }
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: string }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
-  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: string; preview: string }
+  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: string; preview: string; autoReason?: string }
+  | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
   | { type: 'approval.requested'; runId: string; conversationId: string; approval: Omit<Approval, 'runId' | 'conversationId'> }
   | { type: 'approval.resolved'; runId: string; conversationId: string; approvalId: string; outcome: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
   | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
+  | { type: 'pending.changed'; conversationId: string }
+  | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: Task }
   | { type: 'notification'; notification: NotificationItem };
 
-export interface Draft { runId: string; conversationId: string; modelId: string; text: string; activeTool?: string | undefined; activeInput?: string | undefined }
+export interface Draft { runId: string; conversationId: string; modelId: string; text: string; activeTool?: string | undefined; activeInput?: string | undefined; autoChecking?: boolean | undefined }
 
 export function useRunEvents(onEvent: (e: RunEvent) => void, onResync: (drafts: Draft[]) => void): { connected: boolean; reconnect: () => void } {
   const [connected, setConnected] = useState(false);

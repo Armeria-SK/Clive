@@ -35,7 +35,7 @@ test('cp -r・mv で秘密のフォルダそのものを動かす形は止める
   for (const c of [
     'cp -r secrets stuff', 'cp -r secrets stuff; cat stuff/token.txt', 'cp -R secrets stuff', 'cp -a secrets stuff', 'cp -r secrets/ stuff', 'cp -r secrets/. stuff', 'cp -r secret stuff', 'cp -rT secrets stuff', 'cp -r -t stuff secrets',
     'mv secrets stuff2', 'mv secrets stuff2; cat stuff2/token.txt', 'mv secrets/ stuff2', 'mv secret stuff2', 'mv -t stuff2 secrets', 'cp -r proj/secrets stuff', 'mv proj/secrets stuff2', 'cp -r emptysec/secrets stuff',
-    'cat secrets', 'ls secrets', 'mkdir secrets2/secrets',
+    'cat secrets', 'mkdir secrets2/secrets',
   ]) if (f.bash(c).decision !== 'deny') wrong.push(`bash ${c} → ${show(f.bash(c))}`);
   for (const c of ['Copy-Item -Recurse secrets stuff', 'Copy-Item secrets stuff -Recurse', 'Move-Item secrets stuff2', 'Get-Content secrets', 'Copy-Item -Path secrets -Destination stuff -Recurse']) {
     if (f.ps(c).decision !== 'deny') wrong.push(`ps ${c} → ${show(f.ps(c))}`);

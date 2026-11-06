@@ -1,9 +1,11 @@
-import { useEffect, useLayoutEffect, useState, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import type { ContextUsage, UploadView } from './api.ts';
 import { compactTokens, contextPercent, slashMatches, type SlashCommand } from './chat-logic.ts';
 import { useT } from './i18n/index.ts';
 import { Icon } from './icons.tsx';
 import { isComposing } from './keys.ts';
+import type { PermissionMode } from '../../src/shared/permission-mode.ts';
+import { MODE_ICON } from './ModeMenu.tsx';
 
 const MAX_HEIGHT = 200;
 const ATTACH_ACCEPT = '.txt,.md,.csv,.json,.yaml,.yml,.log,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*,application/pdf,image/png,image/jpeg,image/gif,image/webp';
@@ -19,11 +21,24 @@ interface Props {
   approvalId: string | null;
   assistantName: string;
   modelName: string | null;
+  // 考える深さを選んでいるときの値（札に添える）
+  effort: string | null;
+  // モデルの一覧（開いているときだけ入る）。札を押すと onModelMenu
+  modelMenu: ReactNode;
+  modelMenuOpen: boolean;
+  onModelMenu: () => void;
+  // 権限モード（ふつう / 自動承認 / 計画）の札。押すと onModeMenu
+  mode: PermissionMode;
+  modeMenu: ReactNode;
+  modeMenuOpen: boolean;
+  onModeMenu: () => void;
   usage: ContextUsage | null;
   onInput: (value: string) => void;
   onAttach: (files: FileList | null) => void;
   onDetach: (id: string) => void;
   onSend: () => void;
+  // 返事を作っている最中に、今の実行を止めてこの発言から始める
+  onStopAndSend: () => void;
   onStop: () => void;
   onApproveOnce: (approvalId: string) => void;
   onSlash: (command: SlashCommand) => void;
@@ -82,11 +97,12 @@ export function Composer(props: Props) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       if (empty && approvalId !== null) props.onApproveOnce(approvalId);
+      else if (generating && !empty && (e.ctrlKey || e.metaKey)) props.onStopAndSend();
       else props.onSend();
     }
   }
 
-  const hint = hasApproval && empty ? t('chat.hintApprove') : t('chat.hintSend');
+  const hint = hasApproval && empty ? t('chat.hintApprove') : generating ? t('chat.hintQueue') : t('chat.hintSend');
   return (
     <div className="chat-composer">
       {slashOpen && (
@@ -129,29 +145,44 @@ export function Composer(props: Props) {
           >
             {uploading ? <span className="spin"><Icon name="loader" size={15} /></span> : <Icon name="paperclip" size={15} />}
           </button>
+          <span className="chat-model-wrap">
+            <button type="button" className={`chat-mode-chip mode-${props.mode}`} data-tip={t('mode.chip')} aria-haspopup="dialog" aria-expanded={props.modeMenuOpen} onClick={props.onModeMenu}>
+              <Icon name={MODE_ICON[props.mode]} size={13} />
+              <span className="chat-mode-name">{t(`mode.${props.mode}`)}</span>
+              <Icon name="chevD" size={11} />
+            </button>
+            {props.modeMenu}
+          </span>
           {modelName && (
-            <span className="chat-model-chip" data-tip={t('chat.model')}>
-              <Icon name="cpu" size={13} />
-              <span className="chat-model-name">{modelName}</span>
+            <span className="chat-model-wrap">
+              <button type="button" className="chat-model-chip" data-tip={t('chat.model')} aria-haspopup="dialog" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}>
+                <Icon name="cpu" size={13} />
+                <span className="chat-model-name">{modelName}</span>
+                {props.effort && <span className="chat-model-effort">{props.effort}</span>}
+                <Icon name="chevD" size={11} />
+              </button>
+              {props.modelMenu}
             </span>
           )}
           <span className="chat-tools-fill" />
           {props.usage && <ContextMeter usage={props.usage} />}
           <span className="chat-hint">{hint}</span>
-          {generating
-            ? (
-              <button type="button" className="btn btn-secondary btn-icon chat-ctl chat-stop" aria-label={t('chat.stop')} data-tip={t('chat.stop')} data-kbd="Esc" onClick={props.onStop}>
-                <Icon name="square" size={12} />
-              </button>
-            )
-            : (
-              <button
-                type="button" className="btn btn-primary btn-icon chat-ctl chat-send" aria-label={t('chat.send')} data-tip={t('chat.send')} data-kbd="↵"
-                disabled={sending || uploading || empty} onClick={props.onSend}
-              >
-                <Icon name="arrowUp" size={15} />
-              </button>
-            )}
+          {generating && (
+            <button type="button" className="btn btn-secondary btn-icon chat-ctl chat-stop" aria-label={t('chat.stop')} data-tip={t('chat.stop')} data-kbd="Esc" onClick={props.onStop}>
+              <Icon name="square" size={12} />
+            </button>
+          )}
+          {generating && !empty && (
+            <button type="button" className="btn btn-ghost chat-stopsend" data-tip={t('chat.sendStopTip')} disabled={sending || uploading} onClick={props.onStopAndSend}>{t('chat.sendStop')}</button>
+          )}
+          {(!generating || !empty) && (
+            <button
+              type="button" className="btn btn-primary btn-icon chat-ctl chat-send" aria-label={generating ? t('chat.sendQueue') : t('chat.send')} data-tip={generating ? t('chat.sendQueue') : t('chat.send')} data-kbd="↵"
+              disabled={sending || uploading || empty} onClick={props.onSend}
+            >
+              <Icon name="arrowUp" size={15} />
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -3,7 +3,7 @@
 import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { isGitDir } from './git-repo.ts';
-import { isInside, isRemotePath, isSecretPath, writeApprovalKind, type ProtectedKind, type ScopePolicy } from './scope.ts';
+import { inDependencies, isInside, isRemotePath, isSecretPath, writeApprovalKind, type ProtectedKind, type ScopePolicy, type SecretScope } from './scope.ts';
 
 export const GLOB_CAP = 2000;
 const WALK_DEPTH = 6;
@@ -60,7 +60,7 @@ export interface Globbed { prefix: string; matches: string[]; complete: boolean;
 const SCAN_CAP = 100_000;
 
 // 絶対パスのパターン（* ? [..] {a,b}）に、今あるもののうち当たるものを列挙する。dotfiles: PowerShell のワイルドカードか（先頭が . の名前に * が当たる。[..] の中の ^ ! は文字。bash は当たらず、! は否定）
-export function expandGlob(pattern: string, dotfiles: boolean): Globbed {
+export function expandGlob(pattern: string, dotfiles: boolean, secrets: SecretScope = 'all'): Globbed {
   if (isRemotePath(pattern)) return { prefix: pattern, matches: [], complete: false };
   const alternatives = braces(pattern);
   const first = pattern.split(/[\\/]/u);
@@ -90,7 +90,7 @@ export function expandGlob(pattern: string, dotfiles: boolean): Globbed {
             if (name.startsWith('.') && !dotfiles && !seg.startsWith('.')) continue;
             if (re.test(name)) {
               const full = join(dir, name);
-              if (secret === undefined && isSecretPath(full)) secret = full;
+              if (secret === undefined && isSecretPath(full, secrets)) secret = full;
               // 上限を超えても、秘密のパスを探すために、名前を数え続ける（一覧には足さない）
               if (next.length < GLOB_CAP) next.push(full); else overflow = true;
             }
@@ -116,14 +116,17 @@ export function wildcardMatches(name: string, pattern: string): boolean {
 
 // フォルダの中身（deep なら下の階層まで）の一覧。幅優先で、上限を超えたら途中まで返して complete: false。入れないフォルダ・たどれないリンクがあっても complete: false
 // skipHidden: 「.」で始まる名前は、一覧にも入れず、その下へも入らず、秘密を探すときにも数えない（rg が既定で読まないもの）
-export function listTree(dir: string, deep: boolean, cap = LIST_CAP, skipHidden = false): { entries: string[]; complete: boolean; secret?: string } {
+// 秘密らしいパスは 2 つに分ける: node_modules の外の最初の 1 つ（secret。止める）と、node_modules の中の分（depSecrets。10 件まで。今回だけの確かめにする）
+const DEP_SECRET_CAP = 10;
+export function listTree(dir: string, deep: boolean, cap = LIST_CAP, skipHidden = false): { entries: string[]; complete: boolean; secret?: string; depSecrets?: string[] } {
   if (isRemotePath(dir)) return { entries: [], complete: false };
   const entries: string[] = [];
   const queue = [dir];
   let complete = true;
   let secret: string | undefined;
+  const depSecrets: string[] = [];
   let scanned = 0;
-  const result = (): { entries: string[]; complete: boolean; secret?: string } => ({ entries, complete, ...(secret === undefined ? {} : { secret }) });
+  const result = (): { entries: string[]; complete: boolean; secret?: string; depSecrets?: string[] } => ({ entries, complete, ...(secret === undefined ? {} : { secret }), ...(depSecrets.length ? { depSecrets } : {}) });
   while (queue.length) {
     const current = queue.shift()!;
     let items: import('node:fs').Dirent[];
@@ -131,7 +134,9 @@ export function listTree(dir: string, deep: boolean, cap = LIST_CAP, skipHidden 
     for (const item of items) {
       if (skipHidden && item.name.startsWith('.')) continue;
       const full = join(current, item.name);
-      if (secret === undefined && isSecretPath(full)) secret = full;
+      if (isSecretPath(full)) {
+        if (inDependencies(full)) { if (depSecrets.length < DEP_SECRET_CAP) depSecrets.push(full); } else if (secret === undefined) secret = full;
+      }
       // 上限を超えても、秘密のパスを探すために、名前を数え続ける（一覧には足さない）
       if (entries.length < cap) entries.push(full);
       if (entries.length >= cap) complete = false;

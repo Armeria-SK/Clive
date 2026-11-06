@@ -4,22 +4,29 @@ import type { Conversations, StoredMessage } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import type { Runs } from '../db/runs.ts';
 import type { AppPaths } from '../paths.ts';
-import { redactSecrets } from '../shared/redaction.ts';
+import { redactExact, redactSecrets } from '../shared/redaction.ts';
+import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { EndpointLimiter } from '../providers/limiter.ts';
+import { UPSTREAM_KEEP, upstreamText } from '../providers/http.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
-import { REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
+import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
+import { PLAN_EFFECTS, REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
+import { effectivePolicy } from '../tools/tool-policy.ts';
+import { stricterMode } from '../shared/permission-mode.ts';
 import type { RunKind, TaskControl, ToolContext, ToolDef } from '../tools/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
 import type { Task, TaskStore } from '../tasks/store.ts';
 import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolOutputLimit } from './context-budget.ts';
+import { modelEfforts } from './efforts.ts';
 import { ContextOverflow, fitMessages } from './fit.ts';
+import { isLocalModel, isLocalPinned, isLocalProvider } from './local-model.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
@@ -46,7 +53,13 @@ export function iterationLimit(configured: number, kind: RunKind): number {
   return kind === 'chat' ? Infinity : UNATTENDED_ITERATION_CEILING;
 }
 const COMPACT_MIN_MESSAGES = 4;
+// 1 回の実行で要約を重ねられる回数。外す発言が増えるたびに要約し直すが、無限には繰り返さない
+const MAX_COMPACTIONS_PER_RUN = 5;
+// 1 つの会話で、実行中に待たせておける発言の数
+const MAX_PENDING_MESSAGES = 10;
 const COMPACT_TRANSCRIPT_CHARS = 60_000;
+// 実行を始めるとき、添付の有無を見るために読み戻す発言の数（最後の返事がこの中に無ければ、確かめきれないので承認制の側に倒す）
+const TAINT_SCAN_LIMIT = 500;
 
 export interface ChatEngineDeps {
   config: () => AppConfig;
@@ -77,11 +90,21 @@ const ATTACHMENT_PLACEHOLDER = new RegExp(`^(?:${(['ja', 'en'] as const).flatMap
 // messageCode / messageParams は、モデルの確認（probe）の messageCode / messageParams と同じ（確認していない・設定に無いときは engine.problem.*）。画面が自分の言語で組み立てられるように添える。
 export interface ModelProblem { modelId: string; status: string; message: string; hint?: string | undefined; messageCode?: string | undefined; messageParams?: MessageParams | undefined }
 
+// 送信と一緒に渡す、会話で選ぶモデルと考える深さ・権限モード。渡さなかったものは会話に覚えているもの。モデルと考える深さの null は自動・モデルの既定
+export interface SendChoice { modelId?: string | null | undefined; effort?: string | null | undefined; permissionMode?: PermissionMode | undefined }
+const hasChoice = (choice: SendChoice): boolean => choice.modelId !== undefined || choice.effort !== undefined || choice.permissionMode !== undefined;
+
 export type SendOutcome =
-  | { ok: true; runId: string; messageId?: number }
-  | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; detail?: ContextDetail; problems?: ModelProblem[] };
+  // queued: 実行中だったので待たせた（runId は今の実行。差し込まれる前なら pendingId で取り消せる）
+  | { ok: true; runId: string; messageId?: number; queued?: boolean; pendingId?: string }
+  | { ok: false; httpStatus: number; errorKind: EngineErrorKind | 'busy' | 'not_found'; errorMessage: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail; problems?: ModelProblem[] };
 
 type Route = { model: ModelConfig; provider: ProviderConfig };
+
+interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[] }
+// held: 実行が始まったあとに会話のモデルか権限モードが替わり、そのあとに送られた発言。今の実行（古いモデルの鎖・古いモードの実行）へは差し込まず、実行が終わってから新しいモデル・新しいモードの実行で読ませる
+// afterStop: 今の実行を止めたあとに送られた発言。止めた実行が終わるのを待って、新しい実行を始める（止める前に待たせた発言は、保存だけ）
+interface PendingMessage extends ChatItem { id: string; interrupt: boolean; createdAt: number; held: boolean; afterStop: boolean }
 
 export type ContextUsageOutcome =
   | { ok: true; modelId: string; tokens: number; available: number; capacity: number; ratio: number }
@@ -93,6 +116,9 @@ export function candidateModelIds(config: AppConfig, route: 'chat' | 'background
   const preferred = route === 'background' && config.routing.background.length ? config.routing.background : config.routing.chat;
   return preferred.length ? [...preferred] : config.models.map(m => m.id);
 }
+
+// 1 回の実行の要約の状態: 要約した回数・失敗したか（失敗したら外すだけ）・要約した発言の合計・「外しました」で最後に知らせた件数
+interface CompactionState { count: number; failed: boolean; summarized: number; trimmedShown: number }
 
 type Failure = { kind: EngineErrorKind; message: string; code?: string; params?: MessageParams; retryable: boolean; detail?: ContextDetail; route?: Route; upstream?: string };
 
@@ -119,6 +145,14 @@ export class ChatEngine {
   // 会話の実行が止めたタスク（会話の実行が終わるとき、会話で進んだ分をこのタスクに引き継ぐ）
   #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
+  // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
+  #runModel = new Map<string, string | null>();
+  // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
+  #runMode = new Map<string, PermissionMode>();
+  // 止める操作（stop）を受けた実行
+  #stopped = new Set<string>();
+  // 実行中に送られて、まだ履歴に入っていない発言（会話ごと。再起動で消える）
+  #pending = new Map<string, PendingMessage[]>();
   lastUserActivity = 0;
   onRunEnd: ((run: { runId: string; conversationId: string; kind: RunKind }) => void) | undefined;
 
@@ -128,44 +162,193 @@ export class ChatEngine {
     return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), key), errorCode: `engine.${key}` };
   }
 
-  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = []): SendOutcome {
-    if (this.#byConversation.has(conversationId)) return this.#busy('send.busy_chat');
-    const chain = this.#chain('chat');
+  // 実行中の会話に送った発言は、新しい実行にせず待たせる（待ちの発言）。今の実行が次の区切り（道具の結果を返して、次にモデルを呼ぶ前）に来たら
+  // 履歴に入れ、実行が先に終わったら、その発言で新しい実行を始める。interrupt なら、今の実行を止めて、待っていた発言と一緒に新しい実行を始める
+  send(conversationId: string, text: string, images: ImageRef[] = [], attachments: AttachmentMeta[] = [], choice: SendChoice = {}, options: { interrupt?: boolean } = {}): SendOutcome {
+    const item: ChatItem = { content: text, images, attachments };
+    const running = this.#byConversation.get(conversationId);
+    if (running === undefined) return this.#beginChat(conversationId, [item], choice);
+    if (this.#active.get(running)?.kind !== 'chat') return this.#busy('send.busy_chat');
+    const queue = this.#pending.get(conversationId) ?? [];
+    if (queue.length >= MAX_PENDING_MESSAGES) {
+      return { ok: false, httpStatus: 409, errorKind: 'busy', errorMessage: engineText(languageOf(this.#d.config()), 'send.queue_full', { max: MAX_PENDING_MESSAGES }), errorCode: 'engine.send.queue_full', errorParams: { max: MAX_PENDING_MESSAGES } };
+    }
+    this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
+    // 選んだモデルと考える深さは、次の実行から効く（今の実行の鎖は変えない）。権限モードは、厳しくなる向きはその場から、緩む向きは次の実行から効く（pipeline.ts）
+    if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
+    // 実行が始まってから会話のモデルや権限モードが替わっていたら（PATCH でも、この送信の modelId・permissionMode でも）、この発言は古いモデル・古いモードの実行に読ませない。
+    // 一度保留した発言があれば、あとの発言も順番を守るため保留する
+    const held = queue.some(p => p.held) || (this.#d.conversations.get(conversationId)?.model_id ?? null) !== (this.#runModel.get(running) ?? null)
+      || this.#d.conversations.modeOf(conversationId) !== (this.#runMode.get(running) ?? 'normal');
+    const pending: PendingMessage = { id: randomUUID(), ...item, interrupt: options.interrupt === true, createdAt: this.#d.now?.().getTime() ?? Date.now(), held, afterStop: this.#stopped.has(running) };
+    this.#pending.set(conversationId, [...queue, pending]);
+    this.#d.bus.publish({ type: 'pending.changed', conversationId });
+    if (pending.interrupt) this.stop(running);
+    return { ok: true, runId: running, queued: true, pendingId: pending.id };
+  }
+
+  // 待っている発言（画面に出す形）
+  pending(conversationId: string): Array<{ id: string; text: string; attachments: AttachmentMeta[]; interrupt: boolean; createdAt: number }> {
+    return (this.#pending.get(conversationId) ?? []).map(p => ({ id: p.id, text: stripAttachments(p.content), attachments: p.attachments, interrupt: p.interrupt, createdAt: p.createdAt }));
+  }
+
+  // 差し込まれる前の待ちの発言を取り消す。もう差し込まれた・無いときは false
+  cancelPending(conversationId: string, pendingId: string): boolean {
+    const queue = this.#pending.get(conversationId);
+    if (!queue?.some(p => p.id === pendingId)) return false;
+    const rest = queue.filter(p => p.id !== pendingId);
+    if (rest.length) this.#pending.set(conversationId, rest); else this.#pending.delete(conversationId);
+    this.#d.bus.publish({ type: 'pending.changed', conversationId });
+    return true;
+  }
+
+  // 発言を保存して、チャットの実行を始める（1 つ以上の発言を順に保存し、1 つの実行で読ませる）。使えるモデルが無ければ、何も保存せずに断る
+  #beginChat(conversationId: string, items: ChatItem[], choice: SendChoice): SendOutcome {
+    const existing = this.#d.conversations.get(conversationId);
+    const pinned = choice.modelId !== undefined ? choice.modelId : existing?.model_id ?? null;
+    const effort = choice.effort !== undefined ? choice.effort : existing?.effort ?? null;
+    const chain = this.#chain('chat', pinned);
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
     const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
-    const saved = this.#d.conversations.append(conversationId, { role: 'user', content: text, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
-    // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
-    this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(text).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : text);
+    // ユーザーが同じ id へ新しく送ったときは、消したばかりの会話の覚えを外す（動いていた実行の遅れた書き込みだけを見送るため）
+    this.#d.conversations.reopen(conversationId);
+    if (hasChoice(choice)) this.#d.conversations.setChoice(conversationId, choice);
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
-    this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
-    // 添付の中身は外部のデータなので、この実行ではシェルと書き込みを承認制にする（taint）
-    if (attachments.length) this.#initialTaint.set(runId, attachments.map(a => engineText(languageOf(this.#d.config()), 'attachment.taint', { name: a.name })));
-    this.#start(runId, conversationId, chain.usable, 'chat');
-    return { ok: true, runId, messageId: saved.id };
+    let firstId: number | undefined;
+    for (const { content, images, attachments } of items) {
+      const saved = this.#d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
+      firstId ??= saved.id;
+      // 添付の中身はタイトルにしない（本文が無ければ添付の名前にする）
+      this.#d.conversations.autoTitle(conversationId, attachments.length ? stripAttachments(content).replace(ATTACHMENT_PLACEHOLDER, '') || attachments[0]!.name : content);
+      this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    }
+    this.#taintFromHistory(runId, conversationId);
+    this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, effort);
+    return { ok: true, runId, messageId: firstId! };
+  }
+
+  // 外から読んだ内容が残ったまま始まる実行は、シェルと書き込みを承認制にする（taint）。次のどれかなら、始まる実行も「外から読んだ」扱いにする:
+  // - 最後の返事（道具の呼び出しだけではない assistant の発言）より後のユーザーの発言に添付がある。今送った発言・保存だけになった待ちの発言・やり直す発言のどれでも数え、道具を呼んだ assistant の発言は返事ではないので、またいで見る
+  // - 最後の返事を、読み出す発言の数（TAINT_SCAN_LIMIT）の中に見つけられない。添付の有無を確かめきれないので、承認制の側に倒す
+  // - 前のチャットの実行が、外から読んだまま、最後まで返事を書かずに終わった（止めた・失敗・取り消し・道具の上限のまとめ）。Web を読んだ分もこれで持ち越す。やり直し・続きは、その実行のやり直し・続きとみなす
+  #taintFromHistory(runId: string, conversationId: string): void {
+    const language = languageOf(this.#d.config());
+    const sources: string[] = [];
+    const stored = this.#d.conversations.messages(conversationId, TAINT_SCAN_LIMIT);
+    let replied = false;
+    for (let i = stored.length - 1; i >= 0; i--) {
+      const message = stored[i]!.message;
+      if (message.role === 'assistant' && !message.toolCalls?.length) { replied = true; break; }
+      if (message.role === 'user') sources.unshift(...(message.attachments ?? []).map(a => engineText(language, 'attachment.taint', { name: a.name })));
+    }
+    if (!replied && stored.length >= TAINT_SCAN_LIMIT) sources.push(engineText(language, 'taint.unknown'));
+    if (this.#previousRunCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.carried'));
+    if (sources.length) this.#initialTaint.set(runId, sources);
+  }
+
+  // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめではない）の印は持ち越さない
+  #previousRunCarriesTaint(conversationId: string): boolean {
+    const last = this.#d.runs.latestChat(conversationId);
+    if (!last || last.tainted !== 1) return false;
+    let wrappedUp = true;
+    try { wrappedUp = (JSON.parse(last.flags) as string[]).includes('max_iterations'); } catch { }
+    return !(last.ok === 1 && !wrappedUp);
+  }
+
+  // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは、実行が道具の呼び出しの中で待っているので、区切りに来ない。承認の答えが先）。
+  // 差し込む発言は別の返事の元なので、「この返事のあいだ」のフォルダの許可（ctx.writeGrants）はここで全部終わる。
+  // 添付つきの発言は外から来た文なので、この実行の残りも「外から読んだ」扱いにする。
+  // 実行が始まったあとにモデルか権限モードを替えて送られた発言（held）は入れない（古いモデル・古いモードの実行へ渡さない）。実行が終わってから新しい実行で読ませる
+  #injectPending(runId: string, conversationId: string, ctx: ToolContext): void {
+    const d = this.#d;
+    const queue = this.#pending.get(conversationId);
+    if (!queue?.length) return;
+    const injectable = queue.filter(p => !p.held);
+    if (!injectable.length) return;
+    ctx.writeGrants = undefined;
+    const held = queue.filter(p => p.held);
+    if (held.length) this.#pending.set(conversationId, held); else this.#pending.delete(conversationId);
+    const language = languageOf(d.config());
+    for (const { content, images, attachments } of injectable) {
+      const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) }, runId);
+      d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+      if (attachments.length) {
+        ctx.taint.tainted = true;
+        ctx.taint.sources.push(...attachments.map(a => engineText(language, 'attachment.taint', { name: a.name })));
+      }
+    }
+    d.bus.publish({ type: 'pending.changed', conversationId });
+  }
+
+  // 実行が終わったとき、まだ待っている発言があれば: 実行が成功で終わった（または止めて送る）なら、その発言で新しい実行を始める。
+  // 失敗・取り消しで終わったときは、発言を保存だけして（新しい実行は始めない）、そのことを知らせる
+  #drainPending(conversationId: string, endedRunId: string, ended: EngineResult | undefined): void {
+    const d = this.#d;
+    const queue = this.#pending.get(conversationId);
+    if (!queue?.length) return;
+    this.#pending.delete(conversationId);
+    // 成功で終わった（または止めて送る）なら、待っていた発言を全部まとめて新しい実行で読ませる。
+    // 失敗・取り消しで終わったときは、新しい実行を求めた発言（モデルを替えたあと・止めたあとに送られたもの）だけが新しい実行を始め、ほかは保存だけにする
+    const startAll = ended?.ok === true || queue.some(p => p.interrupt);
+    const wantsRun = (p: PendingMessage) => p.held || p.afterStop;
+    const starters = startAll ? queue : queue.filter(wantsRun);
+    const saveOnly = startAll ? [] : queue.filter(p => !wantsRun(p));
+    if (saveOnly.length) this.#saveQueued(conversationId, saveOnly, endedRunId, 'stopped');
+    if (starters.length && !this.#beginChat(conversationId, starters, {}).ok) this.#saveQueued(conversationId, starters, endedRunId, 'not_started');
+    d.bus.publish({ type: 'pending.changed', conversationId });
+  }
+
+  // 待っていた発言を、ふつうのユーザーの発言として保存だけする（新しい実行は始めない）。保存したことを警告で知らせる。
+  // 理由: stopped = 返事が止まった（失敗・取り消し・終了）、not_started = 返事を始められなかった（使えるモデルが無い）
+  #saveQueued(conversationId: string, messages: PendingMessage[], runId: string, reason: 'stopped' | 'not_started'): void {
+    const d = this.#d;
+    for (const { content, images, attachments } of messages) {
+      const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
+      d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
+    }
+    const language = languageOf(d.config());
+    const [code, key] = reason === 'stopped' ? ['queued_saved', 'warn.queued_saved'] as const : ['queued_not_started', 'warn.queued_not_started'] as const;
+    d.bus.publish({ type: 'warning', runId, conversationId, code, message: engineText(language, key, { count: messages.length }), params: { count: messages.length } });
+  }
+
+  // 終了するとき（DB を閉じる前に呼ぶ）、待たせている発言を全部、保存だけして残す。待ちはメモリの中だけなので、これをしないと再起動で消える
+  saveQueued(): number {
+    let count = 0;
+    for (const [conversationId, queue] of [...this.#pending]) {
+      this.#pending.delete(conversationId);
+      this.#saveQueued(conversationId, queue, this.#byConversation.get(conversationId) ?? '', 'stopped');
+      this.#d.bus.publish({ type: 'pending.changed', conversationId });
+      count += queue.length;
+    }
+    return count;
   }
 
   retry(conversationId: string): SendOutcome {
     if (this.#byConversation.has(conversationId)) return this.#busy('send.busy');
     const last = this.#d.conversations.messages(conversationId, 1).at(-1);
     if (!last || last.role === 'assistant') return { ok: false, httpStatus: 409, errorKind: 'not_found', errorMessage: engineText(languageOf(this.#d.config()), 'send.nothing_to_retry'), errorCode: 'engine.send.nothing_to_retry' };
-    const chain = this.#chain('chat');
+    const conversation = this.#d.conversations.get(conversationId);
+    const chain = this.#chain('chat', conversation?.model_id ?? null);
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
     const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);
-    this.#start(runId, conversationId, chain.usable, 'chat');
+    this.#taintFromHistory(runId, conversationId);
+    this.#start(runId, conversationId, chain.usable, 'chat', undefined, undefined, conversation?.effort ?? null);
     return { ok: true, runId };
   }
 
-  runTask(task: Task, conversationId: string, prompt: string): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  // task.local_only: 手元のモデルを選んだ会話から作ったタスク。裏方の順番のうち手元のモデルだけで動かし、使えるものが無ければ（チャットの順番や外のモデルに回さず）始めない（localOnly: true で知らせる）
+  runTask(task: Task, conversationId: string, prompt: string): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string; localOnly?: true } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.task_running') };
-    const chain = this.#chain('background');
+    const localOnly = task.local_only === 1;
+    const chain = this.#chain('background', null, localOnly);
     if (!chain.usable.length) {
       const outcome = this.#noUsableModel(chain.problems);
-      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
+      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage, ...(localOnly ? { localOnly: true as const } : {}) };
     }
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt });
     const runId = randomUUID();
@@ -175,9 +358,10 @@ export class ChatEngine {
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
 
-  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[] } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  // localOnly: 手元のモデルで話した会話の振り返り。裏方の順番のうち手元のモデルだけを使い、無ければ（チャットの順番や外のモデルに回さず）始めない
+  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[]; localOnly?: boolean } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.review_running') };
-    const chain = this.#chain('background');
+    const chain = this.#chain('background', null, options.localOnly === true);
     if (!chain.usable.length) {
       const outcome = this.#noUsableModel(chain.problems);
       return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
@@ -191,6 +375,9 @@ export class ChatEngine {
 
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
 
+  // 手元のモデルで話した会話の振り返りに使える、手元の裏方モデルがあるか
+  localReviewAvailable(): boolean { return this.#chain('background', null, true).usable.length > 0; }
+
   // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
   // 容量が分かるものの available のいちばん小さい値の 12%。容量が分かるモデルが無ければ undefined（予算なし = 全部入れる。0 にはしない）。
   memoryBudget(): number | undefined {
@@ -202,6 +389,14 @@ export class ChatEngine {
   personaBudget(): number | undefined {
     const smallest = this.#smallestAvailable();
     return smallest === undefined ? undefined : Math.floor(smallest * PERSONA_BUDGET_RATIO);
+  }
+
+  // 会話で使うモデル（選んでいればそれ。自動なら使える先頭、使えるものが無ければ候補の先頭）で選べる考える深さ。画面の検査と一覧に使う
+  effortChoices(pinned: string | null): { modelId: string | undefined; efforts: string[] } {
+    const config = this.#d.config();
+    const id = pinned ?? this.#chain('chat').usable[0]?.model.id ?? candidateModelIds(config, 'chat')[0];
+    const model = config.models.find(m => m.id === id);
+    return { modelId: model?.id, efforts: model ? modelEfforts(config, model, this.#d.status.get(model.id)) : [] };
   }
 
   #smallestAvailable(): number | undefined {
@@ -235,6 +430,7 @@ export class ChatEngine {
   stop(runId: string): boolean {
     const active = this.#active.get(runId);
     if (!active) return false;
+    this.#stopped.add(runId);
     active.controller.abort(providerError('cancelled', 'cancelled', {}, { retryable: false }));
     return true;
   }
@@ -247,10 +443,12 @@ export class ChatEngine {
     return [...this.#active.values()].map(a => ({ runId: a.runId, conversationId: a.conversationId, kind: a.kind }));
   }
 
-  #chain(route: 'chat' | 'background'): { usable: Route[]; problems: ModelProblem[] } {
+  // 会話で選んだモデルがあれば（pinned）、そのモデルだけで鎖を作る。使えなければ、ほかのモデルへ切り替えずに、そのモデルの問題だけを返す
+  // localOnly: 裏方の順番（routing.background）のうち、手元のモデルだけ。順番が空でもチャットの順番や設定のモデル全部には回さない
+  #chain(route: 'chat' | 'background', pinned: string | null = null, localOnly = false): { usable: Route[]; problems: ModelProblem[] } {
     const config = this.#d.config();
     const language = languageOf(config);
-    const ids = candidateModelIds(config, route);
+    const ids = localOnly ? config.routing.background.filter(id => isLocalModel(config, id)) : pinned ? [pinned] : candidateModelIds(config, route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];
@@ -282,35 +480,52 @@ export class ChatEngine {
     };
   }
 
-  #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>): void {
+  #start(runId: string, conversationId: string, chain: Route[], kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null): void {
     const controller = new AbortController();
     this.#byConversation.set(conversationId, runId);
-    const done = this.#execute(runId, conversationId, chain, controller.signal, kind, task, forbid)
+    if (kind === 'chat') { this.#runModel.set(runId, this.#d.conversations.get(conversationId)?.model_id ?? null); this.#runMode.set(runId, this.#d.conversations.modeOf(conversationId)); }
+    let ended: EngineResult | undefined;
+    const done = this.#execute(runId, conversationId, chain, controller.signal, kind, task, forbid, effort)
       .catch((error): EngineResult => {
-        this.#d.log?.(`[ERROR] run ${runId}: ${(error as Error).stack ?? error}`);
-        this.#d.runs.finish(runId, { ok: false, attempts: 0, errorKind: 'internal', errorMessage: (error as Error).message });
+        const detail = redactSecrets((error as Error).message, this.#d.registry.secrets());
+        this.#d.log?.(`[ERROR] run ${runId}: ${redactSecrets(String((error as Error).stack ?? error), this.#d.registry.secrets())}`);
+        this.#d.runs.finish(runId, { ok: false, attempts: 0, errorKind: 'internal', errorMessage: detail });
         const language = languageOf(this.#d.config());
-        const internal = engineText(language, 'run.internal', { detail: (error as Error).message });
-        this.#d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail: (error as Error).message } });
-        return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail: (error as Error).message }, retryable: false };
+        const internal = engineText(language, 'run.internal', { detail });
+        this.#d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail } });
+        return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail }, retryable: false };
       })
+      .then(result => { ended = result; return result; })
       .finally(() => {
         this.#active.delete(runId);
         this.#byConversation.delete(conversationId);
         this.#preemptedTasks.delete(runId);
+        this.#runModel.delete(runId);
+        this.#runMode.delete(runId);
+        this.#stopped.delete(runId);
         setTimeout(() => this.#preempted.delete(runId), 60_000).unref?.();
+        // 待っている発言の引き取り（会話の実行の鎖が途切れないよう、ロックを外した直後に、同じ呼び出しの中で次の実行を始める）
+        if (kind === 'chat') {
+          try { this.#drainPending(conversationId, runId, ended); } catch (error) { this.#d.log?.(`[ERROR] 待っていた発言の引き取り: ${(error as Error).stack ?? error}`); }
+        }
         try { this.onRunEnd?.({ runId, conversationId, kind }); } catch (error) { this.#d.log?.(`[ERROR] onRunEnd: ${(error as Error).message}`); }
       });
     this.#active.set(runId, { runId, conversationId, kind, ...(task ? { taskId: task.task.id } : {}), providers: new Set(chain.map(r => r.provider.id)), controller, done });
   }
 
-  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>): ToolDef[] {
+  // モデルに渡す道具の一覧。外す条件はここだけ（maxTools の数える前に外す）: 振り返りで禁止の効果・この実行で禁止された道具・持ち主が「止める」にした道具（tools.policies）。
+  // 「止める」は、パイプラインと同じく、実行を始めたときの設定（started）といまの設定の厳しい方。始めたときに止めていた道具は、途中で緩めても、その実行のあいだは戻らない。
+  // 計画モード（plan）の会話では、読む道具と Web の読み取り（PLAN_EFFECTS）だけを渡す（パイプラインの二重の拒否は runToolCall）。
+  // 実行に効くモードは、実行を始めたときのモード（#assemble の startedMode）と会話のいまのモードの厳しい方。始めたときが計画なら、途中でふつうに戻しても、その実行のあいだは計画のまま
+  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig, mode: PermissionMode = 'normal'): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
-    const exclude = (t: ToolDef) => (kind === 'review' && REVIEW_FORBIDDEN.has(t.effect)) || forbid?.has(t.name) === true;
+    const config = this.#d.config();
+    const exclude = (t: ToolDef) => (kind === 'review' && REVIEW_FORBIDDEN.has(t.effect)) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
+      || (mode === 'plan' && !PLAN_EFFECTS.has(t.effect));
     return this.#d.tools.registry.forRun(kind, { limit: model.maxTools, exclude });
   }
 
-  async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>): Promise<EngineResult> {
+  async #execute(runId: string, conversationId: string, chain: Route[], signal: AbortSignal, kind: RunKind, task?: { task: Task; control: { value: TaskControl } }, forbid?: ReadonlySet<string>, effort: string | null = null): Promise<EngineResult> {
     const d = this.#d;
     const config = d.config();
     d.runs.start(runId, kind, conversationId);
@@ -335,7 +550,17 @@ export class ChatEngine {
       task: taskSlot,
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
+      ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'normal' } : {}),
     };
+    ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider));
+    ctx.localOnly = kind === 'chat' ? isLocalPinned(config, d.conversations.get(conversationId)?.model_id) : task?.task.local_only === 1;
+    // 外から読んだ印は、実行の記録に読んだ時点で書く（途中で止まる・落ちる実行でも、やり直し・続きが引き継げるように）
+    let taintRecorded = false;
+    // 会話にも「外から読んだことがある」印を付ける（自動承認の判定役は、この会話ではもう使わない）
+    const recordTaint = () => { if (taintRecorded || !ctx.taint.tainted) return; taintRecorded = true; d.runs.markTainted(runId); if (kind === 'chat') d.conversations.markTainted(conversationId); };
+    // 自動承認で許可フォルダの外を読んだ印は、会話に書く（この会話のシェルのコマンドと通信の道具は、あとの実行でもずっと毎回確かめる。実行が止まる・落ちても残るよう、読んだ時点で書く）
+    let autoReadRecorded = false;
+    const recordAutoRead = () => { if (autoReadRecorded || !ctx.autoReadOutside) return; autoReadRecorded = true; d.conversations.markAutoRead(conversationId); };
     const addUsage = (u: Usage) => {
       for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
         if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;
@@ -344,7 +569,7 @@ export class ChatEngine {
     let replyLanguage: Language | undefined;
     const finishOk = (text: string, stop: StopReason, wrapUp?: { nextAction: string | undefined }): EngineResult => {
       if (replyLanguage && this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
-      if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted });
+      if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted, localOnly: ctx.localOnly === true });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop };
@@ -352,15 +577,16 @@ export class ChatEngine {
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
       // 実行ログには、相手のサーバーの本文も残す（画面に届く出来事・結果には入れない）
-      d.runs.finish(runId, { ok: false, attempts: counters.attempts, errorKind: f.kind, errorMessage: f.upstream ? `${f.message}: ${f.upstream}` : f.message, flags, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, modelId: route.model.id, model: route.model.model, providerId: route.provider.id });
+      d.runs.finish(runId, { ok: false, attempts: counters.attempts, errorKind: f.kind, errorMessage: f.upstream ? `${f.message}: ${upstreamText(f.upstream, d.registry.secrets())}` : f.message, flags, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, modelId: route.model.id, model: route.model.model, providerId: route.provider.id });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), ...(f.detail ? { detail: f.detail } : {}) });
       return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
     };
 
     const maxIterations = iterationLimit(config.tools.maxIterations, kind);
-    const compaction = { done: false };
+    const compaction: CompactionState = { count: 0, failed: false, summarized: 0, trimmedShown: -1 };
     for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
-      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid });
+      if (kind === 'chat') { this.#injectPending(runId, conversationId, ctx); recordTaint(); recordAutoRead(); }
+      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, effort, started: config, startedMode: ctx.permissionMode });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
         return finishFail(call.failure);
@@ -386,7 +612,16 @@ export class ChatEngine {
         const toolModel = lastRoute.model;
         const toolCapacity = d.status.get(toolModel.id)?.effective ?? toolModel.contextLength ?? 0;
         ctx.outputLimit = toolCapacity > 0 ? toolOutputLimit(contextAvailable(toolCapacity, toolModel), TOOL_OUTPUT_LIMIT) : undefined;
-        const outcome = await runToolCall(toolCall, ctx, { registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e) });
+        const outcome = await runToolCall(toolCall, ctx, {
+          registry: d.tools.registry, approvals: d.tools.approvals, db: d.conversations.db, emit: e => d.bus.publish(e), config: d.config,
+          permissionMode: () => d.conversations.modeOf(conversationId),
+          autoClassify: (prompt, classifierSignal) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal),
+          lastUserRequest: () => this.#lastUserRequest(conversationId),
+          conversationTainted: () => d.conversations.everTainted(conversationId),
+          conversationAutoRead: () => d.conversations.everAutoRead(conversationId),
+        });
+        recordTaint();
+        recordAutoRead();
         if (outcome.invalidArguments) invalidThisRound++;
         const toolSaved = d.conversations.append(conversationId, {
           role: 'tool', toolCallId: toolCall.id, name: toolCall.name, content: outcome.output.content, ...(outcome.output.isError ? { isError: true } : {}),
@@ -412,6 +647,40 @@ export class ChatEngine {
     const saved = d.conversations.append(conversationId, { role: 'assistant', content: text }, runId);
     d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'assistant' });
     return finishOk(text, 'other', { nextAction: wrapped ? nextStepOf(wrapped) : undefined });
+  }
+
+  // 自動承認の判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）。無ければ空（判定役には回らず、確かめる）
+  #lastUserRequest(conversationId: string): string {
+    const stored = this.#d.conversations.messages(conversationId, 50);
+    for (let i = stored.length - 1; i >= 0; i--) {
+      const message = stored[i]!.message;
+      if (message.role === 'user') return stripAttachments(message.content).slice(0, USER_REQUEST_LIMIT);
+    }
+    return '';
+  }
+
+  // 自動承認の判定役（モデル）を 1 回呼び、返事の文字を返す。呼べなければ投げる（呼ぶ側は確かめる側に倒す）。
+  // 使うのは、この実行がいま使っているモデル（route）だけで、ほかのモデルは探さない。手元のモデルを選んだ会話（ctx.localOnly）は、手元のモデルのときだけ。道具は渡さない。
+  // 判定役の呼び出しは engine_runs に入れず、会話も作らない
+  async #autoAsk(route: Route, ctx: ToolContext, prompt: ClassifierPrompt, signal: AbortSignal): Promise<string> {
+    const d = this.#d;
+    const { model, provider } = route;
+    if (ctx.localOnly && !isLocalProvider(provider)) throw new Error('the classifier model must be local for a local conversation');
+    const adapter = d.registry.get(provider.id);
+    if (!adapter) throw new Error('no adapter for the classifier model');
+    let release: (() => void) | undefined;
+    try {
+      release = await d.limiter.acquire(provider.id, () => provider.maxParallel, signal);
+      let text = '';
+      for await (const event of adapter.stream({
+        model, system: { frozen: prompt.system, dynamic: '' }, messages: [{ role: 'user', content: prompt.user }], tools: [], maxOutputTokens: Math.min(400, model.maxOutputTokens), signal,
+      })) {
+        if (event.type === 'text') text += event.delta;
+        else if (event.type === 'done' && event.stop === 'max_tokens') throw new TruncatedReply();
+      }
+      // 返事の短い理由は承認の記録・画面の出来事・実行ログの API に出るので、API キーそのものは、読む前に伏せる
+      return redactExact(text, d.registry.secrets());
+    } finally { release?.(); }
   }
 
   // 上限で止まった会話のまとめ。道具を渡さず、直近のやり取りを文字の記録にして 1 通で渡す（道具の呼び出しの履歴を送ると、道具の定義が要るプロバイダがあるため）。
@@ -451,7 +720,8 @@ export class ChatEngine {
   // - 道具の上限で止まったときは、さらに、この会話で作った実行待ち・返事待ちのタスク。まとめに次の一手があれば、次の一手も書く
   // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触った・この会話で作ったときだけ書き、そのとき実行中のままの状態（running）も許す
   // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
-  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, run: { wrapUp: boolean; workCalls: number; touched: ReadonlySet<string>; tainted: boolean }): void {
+  // 手元のモデルの会話の実行（localOnly）が書いたタスクは、手元のモデルだけで動かすタスクにする（メモに会話の文が入るため）
+  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, run: { wrapUp: boolean; workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean }): void {
     const d = this.#d;
     const note = summary.note.trim();
     if (!d.tasks || !note || run.tainted) return;
@@ -467,10 +737,11 @@ export class ChatEngine {
       const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
       if (!open.includes(task.status)) continue;
       d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }), ...(summary.nextAction ? { nextAction: summary.nextAction } : {}) }, 'clive', runId);
+      if (run.localOnly) d.tasks.markLocalOnly(id);
     }
   }
 
-  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: { done: boolean }; kind: RunKind; forbid?: ReadonlySet<string> | undefined }): Promise<CallResult> {
+  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: CompactionState; kind: RunKind; forbid?: ReadonlySet<string> | undefined; effort?: string | null | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined }): Promise<CallResult> {
     const d = this.#d;
     const sleep = d.sleep ?? abortableSleep;
     const retries = d.retriesPerModel ?? d.config().routing.retriesPerModel;
@@ -489,8 +760,10 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid });
+        const { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started, startedMode: p.startedMode });
         const toolNames = new Set(toolDefs.map(t => t.name));
+        // 考える深さは、そのモデルが受け付ける値のときだけ送る（鎖の途中で別のモデルに替わったとき、受け付けない値を送らない）
+        const effort = p.effort && modelEfforts(d.config(), model, d.status.get(model.id)).includes(p.effort) ? p.effort : undefined;
         let fitted;
         try {
           fitted = fitMessages({ system: `${system.frozen}\n${system.dynamic}`, messages: history, tools: apiTools, available, factor });
@@ -500,14 +773,27 @@ export class ChatEngine {
             detail: { reason: 'prompt_exceeds', measured: available, required: error.required, hint: engineText(language, 'hint.prompt_exceeds') } };
           break;
         }
-        // 外す発言が多ければ、外す部分を要約してから組み立て直す（1回の実行で1回まで。要約に失敗したら外すだけにする）
-        if (fitted.removed >= COMPACT_MIN_MESSAGES && !fallbackMode && !p.compaction.done) {
-          p.compaction.done = true;
-          const ok = await this.#compact({ route, adapter, runId: p.runId, conversationId: p.conversationId, removed: stored.slice(0, fitted.removed), previous: conversation?.summary ?? null, capacity, signal: p.signal });
-          if (ok) { if (!p.flags.includes('compacted')) p.flags.push('compacted'); attempt--; continue; }
+        // 外す発言が多ければ、外す部分を前の要約に足して要約し直してから組み立て直す（同じ実行の中でも、外す発言が増えたらまた。
+        // 1 回の実行で MAX_COMPACTIONS_PER_RUN 回まで。要約に失敗したら、その実行は外すだけにして、要約を呼び続けない）
+        if (fitted.removed >= COMPACT_MIN_MESSAGES && !fallbackMode && !p.compaction.failed && p.compaction.count < MAX_COMPACTIONS_PER_RUN) {
+          p.compaction.count++;
+          const removed = stored.slice(0, fitted.removed);
+          const ok = await this.#compact({ route, adapter, runId: p.runId, conversationId: p.conversationId, removed, previous: conversation?.summary ?? null, capacity, signal: p.signal });
+          if (ok) {
+            // お知らせは 1 回の実行で 1 回ずつ。件数は、この実行で要約した発言の合計に更新する（画面は同じお知らせを置き換える）
+            p.compaction.summarized += removed.length;
+            d.bus.publish({ type: 'compaction', runId: p.runId, conversationId: p.conversationId, summarized: p.compaction.summarized });
+            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'compacted', message: engineText(language, 'warn.compacted', { count: p.compaction.summarized }), params: { count: p.compaction.summarized } });
+            if (!p.flags.includes('compacted')) p.flags.push('compacted');
+            attempt--; continue;
+          }
+          p.compaction.failed = true;
         }
         if (fitted.removed > 0) {
-          d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'context_trimmed', message: engineText(language, 'warn.context_trimmed', { count: fitted.removed }), params: { count: fitted.removed } });
+          if (p.compaction.trimmedShown !== fitted.removed) {
+            p.compaction.trimmedShown = fitted.removed;
+            d.bus.publish({ type: 'warning', runId: p.runId, conversationId: p.conversationId, code: 'context_trimmed', message: engineText(language, 'warn.context_trimmed', { count: fitted.removed }), params: { count: fitted.removed } });
+          }
           if (!p.flags.includes('context_trimmed')) p.flags.push('context_trimmed');
         }
 
@@ -518,7 +804,7 @@ export class ChatEngine {
         let release: (() => void) | undefined;
         try {
           release = await d.limiter.acquire(provider.id, () => provider.maxParallel, p.signal);
-          for await (const event of adapter.stream({ model, system, messages: fitted.messages, tools: apiTools, maxOutputTokens: model.maxOutputTokens, signal: p.signal })) {
+          for await (const event of adapter.stream({ model, system, messages: fitted.messages, tools: apiTools, maxOutputTokens: model.maxOutputTokens, ...(effort ? { effort } : {}), signal: p.signal })) {
             if (event.type === 'text') { text += event.delta; d.bus.publish({ type: 'text.delta', runId: p.runId, conversationId: p.conversationId, text: event.delta }); }
             else if (event.type === 'usage') usage = { ...usage, ...event.usage };
             else if (event.type === 'tool_call') toolCalls.push(event.call);
@@ -527,7 +813,7 @@ export class ChatEngine {
         } catch (error) {
           const e = error instanceof ProviderError ? error
             : p.signal.aborted ? providerError('cancelled', 'cancelled', {}, { retryable: false })
-            : providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets((error as Error).message).slice(0, 200) });
+            : providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets((error as Error).message, d.registry.secrets()).slice(0, UPSTREAM_KEEP) });
           if (e.kind === 'cancelled' || p.signal.aborted) return { ok: false, cancelled: true, partial: text, failure: last, route };
           last = { kind: e.kind, message: e.text(language), ...(e.code ? { code: `provider.${e.code}`, params: e.params } : {}), retryable: e.retryable, route, ...(e.detail ? { detail: e.detail } : {}), ...(e.upstream ? { upstream: e.upstream } : {}) };
           if (text) {
@@ -553,6 +839,7 @@ export class ChatEngine {
           }
         }
         this.#checkTruncation(p.runId, p.conversationId, model, fitted.estimate, usage, capacity, p.flags);
+        if (effort && !p.flags.includes(`effort:${effort}`)) p.flags.push(`effort:${effort}`);
         return { ok: true, index, text, toolCalls, usage, stop: toolCalls.length ? 'tool_use' : stop, estimate: fitted.estimate.tokens, language };
       }
     }
@@ -561,12 +848,15 @@ export class ChatEngine {
 
   // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
   // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
-  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined }) {
+  // startedMode: 実行を始めたときの権限モード（実行の中でだけ渡す。使用量の数え方は次の実行のためなので、会話のいまのモードで数える）
+  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined; startedMode?: PermissionMode | undefined }) {
     const d = this.#d;
     const { model } = p;
     const config = d.config();
     const language = languageOf(config);
-    const toolDefs = this.#toolsFor(model, p.kind, p.forbid);
+    const current = d.conversations.modeOf(p.conversationId);
+    const mode: PermissionMode = p.kind === 'chat' ? stricterMode(p.startedMode ?? current, current) : 'normal';
+    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started, mode);
     const specs = ToolRegistry.specs(toolDefs);
     const fallbackMode = model.toolMode === 'json_fallback';
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;
@@ -575,7 +865,7 @@ export class ChatEngine {
     const upto = conversation?.summary_upto ?? 0;
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date()), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     let history = stored.map(m => m.message);
     if (fallbackMode) history = toJsonFallbackHistory(history, language);
@@ -592,9 +882,15 @@ export class ChatEngine {
     const config = d.config();
     const language = languageOf(config);
     let model: ModelConfig | undefined;
-    if (modelId !== undefined) {
-      model = config.models.find(m => m.id === modelId);
-      if (!model) return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: engineText(language, 'usage.model_missing', { id: modelId }), errorCode: 'engine.usage.model_missing', errorParams: { id: modelId } };
+    const existing = d.conversations.get(conversationId);
+    // 数えるモデル: 指定されたもの → 会話で選んだもの → 設定の順番の先頭の使えるもの。選んだモデルが使えなくても、ほかのモデルで数えない
+    const wanted = modelId ?? existing?.model_id ?? undefined;
+    if (wanted !== undefined) {
+      model = config.models.find(m => m.id === wanted);
+      if (!model) {
+        if (modelId === undefined) return this.#noUsableModel(this.#chain('chat', wanted).problems);
+        return { ok: false, httpStatus: 404, errorKind: 'not_found', errorMessage: engineText(language, 'usage.model_missing', { id: wanted }), errorCode: 'engine.usage.model_missing', errorParams: { id: wanted } };
+      }
       if (!((d.status.get(model.id)?.effective ?? model.contextLength ?? 0) > 0)) {
         return this.#noUsableModel([{ modelId: model.id, status: 'unknown', message: engineText(language, 'problem.unchecked'), messageCode: 'engine.problem.unchecked' }]);
       }
@@ -603,7 +899,6 @@ export class ChatEngine {
       model = chain.usable.map(r => r.model).find(m => (d.status.get(m.id)?.effective ?? m.contextLength ?? 0) > 0);
       if (!model) return this.#noUsableModel(chain.problems);
     }
-    const existing = d.conversations.get(conversationId);
     const snapshot = existing?.snapshot ?? this.#previewSnapshot(language);
     const built = this.#assemble({ conversationId, snapshot, model, kind: 'chat' });
     const { tokens } = estimateRequest(`${built.system.frozen}\n${built.system.dynamic}`, built.history, built.apiTools, built.factor);
@@ -639,8 +934,6 @@ export class ChatEngine {
       })) if (event.type === 'text') text += event.delta;
       if (!text.trim()) return false;
       d.conversations.setSummary(c.conversationId, text.trim(), c.removed.at(-1)!.id);
-      d.bus.publish({ type: 'compaction', runId: c.runId, conversationId: c.conversationId, summarized: c.removed.length });
-      d.bus.publish({ type: 'warning', runId: c.runId, conversationId: c.conversationId, code: 'compacted', message: engineText(language, 'warn.compacted', { count: c.removed.length }), params: { count: c.removed.length } });
       return true;
     } catch {
       if (c.signal.aborted) return false;

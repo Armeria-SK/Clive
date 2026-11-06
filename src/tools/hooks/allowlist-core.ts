@@ -15,7 +15,8 @@ export interface Reason { key: GuardMessageKey; params: Record<string, string | 
 // skipHidden: 「.」で始まる名前は読まれないものとして飛ばす（rg の既定）
 export interface ListSpec { deep: boolean; items: boolean; include: string[]; exclude: string[]; skipHidden?: boolean }
 // strict: スクリプトブロックの中。パスが分からない読み取りは、確かめでなく今回だけにする
-export interface PathRef { word: Word; mode: 'read' | 'write'; recursive: boolean; list?: ListSpec; strict?: boolean }
+// names: 名前（と大きさなどの情報）だけを出して、中身は読まない（ls・tree・find・Get-ChildItem）。パスが secrets・secret のフォルダだというだけでは止めない
+export interface PathRef { word: Word; mode: 'read' | 'write'; recursive: boolean; list?: ListSpec; strict?: boolean; names?: boolean }
 // 書き込み先を組み立てて調べるもの（11.4）。copy: cp・mv・Copy-Item・Move-Item（先がフォルダなら 先/元の名前）、join: New-Item -Path p -Name n（p/n）、rename: Rename-Item（親/n）
 export interface CopyUse { kind: 'copy' | 'join' | 'rename'; sources: Word[]; dest: Word | null; name: Word | null; recursive: boolean; dirFlag: boolean; noTargetDir: boolean }
 // remotes: push の宛先に使える remote の名前（設定に remote.<名前>.url があるもの）。無い名前は、git がフォルダ・URL として扱う
@@ -70,6 +71,7 @@ export class Acc {
   }
   strict = false;
   read(word: Word, recursive = false): void { this.paths.push({ word, mode: 'read', recursive, ...(this.strict ? { strict: true } : {}) }); }
+  readNames(word: Word, recursive = false): void { this.paths.push({ word, mode: 'read', recursive, names: true, ...(this.strict ? { strict: true } : {}) }); }
   readList(word: Word, list: ListSpec): void { this.paths.push({ word, mode: 'read', recursive: false, list }); }
   // 再帰して中身を読むコマンド（grep -r・rg・diff -r・findstr /s・git grep --untracked・tar -c）は、-Recurse の一覧と同じに、フォルダの下を歩いて調べる
   walk(word: Word, deep = true, skipHidden = false): void { this.readList(word, { deep, items: false, include: [], exclude: [], ...(skipHidden ? { skipHidden } : {}) }); }
@@ -105,7 +107,7 @@ export function psVarOk(name: string): boolean {
 
 // ── 値の型（C4）──
 // opt: 値は付けても付けなくてもよい（付けるときは =値）。var: 変数の名前（C8）。x: 見ない
-export type ValueType = 'n' | 's' | 'path-r' | 'path-w' | 'pat' | 'url' | 'name' | 'var' | 'opt' | 'x' | { enum: readonly string[] };
+export type ValueType = 'n' | 's' | 'path-r' | 'path-n' | 'path-w' | 'pat' | 'url' | 'name' | 'var' | 'opt' | 'x' | { enum: readonly string[] };
 
 const NUMBER = /^[-+]?[0-9]+(?:\.[0-9]+)?(?:[kKmMgGtT]i?[bB]?)?$/u;
 
@@ -119,6 +121,7 @@ export function checkValue(type: ValueType, word: Word, acc: Acc, cmd: string, f
       if (!word.dynamic && !NUMBER.test(word.text)) acc.add('once', 'list.form', { cmd, detail: `${flag} ${word.text}`.trim() }, exempt);
       return;
     case 'path-r': if (!(word.text === '-' && !word.dynamic)) acc.read(word); return;
+    case 'path-n': if (!(word.text === '-' && !word.dynamic)) acc.readNames(word); return;
     case 'path-w': if (!(word.text === '-' && !word.dynamic)) acc.write(word); return;
     case 'url': checkUrl(word, acc, ctx, cmd); return;
     case 'var': if (word.dynamic || !(ctx.shell === 'bash' || ctx.shell === 'sh' ? bashVarOk(word.text) : psVarOk(word.text))) acc.add('once', 'list.env', { name: word.text }, false); return;

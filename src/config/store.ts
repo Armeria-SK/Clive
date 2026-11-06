@@ -1,13 +1,18 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Value } from '@sinclair/typebox/value';
+import { configText } from '../shared/messages/config.ts';
+import type { MessageParams } from '../shared/messages/define.ts';
 import { parseAllowEntry } from '../tools/hooks/allow-entry.ts';
 import { checkBaseUrl } from '../shared/url.ts';
+import { TOOL_NAME_PATTERN } from '../tools/tool-policy.ts';
+import { friendlyIssue } from './friendly.ts';
 import { AppConfig, ToolsConfig as ToolsConfigSchema, type ModelConfig, type ProviderConfig, type ToolsConfig } from './schema.ts';
 
 const ToolsSchema = ToolsConfigSchema();
 
-export interface ConfigIssue { path: string; message: string }
+// code / params は、形の誤り（パターン・長さ・数の範囲など）の文のコード（config.<キー>）と差し込みの値。画面は、これから画面の言語の文を作る（message は日本語の文）
+export interface ConfigIssue { path: string; message: string; code?: string; params?: MessageParams }
 
 // 文（場所: 内容）から場所と内容を取り出す。issues を渡されなかった ConfigError の代わり。場所が無い文は path が空になる
 function issueOfText(text: string): ConfigIssue {
@@ -87,6 +92,9 @@ function findings(config: AppConfig): Finding[] {
   config.tools.shell.allow.forEach((entry, i) => {
     if (!parseAllowEntry(entry)) add('tools.shell.allow', `${i + 1} 番目の「${entry}」は書けない形です。決まったコマンドだけ（引用符・変数・ワイルドカード・置換・リダイレクト・区切りを含まない、1 つの文）を書いてください`);
   });
+  for (const name of Object.keys(config.tools.policies)) {
+    if (!TOOL_NAME_PATTERN.test(name)) add('tools.policies', `「${name}」は道具の名前として書けません（英小文字で始まり、英小文字・数字・_ だけ、64 文字まで）`);
+  }
   for (const origin of config.server.origins) {
     try { if (new URL(origin).origin !== origin) add('server.origins', `「${origin}」は origin（末尾の / やパスなし）で書いてください`); }
     catch { add('server.origins', `「${origin}」が URL として読めません`); }
@@ -114,10 +122,11 @@ function issuePath(pointer: string, raw: unknown): string {
 export function parseConfig(raw: unknown): AppConfig {
   const withDefaults = Value.Default(AppConfig, Value.Clone(raw));
   if (!Value.Check(AppConfig, withDefaults)) {
-    const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20);
+    // 正規表現や「Expected string to match …」はそのまま見せない。項目ごとの友好的な文（src/shared/messages/config.ts）にする
+    const errors = [...Value.Errors(AppConfig, withDefaults)].slice(0, 20).map(e => { const friendly = friendlyIssue(e); return { e, friendly, message: friendly ? configText('ja', friendly.code, friendly.params) : e.message }; });
     throw new ConfigError('設定ファイルの形式が正しくありません',
-      errors.map(e => `${e.path || '/'}: ${e.message}`),
-      errors.map(e => ({ path: issuePath(e.path, withDefaults), message: e.message })));
+      errors.map(x => `${x.e.path || '/'}: ${x.message}`),
+      errors.map(x => ({ path: issuePath(x.e.path, withDefaults), message: x.message, ...(x.friendly ? { code: `config.${x.friendly.code}`, params: x.friendly.params } : {}) })));
   }
   const config = withDefaults as AppConfig;
   const found = findings(config);
@@ -125,10 +134,11 @@ export function parseConfig(raw: unknown): AppConfig {
   return config;
 }
 
-export function atomicWriteFile(path: string, content: string): void {
+// mode: 作る一時ファイルの権限（POSIX。.env のような秘密のファイルを 0600 にするため）。置き換えたあとのファイルがそのまま持つ
+export function atomicWriteFile(path: string, content: string, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx' });
+  writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx', ...(mode === undefined ? {} : { mode }) });
   for (let attempt = 0; ; attempt++) {
     try { renameSync(tmp, path); return; }
     catch (error) {

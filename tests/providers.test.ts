@@ -132,13 +132,16 @@ test('OpenAI 互換: キーは Authorization ヘッダで送る', async t => {
 
 test('probe: LM Studio で読み込み時の長さが足りなければ too_small', async t => {
   const server = await fakeServer((req, _body, res) => {
-    assert.equal(req.url, '/api/v0/models/test-model');
     res.writeHead(200, { 'Content-Type': 'application/json' });
+    // 長さは /api/v0/models/<モデル> から読む。/v1/models は考える深さ（efforts）を読むためだけに見る（無い返事でも長さの判定は変わらない）
+    if (req.url === '/v1/models') { res.end(JSON.stringify({ data: [] })); return; }
+    assert.equal(req.url, '/api/v0/models/test-model');
     res.end(JSON.stringify({ id: 'test-model', state: 'loaded', max_context_length: 131072, loaded_context_length: 4096 }));
   });
   t.after(() => server.close());
   const result = await new OpenAiCompatibleAdapter(compat(`${server.url}/v1`, { server: 'lmstudio' }), {}).probe(model(), 65536);
   assert.equal(result.status, 'too_small');
+  assert.equal(result.efforts, undefined);
   assert.equal(result.measured, 4096);
   assert.match(result.hint ?? '', /Context Length/);
 });

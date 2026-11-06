@@ -4,7 +4,7 @@ import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
   advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, compactTokens, contextPercent, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
-  restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
+  mergeNotice, recountsUsage, restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -83,7 +83,7 @@ test('slashMatches: 先頭の / のあとの 1 語を前方一致で候補にす
 });
 
 test('slash の説明文は、全コマンドぶん ja と en の両方にある', () => {
-  assert.deepEqual(SLASH_COMMANDS.map(c => c.name), ['new', 'task', 'tasks', 'skills', 'log', 'memory', 'stop', 'rename', 'archive']);
+  assert.deepEqual(SLASH_COMMANDS.map(c => c.name), ['new', 'task', 'tasks', 'skills', 'log', 'memory', 'stop', 'rename', 'archive', 'summary']);
   for (const command of SLASH_COMMANDS) {
     assert.ok(ja[command.desc].length > 0, `ja: ${command.desc}`);
     assert.ok(en[command.desc].length > 0, `en: ${command.desc}`);
@@ -175,6 +175,17 @@ test('undoMemoryEvent: 取り消しが通ったときだけ「取り消し済み
   } finally { globalThis.fetch = original; }
 });
 
+test('mergeNotice: 同じ実行の同じ key のお知らせは置き換え、key が無い・違うものは並べる。多すぎたら古いものから落とす', () => {
+  type N = { runId: string; message: string; key?: string };
+  const a: N = { runId: 'r1', key: 'compaction', message: '要約 4 件' };
+  const warn: N = { runId: 'r1', message: '再試行' };
+  assert.deepEqual(mergeNotice([a, warn], { runId: 'r1', key: 'compaction', message: '要約 9 件' }), [{ runId: 'r1', key: 'compaction', message: '要約 9 件' }, warn], '位置は元のまま、内容だけ更新');
+  assert.deepEqual(mergeNotice([a], { runId: 'r2', key: 'compaction', message: '別の実行' }).map(n => n.message), ['要約 4 件', '別の実行'], '実行が違えば並べる');
+  assert.equal(mergeNotice([a], { runId: 'r1', message: '再試行' }).length, 2, 'key が無いものは並べる');
+  assert.equal(mergeNotice([warn, warn], { runId: 'r1', message: 'x' }, 3).length, 3);
+  assert.deepEqual(mergeNotice([warn, a], { runId: 'r1', message: 'x' }, 2).map(n => n.message), ['要約 4 件', 'x'], '多すぎたら古いものから');
+});
+
 test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引数を使う', () => {
   const kana = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
   const keys = Object.keys(ja).filter(k => /^(chat|approval|slash|markdown)\.|^notice\.(compacted|stopped)$|^toast\.(undo|memoryUndo)/u.test(k));
@@ -188,7 +199,8 @@ test('辞書: 段階 5 の英語に日本語が混ざらず、関数の文は引
   assert.match(en['notice.compacted'](1), /^Summarized 1 older message \(/u);
   assert.match(en['notice.compacted'](4), /^Summarized 4 older messages \(/u);
   assert.match(en['notice.compacted'](4), /originals are kept/u, '原文が残っていることを伝える');
-  assert.match(ja['notice.compacted'](4), /^古い発言 4 件を要約しました（原文は残っていて、.*探せます）$/u);
+  assert.match(ja['notice.compacted'](4), /^古い発言 4 件を要約しました（要約は会話の「…」メニューから読めます。原文は残っていて、.*探せます）$/u);
+  assert.match(en['notice.compacted'](4), /summary from the conversation "…" menu/u, '要約の読み方と原文の探し方を分けて書く');
   assert.equal(en['chat.pdfPages'](1), 'PDF, 1 page');
   assert.equal(en['approval.position'](1, 2), '1 / 2');
 });
@@ -350,6 +362,27 @@ test('sendFailureOf: モデルが 1 つも無い 409（problems が空）だけ 
   assert.equal(sendFailureOf(new Error('x'), 'x', []).noModels, false);
 });
 
+test('sendChoiceOf: 新しい会話の最初の発言は、画面で覚えている選びを一緒に送る。使えるモデルで送る道は、押したモデルを明示して送る（覚えている古い選びは使わない）', () => {
+  const stale = { modelId: 'broken', effort: 'high' };
+  assert.deepEqual(sendChoiceOf(null, stale), { modelId: 'broken', effort: 'high' }, '新しい会話: 画面の選びを送る');
+  assert.deepEqual(sendChoiceOf(null, { modelId: null, effort: null }), {}, '自動のまま');
+  assert.deepEqual(sendChoiceOf('c1', stale), {}, '会話があれば、サーバーが覚えているので送らない');
+  assert.deepEqual(sendChoiceOf(null, stale, { modelId: 'alt' }), { modelId: 'alt' }, '新しい会話でも、押したモデルを送る（覚えている選びや考える深さは持ち越さない）');
+  assert.deepEqual(sendChoiceOf('c1', stale, { modelId: 'alt' }), { modelId: 'alt' }, '会話があるときも、押したモデルを一緒に送って会話に覚えさせる');
+  assert.deepEqual(sendChoiceOf(null, stale, { modelId: 'alt', effort: 'low' }), { modelId: 'alt', effort: 'low' });
+});
+
+test('sendChoiceOf: 権限モードは、新しい会話の最初の発言にだけ、ふつう以外のときに添える。会話があれば送らない。「この計画で進める」のように押した選びは、そのまま送る', () => {
+  const none = { modelId: null, effort: null };
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'auto' }), { permissionMode: 'auto' });
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'plan' }), { permissionMode: 'plan' });
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'normal' }), {}, 'ふつうは送らない（新しい会話はいつもふつうから）');
+  assert.deepEqual(sendChoiceOf(null, none), {});
+  assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'auto' }), {}, '会話があれば、サーバーが覚えている');
+  assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'plan' }, { permissionMode: 'normal' }), { permissionMode: 'normal' }, '計画から進めるときは、ふつうに戻す選びを一緒に送る');
+  assert.deepEqual(sendChoiceOf(null, { modelId: 'm', effort: 'low', permissionMode: 'auto' }), { modelId: 'm', effort: 'low', permissionMode: 'auto' });
+});
+
 test('newConversationId / sendTarget: 最初の発言は画面が決めた id へ送り（会話を先に作らない）、断られたあとのやり直しは同じ id を使う', () => {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
   assert.match(newConversationId(), uuid, 'ふつうの環境（randomUUID がある）');
@@ -467,4 +500,10 @@ test('使用量の表示: 割合は四捨五入、1 を超えたら「100%+」�
   assert.equal(ja['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k（全体 200k）');
   assert.equal(en['context.tip']('12.4k', '180k', '200k'), '12.4k / 180k (total 200k)');
   for (const key of ['context.label', 'context.over'] as const) { assert.ok(ja[key] && en[key], key); assert.doesNotMatch(en[key], /[\u3040-\u30ff\u4e00-\u9fff]/u, key); }
+});
+
+test('使用量の輪を数え直す変更: モデルを替えたときと、権限モードを替えたとき（計画は渡す道具の一覧と指示が変わる）。名前の変更・アーカイブ・削除では数え直さない', () => {
+  assert.equal(recountsUsage('model'), true);
+  assert.equal(recountsUsage('mode'), true);
+  for (const kind of ['renamed', 'archived', 'unarchived', 'deleted'] as const) assert.equal(recountsUsage(kind), false, kind);
 });

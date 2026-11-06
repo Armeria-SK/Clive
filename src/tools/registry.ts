@@ -12,6 +12,8 @@ export class ToolRegistry {
 
   get(name: string): ToolDef | undefined { return this.#tools.get(name); }
   names(): string[] { return [...this.#tools.keys()]; }
+  // 登録されている道具すべて（どの種類の実行で使えるかによらず）
+  list(): ToolDef[] { return [...this.#tools.values()]; }
 
   forRun(kind: RunKind, options: { limit?: number | undefined; exclude?: (tool: ToolDef) => boolean } = {}): ToolDef[] {
     const tools = [...this.#tools.values()].filter(t => t.allowedIn.includes(kind) && !options.exclude?.(t));

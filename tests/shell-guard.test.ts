@@ -155,6 +155,72 @@ test('shell: 表形式のプローブ（PowerShell）', t => {
   }
 });
 
+test('shell: 外から取得するコマンドは、確かめの結果にかかわらず fetched になる（実行すると外の中身を読むので、「外から読んだ」印の材料）', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
+  const probes: Array<[string, 'bash' | 'powershell', Decision, boolean]> = [
+    ['curl -s https://example.com/', 'bash', 'allow', true],
+    ['curl -s -d x https://example.com/', 'bash', 'ask', true],
+    ['git status', 'bash', 'allow', false],
+    ['cat sub/a.txt', 'bash', 'allow', false],
+    ['echo hello', 'bash', 'allow', false],
+    ['curl.exe -s https://example.com/', 'powershell', 'allow', true],
+    ['Invoke-WebRequest -Uri https://example.com/ -MaximumRedirection 0', 'powershell', 'allow', true],
+    ['irm https://example.com/ -MaximumRedirection 0', 'powershell', 'allow', true],
+    ['Get-Content sub/a.txt', 'powershell', 'allow', false],
+  ];
+  for (const [command, shell, decision, fetched] of probes) {
+    const v = verdict(command, shell);
+    assert.deepEqual([v.decision, v.fetched], [decision, fetched], `${shell}: ${command}`);
+  }
+  assert.equal(verdict('', 'bash').fetched, false, '空のコマンドの早い戻りでも fetched は決まっている');
+});
+
+test('shell: 外の中身を持ち込むコマンド（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）も fetched になる。持ち込まないもの（init・worktree・npm ls）はならない。持ち主の許可の一覧に入れても fetched', t => {
+  const f = fixture(t);
+  const verdict = (command: string, allow: string[] = []) => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell: 'bash', windows: false, allow });
+  const probes: Array<[string, boolean]> = [
+    ['git clone https://example.com/x.git', true], ['git fetch origin', true], ['git pull', true], ['git ls-remote https://example.com/x.git', true], ['git submodule update --init', true],
+    ['npm install left-pad', true], ['npm i', true], ['pip install requests', true], ['yarn add x', true], ['cargo install x', true],
+    ['git init', false], ['git worktree add ../w', false], ['git status', false], ['npm ls', false], ['npm --version', false], ['pip list', false],
+  ];
+  for (const [command, fetched] of probes) {
+    const v = verdict(command);
+    assert.equal(v.fetched, fetched, command);
+    if (fetched) assert.equal(v.decision, 'ask', `${command}: 持ち込むものはもともと確かめ（札を通ったときに印が付く）`);
+  }
+  assert.equal(verdict('git fetch origin', ['git fetch']).fetched, true, '持ち主が許可の一覧に入れて札なしで動く形でも、動かせば外の中身を持ち込む');
+  assert.equal(verdict('git clone https://example.com/x.git && echo done').fetched, true, 'つないだコマンドの一部でも');
+  assert.equal(verdict('git clone https://example.com/x.git; bash x/run.sh').decision, 'ask', 'clone のあとにシェルで動かす形を、新しく止めたりしない（curl とは別。今まで通り確かめ）');
+});
+
+// 許可の一覧にある形のうち、外のレジストリに問い合わせて、相手の書いた文字（説明・版・作者の文）を読むもの。確かめなしで動くが、動かしたら「外から読んだ」印を付ける
+test('shell: レジストリに問い合わせる形（npm view・npm outdated・pip list --outdated）も fetched になる。ローカルだけを見る形・言語の道具の --version はならない', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'bash' | 'powershell' = 'bash') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
+  const reads: Array<[string, 'bash' | 'powershell', Decision]> = [
+    ['npm view left-pad', 'bash', 'allow'], ['npm view left-pad --json', 'bash', 'allow'], ['npm outdated', 'bash', 'allow'], ['npm outdated --json', 'bash', 'allow'],
+    ['pip list --outdated', 'bash', 'allow'], ['pip3 list --outdated --format=json', 'bash', 'allow'],
+    ['npm view left-pad', 'powershell', 'allow'], ['npm outdated', 'powershell', 'allow'], ['pip list --outdated', 'powershell', 'allow'],
+    // 一覧の形でない問い合わせも、札で許して動かせば同じ（相手の文字を読む）
+    ['npm info left-pad', 'bash', 'ask'], ['npm show left-pad', 'bash', 'ask'], ['npm search left-pad', 'bash', 'ask'], ['npm audit', 'bash', 'ask'],
+    ['npm view left-pad --registry=https://example.com', 'bash', 'ask'], ['npm outdated $X', 'bash', 'ask'],
+    ['pip download requests', 'bash', 'ask'], ['pip index versions requests', 'bash', 'ask'],
+  ];
+  for (const [command, shell, decision] of reads) {
+    const v = verdict(command, shell);
+    assert.deepEqual([v.decision, v.fetched], [decision, true], `${shell}: ${command} → ${v.reasons.join(' / ')}`);
+  }
+  const local: Array<[string, 'bash' | 'powershell']> = [
+    ['npm ls', 'bash'], ['npm ls --json', 'bash'], ['npm --version', 'bash'], ['pip list', 'bash'], ['pip list --format=json', 'bash'], ['pip show requests', 'bash'], ['pip freeze', 'bash'], ['pip --version', 'bash'],
+    ['node --version', 'bash'], ['python --version', 'bash'], ['tsc --version', 'bash'], ['deno --version', 'bash'], ['bun --version', 'bash'],
+    ['npm ls', 'powershell'], ['pip list', 'powershell'], ['node --version', 'powershell'],
+  ];
+  for (const [command, shell] of local) assert.equal(verdict(command, shell).fetched, false, `${shell}: ${command}`);
+  // curl と同じく、問い合わせた文字をそのままシェル・インタプリタへ流す形は止める
+  assert.equal(verdict('npm view left-pad | bash').decision, 'deny');
+});
+
 test('shell: outsideRoots=deny なら外は止める。allow は「一覧に無い」確かめだけを外し、拒否は外せない', t => {
   const f = fixture(t);
   const bash = { shell: 'bash' as const, windows: false };
@@ -291,4 +357,25 @@ test('値の分からないパス: 読むなら ふつうの確かめ、書く�
   assert.equal(run('Set-Content $x hi', 'powershell').onceOnly, true);
   assert.equal(run('Get-ChildItem | ForEach-Object { Remove-Item $_ }', 'powershell').onceOnly, true);
   assert.equal(run('Get-ChildItem | ForEach-Object { $_.Name }', 'powershell').decision, 'allow');
+});
+
+// 段 8b: 確かめの理由の種類。自動承認が判定役に回すのは outside_read と risky_command だけ。書く・送る・判定できない・持ち主が書いた確かめ・コードを動かすものは、別の種類になる
+test('shell: 確かめの種類（askKinds）。外を読むだけは outside_read、外に書くは outside_write、外とやり取りは egress、判定できないは opaque、持ち主の確かめは owner、コードを動かすは code', t => {
+  const f = fixture(t);
+  const base = posix(f.base);
+  const kinds = (command: string, ask: string[] = []) => checkShellCommand(command, f.ws, { policy: f.policy, outsideRoots: 'ask', shell: 'bash', windows: false, ask }).askKinds.slice().sort();
+  assert.deepEqual(kinds('cat /etc/hosts'), ['outside_read']);
+  assert.deepEqual(kinds('ls /etc/*'), ['outside_read']);
+  assert.deepEqual(kinds('cd .. && ls'), ['outside_read']);
+  assert.deepEqual(kinds(`cp sub/a.txt ${base}/b.txt`), ['outside_write']);
+  assert.deepEqual(kinds(`echo x > ${base}/out.txt`), ['outside_write']);
+  assert.deepEqual(kinds(`rm ${base}/x*`), ['code', 'outside_write'], '外に書くもの（ワイルドカードの手前だけが外でも）は読むだけの種類にならない');
+  assert.deepEqual(kinds('curl -X POST https://example.com -d @data.json'), ['egress']);
+  assert.deepEqual(kinds('curl http://192.168.1.5/x'), ['egress']);
+  assert.deepEqual(kinds('cat $SECRET_DIR/x'), ['opaque']);
+  assert.deepEqual(kinds('ls', ['ls']), ['owner']);
+  assert.deepEqual(kinds('cat /etc/hosts', ['cat']), ['outside_read', 'owner'], '重なれば両方が付く（1 つでも回さない種類があれば、判定役には回らない）');
+  assert.deepEqual(kinds('npm install left-pad'), ['code']);
+  assert.deepEqual(kinds('ls'), [], '確かめが無ければ種類も無い');
+  assert.deepEqual(kinds('cat .env'), [], '拒否には種類が付かない（判定役には送らない）');
 });

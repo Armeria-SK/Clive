@@ -39,6 +39,7 @@ import { TaskStore, taskView } from './tasks/store.ts';
 import { Worker } from './tasks/worker.ts';
 import { Uploads } from './uploads/store.ts';
 import { ToolRegistry } from './tools/registry.ts';
+import { ignoredPolicyNames } from './tools/tool-policy.ts';
 import type { ToolDef } from './tools/types.ts';
 import { MemoryStore, renderBooks } from './memory/store.ts';
 
@@ -67,6 +68,8 @@ export interface AppOptions {
 
 export class App {
   readonly paths: AppPaths;
+  // 提供元が鍵を読む環境変数（ふだんは process.env）。画面から入れた鍵はここにも入れ、起動し直さなくても効かせる
+  readonly env: Record<string, string | undefined>;
   readonly configStore: ConfigStore;
   readonly db: DatabaseSync;
   readonly conversations: Conversations;
@@ -89,24 +92,27 @@ export class App {
   readonly worker: Worker;
   readonly health: HealthMonitor;
   readonly log: (line: string) => void;
-  readonly bootServer: AppConfig['server'];
+  // いま動いている Web サーバーの設定（起動したとき、または画面から反映したときの値）。設定ファイルの server がこれと違えば、反映が要る
+  bootServer: AppConfig['server'];
 
   constructor(options: AppOptions) {
     this.paths = options.paths;
+    this.env = (options.env ?? process.env) as Record<string, string | undefined>;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
     this.configStore = new ConfigStore(this.paths.config);
     const config = this.configStore.load();
     ensureWorkspace(this.paths, languageOf(config));
     this.bootServer = structuredClone(config.server);
+    this.#warnIgnoredPolicies(config);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
     const now = options.now ?? Date.now;
-    this.conversations = new Conversations(this.db, now);
+    this.conversations = new Conversations(this.db, now, this.log);
     this.runs = new Runs(this.db, now);
     this.kv = new KV(this.db, now);
     const dangling = this.runs.closeDangling(engineText(languageOf(config), 'run.restart_interrupted'));
     if (dangling) this.log(`[INFO] 前回の終了時に途中だった実行 ${dangling} 件を中断扱いにしました`);
     this.registry = new ProviderRegistry({
-      env: options.env ?? process.env,
+      env: this.env,
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.adapterOverride ? { override: options.adapterOverride } : {}),
     });
@@ -184,6 +190,11 @@ export class App {
 
   #applied = '';
 
+  // tools.policies に書かれていても、方針を持てない道具（task_complete など）の分は効かない。気づけるよう 1 行ログに出す
+  #warnIgnoredPolicies(config: AppConfig): void {
+    for (const name of ignoredPolicyNames(config)) this.log(`[WARN] tools.policies の「${name}」は、方針を持てない道具（タスクの進め方に必要）なので無視します`);
+  }
+
   #importCuriosity(): void {
     if (this.kv.get('curiosity:imported')) return;
     const path = join(this.paths.workspace, 'CURIOSITY.md');
@@ -202,6 +213,7 @@ export class App {
       this.registry.reload(config);
       void this.status.probeAll(config).catch(error => this.log(`[ERROR] 設定の再読み込み後の確認に失敗: ${(error as Error).message}`));
       this.log('[INFO] 設定ファイルの変更を読み込みました');
+      this.#warnIgnoredPolicies(config);
       this.worker?.poke();
     }
     this.#applied ||= json;
@@ -222,14 +234,18 @@ export class App {
     return this.memory ? estimateTextTokens(renderBooks(this.memory.list(), languageOf(this.config()))) : 0;
   }
 
-  async applyConfig(next: AppConfig): Promise<AppConfig> {
+  // probe: false は、モデルやプロバイダに関わらない変更（道具の方針など）で、モデルの確認の通信をしない
+  async applyConfig(next: AppConfig, options: { probe?: boolean } = {}): Promise<AppConfig> {
     const saved = this.configStore.save(next);
     this.#applied = JSON.stringify(saved);
     this.registry.reload(saved);
-    await this.status.probeAll(saved);
+    if (options.probe !== false) await this.status.probeAll(saved);
     this.worker.poke();
     return saved;
   }
+
+  // 画面から反映した server の設定を、「いま動いているもの」として覚える（restartRequired の比べ先）
+  markServerApplied(server: AppConfig['server']): void { this.bootServer = structuredClone(server); }
 
   restartRequired(): boolean {
     return JSON.stringify(this.config().server) !== JSON.stringify(this.bootServer);
@@ -237,6 +253,7 @@ export class App {
 
   close(): void {
     this.worker.stop();
+    this.engine.saveQueued();
     this.engine.stopAll();
     this.approvals.cancelAll();
     this.db.close();

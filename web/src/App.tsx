@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, type Approval, type Conversation, type NotificationItem, type Profile, type WorkerStatus } from './api.ts';
+import { api, type Approval, type Conversation, type ModelView, type NotificationItem, type Profile, type WorkerStatus } from './api.ts';
 import { ActivityPanel } from './ActivityPanel.tsx';
 import { presenceOf } from './avatar.ts';
-import { Chat, type ConversationChange, type RunNotice } from './Chat.tsx';
+import { Chat, type RunNotice } from './Chat.tsx';
+import { ArchivedPage } from './ArchivedPage.tsx';
+import { archiveConversation, unarchiveConversation, type ConversationChange } from './conversation-actions.ts';
+import { DeleteDialog } from './DeleteDialog.tsx';
+import { RenameDialog } from './RenameDialog.tsx';
+import { SummaryDialog } from './SummaryDialog.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
 import { useEscapeLayer, useExit } from './hooks.ts';
 import { useContextUsage } from './use-context-usage.ts';
 import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
+import { mergeNotice, recountsUsage } from './chat-logic.ts';
 import { LanguagePrompt } from './LanguagePrompt.tsx';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
@@ -18,7 +24,9 @@ import { NotificationBubble } from './NotificationBubble.tsx';
 import { notificationLink } from './notification-meta.ts';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { Palette } from './Palette.tsx';
-import { PAGE_META, pickChatModel } from './pages.ts';
+import { PAGE_META, pickChatModelView } from './pages.ts';
+import { OPEN_MODE_MENU_EVENT } from './ModeMenu.tsx';
+import { OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
 import { chatHash, pageBehind, parseRoute, type Route } from './routes.ts';
 import { Runs } from './Runs.tsx';
 import { serverText, warningText } from './server-text.ts';
@@ -67,7 +75,7 @@ export function App() {
   const [notificationRevision, setNotificationRevision] = useState(0);
   const [memoryRevision, setMemoryRevision] = useState(0);
   const [celebrating, setCelebrating] = useState(false);
-  const [modelName, setModelName] = useState<string | null>(null);
+  const [modelsInfo, setModelsInfo] = useState<{ models: ModelView[]; routing: { chat: string[] } } | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
   const [runStarts, setRunStarts] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<LayoutMode>(() => layoutModeFor(window.innerWidth));
@@ -84,6 +92,10 @@ export function App() {
   const setupChecked = useRef(false);
   const keptSettings = useRef<KeptEdits | null>(null);
   const taskConversations = useRef(new Map<string, string>());
+  const [renaming, setRenaming] = useState<Conversation | null>(null);
+  const [summaryFor, setSummaryFor] = useState<Conversation | null>(null);
+  const [deleting, setDeleting] = useState<Conversation | null>(null);
+  const [archivedRevision, setArchivedRevision] = useState(0);
 
   const refreshList = useCallback(() => {
     void api.conversations().then(r => { setConversations(r.conversations); setConversationsLoaded(true); }).catch(() => undefined);
@@ -103,7 +115,7 @@ export function App() {
     void api.notifications().then(r => { setNotifications(r.notifications); setUnread(r.unread); setNotificationsFailed(false); }).catch(() => setNotificationsFailed(true));
   }, []);
   const refreshMeta = useCallback(() => {
-    void api.models().then(r => setModelName(pickChatModel(r.models, r.routing))).catch(() => undefined);
+    void api.models().then(r => setModelsInfo({ models: r.models, routing: r.routing })).catch(() => undefined);
     void api.settings().then(s => setRestartRequired(s.restartRequired)).catch(() => undefined);
   }, []);
   useEffect(() => {
@@ -257,11 +269,15 @@ export function App() {
 
   const onConversationChanged = useCallback((change: ConversationChange) => {
     refreshList();
-    if (change.kind === 'archived') tabState.close(`chat:${change.id}`);
+    setArchivedRevision(n => n + 1);
+    if (change.kind === 'archived' || change.kind === 'deleted') tabState.close(`chat:${change.id}`);
+    if (change.kind === 'deleted' && currentRef.current === change.id) location.hash = '#/';
     if (change.kind === 'unarchived') tabState.openChat(change.id);
+    // モデルか権限モードを替えたら、使用量の輪を、替えたあとの条件で数え直す
+    if (recountsUsage(change.kind)) setEndRevision(n => n + 1);
   }, [refreshList, tabState.close, tabState.openChat]);
   const addNotice = (conversationId: string, notice: RunNotice) =>
-    setNotices(state => ({ ...state, [conversationId]: [...(state[conversationId] ?? []), notice].slice(-8) }));
+    setNotices(state => ({ ...state, [conversationId]: mergeNotice(state[conversationId] ?? [], notice) }));
   const bump = (conversationId: string) => setRevisions(state => ({ ...state, [conversationId]: (state[conversationId] ?? 0) + 1 }));
   const approvalTarget = useCallback((a: Pick<Approval, 'conversationId' | 'runId'>) => approvalTargetHash(a, runContext()), []);
 
@@ -281,10 +297,10 @@ export function App() {
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, text: d.text + e.text } : d));
         break;
       case 'warning':
-        if (e.code !== 'compacted') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: warningText(e, getLanguage()) });
+        if (e.code !== 'compacted') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', code: e.code, message: warningText(e, getLanguage()), ...(e.code === 'context_trimmed' ? { key: 'context_trimmed' } : {}) });
         break;
       case 'compaction':
-        addNotice(e.conversationId, { runId: e.runId, kind: 'compaction', message: t('notice.compacted', e.summarized) });
+        addNotice(e.conversationId, { runId: e.runId, kind: 'compaction', key: 'compaction', message: t('notice.compacted', e.summarized) });
         break;
       case 'message.saved':
         bump(e.conversationId);
@@ -294,8 +310,12 @@ export function App() {
       case 'tool.call':
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: e.name, activeInput: e.input } : d));
         break;
+      case 'tool.auto':
+        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, autoChecking: e.state === 'checking' } : d));
+        if (e.state === 'allowed') addNotice(e.conversationId, { runId: e.runId, kind: 'auto', message: t('notice.autoAllowed', e.name, e.reason ?? '') });
+        break;
       case 'tool.result':
-        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined, activeInput: undefined } : d));
+        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined } : d));
         if (e.decision === 'deny') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', message: t('notice.toolDenied', e.name, e.preview.split('\n').slice(1, 3).join(' ')) });
         break;
       case 'approval.requested':
@@ -353,6 +373,17 @@ export function App() {
         }
         break;
       }
+      case 'pending.changed':
+        bump(e.conversationId);
+        break;
+      case 'conversation.changed':
+        // ほかの画面で題・アーカイブが変わった。一覧を読み直し、アーカイブした会話のタブは閉じる
+        refreshList();
+        setArchivedRevision(n => n + 1);
+        bump(e.conversationId);
+        if (e.change === 'archived' || e.change === 'deleted') tabState.close(`chat:${e.conversationId}`);
+        if (e.change === 'deleted' && currentRef.current === e.conversationId) location.hash = '#/';
+        break;
       case 'task.changed': {
         setTaskRevision(n => n + 1);
         setWaiting(state => {
@@ -386,7 +417,7 @@ export function App() {
         }
         break;
     }
-  }, [t, refreshList, refreshWorker, approvalTarget]);
+  }, [t, refreshList, refreshWorker, approvalTarget, tabState.close]);
 
   const onResync = useCallback((serverDrafts: Draft[]) => {
     setDrafts(serverDrafts);
@@ -450,6 +481,10 @@ export function App() {
     />
   );
   const viewKey = shown.page === 'chat' ? `chat:${current ?? 'new'}` : shown.page;
+  // 入力欄と状態バーに出すモデル: この会話で選んだものがあればそれ。無ければ設定の順番の先頭の使えるもの
+  const pinnedModel = current ? conversations.find(c => c.id === current)?.model_id ?? null : null;
+  const chatModel = modelsInfo ? pickChatModelView(modelsInfo.models, modelsInfo.routing, pinnedModel) : null;
+  const defaultModel = modelsInfo ? pickChatModelView(modelsInfo.models, modelsInfo.routing) : null;
 
   return (
     <div className="shell" ref={rootRef} data-mode={mode}>
@@ -461,6 +496,7 @@ export function App() {
           waitingCount={waiting.size} restartRequired={restartRequired}
           setupPending={onboarding !== null && !onboarding.done && !setupOpen} onSetup={() => openSetupAt(onboarding ? resumeStep(onboarding.steps) : 'language')}
           onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
+          onRename={setRenaming} onSummary={setSummaryFor} onArchive={c => void archiveConversation(c.id, c.title, t, onConversationChanged)} onDelete={setDeleting}
         />
         {narrow && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
         <main className="main">
@@ -480,7 +516,8 @@ export function App() {
                 key={current ?? 'new'}
                 conversationId={current}
                 profile={profile}
-                modelName={modelName}
+                modelName={defaultModel?.model ?? null}
+                defaultModelId={defaultModel?.id ?? null}
                 usage={contextUsage}
                 drafts={drafts}
                 runStarts={runStarts}
@@ -506,6 +543,7 @@ export function App() {
             {shown.page === 'runs' && <Runs tab={shown.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
             {shown.page === 'memory' && <Memory revision={memoryRevision} />}
             {shown.page === 'skills' && <SkillsPage target={shown.target} revision={notificationRevision} />}
+            {shown.page === 'archived' && <ArchivedPage revision={archivedRevision} onRestore={c => void unarchiveConversation(c.id, t, onConversationChanged)} onDelete={setDeleting} />}
           </div>
         </main>
         {!narrow && pane}
@@ -514,8 +552,11 @@ export function App() {
       {!narrow && (
         <StatusBar
           connected={connected} worker={worker} runStartedAt={runningId ? runStarts[runningId] : undefined} approvals={approvals.length}
-          modelName={modelName} usage={shown.page === 'chat' ? contextUsage : null} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
+          modelName={chatModel?.model ?? null} usage={shown.page === 'chat' ? contextUsage : null} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
           onOpenApproval={openApproval} onOpenNotifications={toggleNotifications} inert={settingsCovers}
+          onOpenModel={shown.page === 'chat' ? () => dispatchEvent(new Event(OPEN_MODEL_MENU_EVENT)) : undefined}
+          mode={shown.page === 'chat' && current ? conversations.find(c => c.id === current)?.permission_mode ?? 'normal' : undefined}
+          onOpenMode={shown.page === 'chat' ? () => dispatchEvent(new Event(OPEN_MODE_MENU_EVENT)) : undefined}
         />
       )}
       <NotificationBubble
@@ -526,6 +567,9 @@ export function App() {
         open={paletteOpen} narrow={narrow} panelOpen={panelOpen} worker={worker} conversations={conversations}
         onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
+      {renaming && <RenameDialog conversation={renaming} onClose={() => setRenaming(null)} onRenamed={id => onConversationChanged({ kind: 'renamed', id })} />}
+      {deleting && <DeleteDialog conversation={deleting} onClose={() => setDeleting(null)} onDeleted={id => onConversationChanged({ kind: 'deleted', id })} />}
+      {summaryFor && <SummaryDialog conversationId={summaryFor.id} title={summaryFor.title} onClose={() => setSummaryFor(null)} />}
       {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} kept={keptSettings} onRerunSetup={rerunSetup} />}
       {setupExit.mounted && <Onboarding leaving={setupExit.leaving} start={setupStart} profile={profile} onProfile={setProfile} onLater={laterSetup} onFinished={finishSetup} />}
       <InertContext.Provider value={settingsCovers}><NewTaskDialog open={newTaskOpen} narrow={narrow} onClose={closeNewTask} /></InertContext.Provider>

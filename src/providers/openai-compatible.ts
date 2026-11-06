@@ -4,7 +4,7 @@ import type { ChatMessage, StopReason, ToolCall } from '../engine/types.ts';
 import { contextHint, errorProbeText, evaluateContext, probeText } from './context.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import {
-  checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, readSnippet, readSseData, requireApiKey, withTimeout,
+  checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, providerSecrets, readSnippet, readSseData, requireApiKey, withTimeout,
 } from './http.ts';
 import { ProviderError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
@@ -80,6 +80,8 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     return checked.url;
   }
 
+  #secrets(): string[] { return providerSecrets(this.provider, this.#env); }
+
   #headers(): Record<string, string> {
     const key = requireApiKey(this.provider, this.#env);
     return { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...(key ? { Authorization: `Bearer ${key}` } : {}) };
@@ -96,6 +98,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
       stream_options: { include_usage: true },
       ...(this.provider.server === 'openai' ? { max_completion_tokens: req.maxOutputTokens } : { max_tokens: req.maxOutputTokens }),
       ...(req.model.temperature === undefined ? {} : { temperature: req.model.temperature }),
+      ...(req.effort ? { reasoning_effort: req.effort } : {}),
       ...(req.tools.length ? {
         tools: req.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
         parallel_tool_calls: false,
@@ -106,7 +109,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     try {
       response = await this.#fetch(joinUrl(base, 'chat/completions'), { method: 'POST', headers, body: JSON.stringify(body), signal, redirect: 'error' });
     } catch (error) { throw classifyFetchError(error, req.signal, timeout); }
-    if (!response.ok || !response.body) throw classifyHttpFailure(response.status, await readSnippet(response), response.headers);
+    if (!response.ok || !response.body) throw classifyHttpFailure(response.status, await readSnippet(response, this.#secrets()), response.headers, this.#secrets());
 
     const tools = new ToolCallAssembler();
     let stop: StopReason = 'other';
@@ -117,7 +120,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
         try { chunk = JSON.parse(data); } catch { continue; }
         if (chunk?.error) {
           const message = typeof chunk.error === 'string' ? chunk.error : String(chunk.error.message ?? 'error');
-          throw classifyHttpFailure(Number(chunk.error.code) || 500, message);
+          throw classifyHttpFailure(Number(chunk.error.code) || 500, message, undefined, this.#secrets());
         }
         const choice = chunk?.choices?.[0];
         const delta = choice?.delta;
@@ -144,6 +147,28 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
   }
 
   async probe(model: ModelConfig, required: number, language: Language = DEFAULT_LANGUAGE): Promise<ProbeResult> {
+    const result = await this.#probeContext(model, required, language);
+    if (!['ok', 'too_small', 'exceeds_model', 'unknown'].includes(result.status)) return result;
+    const efforts = await this.#probeEfforts(model);
+    return efforts ? { ...result, efforts } : result;
+  }
+
+  // /v1/models の項目が supported_reasoning_efforts を知らせていれば、その値（標準の項目ではないので、無ければ undefined）。サーバーの種類を問わず読み、読めなくても確認の結果は変えない
+  async #probeEfforts(model: ModelConfig): Promise<string[] | undefined> {
+    try {
+      const headers = this.#headers();
+      delete headers['Accept'];
+      const response = await this.#fetch(joinUrl(this.#base(), 'models'), { headers, signal: AbortSignal.timeout(10_000), redirect: 'error' });
+      if (!response.ok) return undefined;
+      const list: any = await response.json();
+      const entry = Array.isArray(list?.data) ? list.data.find((m: any) => m?.id === model.model) : undefined;
+      const efforts = entry?.supported_reasoning_efforts;
+      const values = Array.isArray(efforts) ? efforts.filter((v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/u.test(v)).slice(0, 8) : [];
+      return values.length ? values : undefined;
+    } catch { return undefined; }
+  }
+
+  async #probeContext(model: ModelConfig, required: number, language: Language): Promise<ProbeResult> {
     const server = this.provider.server ?? 'generic';
     const facts = { modelId: model.id, server, required, declared: model.contextLength, language };
     let base: string; let headers: Record<string, string>;
@@ -155,7 +180,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     delete headers['Accept'];
     const getJson = async (url: URL): Promise<any> => {
       const response = await this.#fetch(url, { headers, signal: AbortSignal.timeout(10_000), redirect: 'error' });
-      if (!response.ok) throw classifyHttpFailure(response.status, await readSnippet(response));
+      if (!response.ok) throw classifyHttpFailure(response.status, await readSnippet(response, this.#secrets()), undefined, this.#secrets());
       return response.json();
     };
     const origin = new URL(base).origin;

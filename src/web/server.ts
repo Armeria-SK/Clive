@@ -1,39 +1,63 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
 import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
-import { candidateModelIds } from '../engine/chat.ts';
+import { candidateModelIds, type SendChoice } from '../engine/chat.ts';
+import { modelEfforts } from '../engine/efforts.ts';
 import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
+import { isPermissionMode, PERMISSION_MODES } from '../shared/permission-mode.ts';
 import { engineText } from '../shared/messages/engine.ts';
 import { approvalWire } from '../tools/approvals.ts';
+import { eraseConversation } from '../db/erase.ts';
 import { searchHistory } from '../memory/history.ts';
+import { join } from 'node:path';
 import { MemoryError, planBooks } from '../memory/store.ts';
-import { defaultOrigins, WebAuth } from './auth.ts';
 import { httpText } from '../shared/messages/http.ts';
 import { configProblem, domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
+import { registerKeyRoutes } from './routes-keys.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { registerReviewRoutes } from './routes-review.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
+import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
 import { serveStatic } from './static.ts';
 
 const MAX_MESSAGE_CHARS = 100_000;
+// 会話を消すとき、動いている振り返りを止めて待つのを繰り返す回数の上限（超えたら 409 で消さない）
+const MAX_REVIEW_STOP_ROUNDS = 10;
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export interface WebServer {
-  server: Server;
+  // いま待ち受けているサーバー。画面から server の設定を反映して入れ替えたあとは、新しい方を指す
+  readonly server: Server;
   streams: LiveStreams;
   handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  // 試験用: 待ち受けの場所は変えず、許す origin だけを入れ替える
   setOrigins: (origins: readonly string[]) => void;
+  // 待ち受けを始める（起動で使う。場所は起動したときの server の設定。始められなければ reject）。override は試験用
+  listen: (override?: { host: string; port: number }) => Promise<void>;
+  // 終了: いまの待ち受けと開いている流れを閉じる
+  close: () => void;
+}
+
+function applyProblem(failure: ApplyFailure): HttpProblem {
+  switch (failure.code) {
+    case 'nothing_to_apply': return problem(409, 'nothing_to_apply', 'nothing_to_apply');
+    case 'busy': return problem(409, 'busy', 'apply_busy');
+    case 'host_not_loopback': return problem(409, 'invalid_server', 'host_not_loopback', { params: { host: failure.host } });
+    case 'bad_server': return problem(409, 'invalid_server', 'bad_server');
+    case 'listen_failed': return problem(409, 'listen_failed', 'listen_failed', { params: { host: failure.host, port: failure.port, errno: failure.errno } });
+    case 'would_lock_out': return problem(409, 'would_lock_out', `lockout_${failure.reason}`, { params: failure.params });
+  }
 }
 
 function settingsView(app: App) {
   const config = app.config();
-  const env = process.env;
+  const env = app.env;
   const keys = [...new Set(config.providers.map(p => p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)).filter((k): k is string => Boolean(k)))];
   return {
     config,
@@ -42,6 +66,14 @@ function settingsView(app: App) {
     restartRequired: app.restartRequired(),
     configPath: app.configStore.path,
   };
+}
+
+function autoReasonOf(reasons: string | null): string | null {
+  if (reasons === null) return null;
+  try {
+    const list = JSON.parse(reasons) as unknown;
+    return Array.isArray(list) && typeof list.at(-1) === 'string' ? list.at(-1) as string : null;
+  } catch { return null; }
 }
 
 function isLanguage(value: string): value is Language {
@@ -57,6 +89,7 @@ function modelsView(app: App) {
       providerKind: config.providers.find(p => p.id === m.provider)?.kind,
       contextLength: m.contextLength, minContext: m.minContext, maxOutputTokens: m.maxOutputTokens,
       inChat: config.routing.chat.includes(m.id),
+      efforts: modelEfforts(config, m, app.status.get(m.id)),
       probe: app.status.get(m.id) ?? null,
       cooldown: app.status.coolingDown(m.id) ?? null,
       recentFailures: app.health.failures(m.id),
@@ -64,11 +97,45 @@ function modelsView(app: App) {
   };
 }
 
+// モデルと考える深さ・権限モードの選び方（PATCH と送信で共通）。設定にあるモデルだけ、そのモデルで選べる値だけを受ける。
+// モデルだけを替えて、今の考える深さが新しいモデルに無いときは、null に戻して effortReset で知らせる。何も書く前に検査を終える
+function readChoice(app: App, body: Record<string, unknown>, current: { model_id: string | null; effort: string | null } | undefined): { choice: SendChoice; effortReset: boolean } {
+  const choice: SendChoice = {};
+  if (body.permissionMode !== undefined) {
+    if (!isPermissionMode(body.permissionMode)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'permissionMode', params: { field: 'permissionMode', values: PERMISSION_MODES.join(' / ') } });
+    choice.permissionMode = body.permissionMode;
+  }
+  const text = (field: 'modelId' | 'effort'): string | null | undefined => {
+    const value = body[field];
+    if (value === undefined || value === null) return value;
+    if (typeof value !== 'string' || !value.trim()) throw problem(400, 'invalid_field', 'required', { field, params: { field } });
+    return value;
+  };
+  const modelId = text('modelId');
+  const effort = text('effort');
+  if (modelId !== undefined) {
+    if (modelId !== null && !app.config().models.some(m => m.id === modelId)) throw problem(400, 'invalid_field', 'unknown_model', { field: 'modelId', params: { id: modelId } });
+    choice.modelId = modelId;
+  }
+  if (effort !== undefined) choice.effort = effort;
+  const { efforts } = app.engine.effortChoices(modelId !== undefined ? modelId : current?.model_id ?? null);
+  if (effort) {
+    if (!efforts.includes(effort)) throw problem(400, 'invalid_field', 'bad_effort', { field: 'effort', params: { effort, values: efforts.join(' / ') || '-' } });
+    return { choice, effortReset: false };
+  }
+  const kept = effort === undefined ? current?.effort ?? null : null;
+  if (modelId !== undefined && kept !== null && !efforts.includes(kept)) { choice.effort = null; return { choice, effortReset: true }; }
+  return { choice, effortReset: false };
+}
+
 export function createWebServer(app: App): WebServer {
-  const config = app.config();
-  let auth = new WebAuth(defaultOrigins(config.server.port, config.server.origins), config.server.tailscaleLogins);
   const streams = new LiveStreams(app.bus);
   const router = new Router();
+  // 待ち受けと認証は ServerHost が持つ（起動したときの server の設定から。画面からの反映で入れ替わる）
+  const host = new ServerHost({
+    running: app.bootServer, create: createListener((req, res) => handle(req, res)), closeStreams: () => streams.closeAll(),
+    accept: server => app.markServerApplied(server), log: line => app.log(line),
+  });
 
   router.add('GET', '/api/health', ({ res }) => sendJson(res, 200, {
     ok: true, bootId: app.bus.bootId, now: Date.now(), activeRuns: app.engine.activeRuns().length,
@@ -78,7 +145,12 @@ export function createWebServer(app: App): WebServer {
   router.add('GET', '/api/events', ({ req, res, url }) => streams.open(req, res, url));
 
   // ── 会話 ──
-  router.add('GET', '/api/conversations', ({ res }) => sendJson(res, 200, { conversations: app.conversations.list() }));
+  // ?archived=1 でアーカイブした会話（q は題の部分一致）
+  router.add('GET', '/api/conversations', ({ res, url }) => {
+    const archived = ['1', 'true'].includes(url.searchParams.get('archived') ?? '');
+    const query = (url.searchParams.get('q') ?? '').slice(0, 100);
+    sendJson(res, 200, { conversations: app.conversations.list(archived ? 200 : 100, { archived, ...(query.trim() ? { query } : {}) }) });
+  });
   router.add('POST', '/api/conversations', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     const title = requireString(body, 'title', { optional: true, max: 200 });
@@ -86,16 +158,55 @@ export function createWebServer(app: App): WebServer {
   });
   router.add('PATCH', '/api/conversations/:id', async ({ req, res, params }) => {
     const id = params[0]!;
-    if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
+    const current = app.conversations.get(id);
+    if (!current) throw problem(404, 'not_found', 'conversation_missing');
     const body = requireObject(await readJson(req));
     const title = requireString(body, 'title', { optional: true, max: 200 });
     if (body.archived !== undefined && typeof body.archived !== 'boolean') {
       throw problem(400, 'invalid_field', 'bad_bool', { field: 'archived', params: { field: 'archived' } });
     }
-    if (title) app.conversations.rename(id, title);
-    if (body.archived === true) app.conversations.archive(id);
-    if (body.archived === false) app.conversations.unarchive(id);
-    sendJson(res, 200, { conversation: app.conversations.get(id) });
+    const { choice, effortReset } = readChoice(app, body, current);
+    const changed = (change: 'renamed' | 'archived' | 'unarchived') => app.bus.publish({ type: 'conversation.changed', conversationId: id, change });
+    if (title) { app.conversations.rename(id, title); changed('renamed'); }
+    app.conversations.setChoice(id, choice);
+    if (body.archived === true) { app.conversations.archive(id); changed('archived'); }
+    if (body.archived === false) { app.conversations.unarchive(id); changed('unarchived'); }
+    sendJson(res, 200, { conversation: app.conversations.get(id), ...(effortReset ? { effortReset: true } : {}) });
+  });
+  // 要約（読むだけ）。要約が無い会話は summary が null
+  router.add('GET', '/api/conversations/:id/summary', ({ res, params }) => {
+    const id = params[0]!;
+    if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
+    sendJson(res, 200, app.conversations.summaryOf(id));
+  });
+  // 会話を消す（元に戻せない。画面は消えるものと残るものを見せて確かめてから呼ぶ）。返事を作っている最中の会話と、チャット以外の会話（タスク・振り返り）は断る。
+  // この会話を材料にした振り返りが動いていれば、止めて終わるのを待ってから消す（その会話から作った振り返りの会話も、いっしょに消える）。
+  // モデルの道具からは呼べない（道具を足していない）
+  router.add('DELETE', '/api/conversations/:id', async ({ res, params }) => {
+    const id = params[0]!;
+    const conversation = app.conversations.get(id);
+    if (!conversation) throw problem(404, 'not_found', 'conversation_missing');
+    if (conversation.kind !== 'chat') throw problem(409, 'conflict', 'conversation_not_deletable');
+    const running = () => app.engine.activeRuns().some(r => r.conversationId === id);
+    if (running()) throw problem(409, 'conflict', 'conversation_running');
+    // 振り返りを止めて待つあいだに、次の振り返りが始まらないよう、毎回、待っている振り返りを先に外してから、動いているものを止める。動いているものが無くなるまで繰り返す。
+    // 最後の確かめと消すところのあいだには await が無いので、そのあいだに振り返りは始まらない
+    for (let round = 0; ; round++) {
+      app.reviews.dropPendingFor(id);
+      const reviewConversations = new Set(app.reviews.runningFor(id).map(j => j.review_conversation_id));
+      const reviewRuns = app.engine.activeRuns().filter(r => r.kind === 'review' && reviewConversations.has(r.conversationId));
+      if (!reviewRuns.length) break;
+      if (round >= MAX_REVIEW_STOP_ROUNDS) throw problem(409, 'conflict', 'conversation_running');
+      for (const run of reviewRuns) app.engine.stop(run.runId);
+      await Promise.all(reviewRuns.map(run => app.engine.wait(run.runId)));
+    }
+    if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
+    if (running()) throw problem(409, 'conflict', 'conversation_running');
+    const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs'), markDeleted: ids => app.conversations.markDeleted(ids) }, id);
+    app.approvals.forgetConversation(id);
+    if (erased.files.failed.length) app.log(`[WARN] 会話を消したあと、消せなかったファイルがあります: ${erased.files.failed.join(', ')}`);
+    app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted' });
+    sendJson(res, 200, { deleted: true, ...erased });
   });
   router.add('GET', '/api/conversations/:id/messages', ({ res, params }) => {
     const id = params[0]!;
@@ -113,6 +224,7 @@ export function createWebServer(app: App): WebServer {
           ? { toolCalls: m.message.toolCalls.map(c => ({ id: c.id, name: c.name, input: JSON.stringify(c.arguments ?? c.raw ?? null).slice(0, 2000) })) } : {}),
         ...(m.message.role === 'tool' ? { toolName: m.message.name, toolCallId: m.message.toolCallId, isError: Boolean(m.message.isError) } : {}),
       })),
+      pending: app.engine.pending(id),
       activeRun: active ? { runId: active.runId, draft: app.bus.drafts().find(d => d.runId === active.runId)?.text ?? '' } : null,
       approvals: app.approvals.pending().filter(a => a.conversationId === id).map(approvalWire),
     });
@@ -140,6 +252,10 @@ export function createWebServer(app: App): WebServer {
       if (!upload) throw problem(400, 'invalid_field', 'attachment_missing', { field: 'attachments' });
       return upload;
     });
+    if (body.interrupt !== undefined && typeof body.interrupt !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'interrupt', params: { field: 'interrupt' } });
+    const interrupt = body.interrupt === true;
+    const existing = app.conversations.get(id);
+    const { choice, effortReset } = readChoice(app, body, existing);
     const images: ImageRef[] = [];
     const blocks: string[] = [];
     for (const upload of uploads) {
@@ -147,7 +263,9 @@ export function createWebServer(app: App): WebServer {
     }
     if (images.length) {
       const config = app.config();
-      const candidates = candidateModelIds(config, 'chat');
+      // 会話でモデルを選んでいれば、画像を読めるかはそのモデルで決める
+      const pinned = choice.modelId !== undefined ? choice.modelId : existing?.model_id ?? null;
+      const candidates = pinned ? [pinned] : candidateModelIds(config, 'chat');
       // 候補が 1 つも無い（モデルが 0 個）ときは画像の話の前に、エンジンの「使えるモデルがない」案内に任せる
       const vision = candidates.some(mid => config.models.find(m => m.id === mid)?.vision && app.status.usable(mid));
       if (candidates.length && !vision) throw problem(409, 'no_vision', 'no_vision');
@@ -155,12 +273,19 @@ export function createWebServer(app: App): WebServer {
     const attachments: AttachmentMeta[] = uploads.map(u => ({ id: u.id, name: u.name, kind: u.kind }));
     const content = [text || engineText(languageOf(app.config()), images.length ? 'attachment.image' : 'attachment.file'), ...blocks].join('\n\n');
     // 画面が決めた id へ最初の発言を送ると、受け付けたときに会話ができる。作られる id は UUID の形だけ。タスク・振り返りの会話には、ここから送らせない
-    const existing = app.conversations.get(id);
     if (existing && existing.kind !== 'chat') throw problem(409, 'conflict', 'not_chat_conversation');
     if (!existing && !CONVERSATION_ID.test(id)) throw problem(400, 'invalid_id', 'invalid_id');
-    const outcome = app.engine.send(id, content, images, attachments);
+    const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt });
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
-    sendJson(res, 202, { runId: outcome.runId, messageId: outcome.messageId });
+    // 実行中だったときは待たせた（queued）。今の実行が次の区切りで読む。取り消すときは pendingId
+    // 考える深さを新しいモデルに無いので戻したときは、effortReset で知らせる（PATCH と同じ）
+    const reset = effortReset ? { effortReset: true } : {};
+    sendJson(res, 202, outcome.queued ? { runId: outcome.runId, queued: true, pendingId: outcome.pendingId, ...reset } : { runId: outcome.runId, messageId: outcome.messageId, ...reset });
+  });
+  // 待っている発言を、差し込まれる前に取り消す
+  router.add('DELETE', '/api/conversations/:id/pending/:pid', ({ res, params }) => {
+    if (!app.engine.cancelPending(params[0]!, params[1]!)) throw problem(404, 'not_found', 'pending_gone');
+    sendJson(res, 200, { cancelled: true });
   });
   router.add('POST', '/api/conversations/:id/retry', ({ res, params }) => {
     const outcome = app.engine.retry(params[0]!);
@@ -192,8 +317,8 @@ export function createWebServer(app: App): WebServer {
   router.add('POST', '/api/approvals/:id', async ({ req, res, params }) => {
     const body = requireObject(await readJson(req));
     const decision = body.decision;
-    if (decision !== 'once' && decision !== 'conversation' && decision !== 'deny') {
-      throw problem(400, 'invalid_field', 'bad_enum', { field: 'decision', params: { field: 'decision', values: 'once / conversation / deny' } });
+    if (decision !== 'once' && decision !== 'conversation' && decision !== 'folder' && decision !== 'deny') {
+      throw problem(400, 'invalid_field', 'bad_enum', { field: 'decision', params: { field: 'decision', values: 'once / conversation / folder / deny' } });
     }
     const ok = app.approvals.decide(params[0]!, decision);
     if (!ok) throw problem(404, 'not_found', 'approval_gone');
@@ -201,7 +326,11 @@ export function createWebServer(app: App): WebServer {
   });
   router.add('GET', '/api/tool-calls', ({ res, url }) => {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 100) || 100, 1), 500);
-    sendJson(res, 200, { toolCalls: app.db.prepare('SELECT * FROM tool_calls ORDER BY created_at DESC LIMIT ?').all(limit) });
+    // 自動承認が許した呼び出しには、判定役の短い理由 autoReason を添える（承認の記録 scope = 'auto' の reasons の最後の要素。ほかは null）。
+    // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しには、許可したフォルダ grantFolder を添える（ほかは null）
+    const rows = app.db.prepare(`SELECT t.*, a.reasons AS approval_reasons, a.scope AS approval_scope, a.grant_folder AS grant_folder FROM tool_calls t LEFT JOIN approvals a ON a.id = t.approval_id
+      ORDER BY t.created_at DESC LIMIT ?`).all(limit) as Array<Record<string, unknown> & { approval_reasons: string | null; approval_scope: string | null; grant_folder: string | null }>;
+    sendJson(res, 200, { toolCalls: rows.map(({ approval_reasons, approval_scope, grant_folder, ...row }) => ({ ...row, autoReason: approval_scope === 'auto' ? autoReasonOf(approval_reasons) : null, grantFolder: grant_folder })) });
   });
 
   // ── 記憶と履歴 ──
@@ -259,6 +388,7 @@ export function createWebServer(app: App): WebServer {
   registerOnboardingRoutes(router, app);
 
   // ── 設定とモデル ──
+  registerKeyRoutes(router, app);
   router.add('GET', '/api/settings', ({ res }) => sendJson(res, 200, settingsView(app)));
   router.add('GET', '/api/settings/schema', ({ res }) => sendJson(res, 200, AppConfig));
   router.add('PUT', '/api/settings', async ({ req, res }) => {
@@ -282,10 +412,22 @@ export function createWebServer(app: App): WebServer {
     await app.status.probeAll(app.config());
     sendJson(res, 200, modelsView(app));
   });
+  // サーバーの設定（待ち受けと認証）を、プロセスを止めずに入れ替える。書き込みなので、ほかの書き込みと同じく Host・Origin・Sec-Fetch-Site を通った要求だけ。
+  // 反映する設定は、ここで 1 回だけ読む。モデルのシェルからこの API を呼ぶ形は、この PC の中のサーバーへの接続（code.loopback）として、毎回、中身を見せて人の承認を求める（今回だけ。人が拒否すれば呼ばれない）。確かめなしでは通らない
+  router.add('POST', '/api/server/apply', async ({ req, res }) => {
+    const body = requireObject(await readJson(req));
+    if (body.force !== undefined && typeof body.force !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'force', params: { field: 'force' } });
+    const outcome = await host.apply(req, structuredClone(app.config().server), body.force === true);
+    if (!outcome.ok) throw applyProblem(outcome.failure);
+    // 応答を返し終えてから、古い待ち受けを閉じる（この応答そのものを切らないため）
+    res.once('finish', outcome.retire);
+    res.once('close', outcome.retire);
+    sendJson(res, 200, { applied: outcome.changed, server: { host: outcome.server.host, port: outcome.server.port }, url: outcome.url, restartRequired: app.restartRequired() });
+  });
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const verdict = auth.check(req);
+    const verdict = host.auth.check(req);
     if (!verdict.ok) { sendJson(res, 403, { error: 'forbidden', reason: verdict.reason }); return; }
     if (!url.pathname.startsWith('/api/')) {
       if (!serveStatic(app.paths.webDist, req, res)) sendJson(res, 404, { error: 'not_found' });
@@ -302,8 +444,11 @@ export function createWebServer(app: App): WebServer {
     }
   };
 
-  const server = createServer((req, res) => { void handle(req, res); });
-  server.on('close', () => streams.close());
-  const setOrigins = (origins: readonly string[]) => { auth = new WebAuth(origins, config.server.tailscaleLogins); };
-  return { server, streams, handle, setOrigins };
+  return {
+    get server() { return host.server; },
+    streams, handle,
+    setOrigins: origins => host.setOrigins(origins),
+    listen: override => host.listen(override),
+    close: () => host.close(),
+  };
 }

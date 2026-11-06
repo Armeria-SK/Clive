@@ -435,11 +435,12 @@ test('エンジンの失敗と警告（英語）: 文は英語で、コードと
     s.adapter().scripts.push(hang());
     const running = s.app.engine.send('c5', 'hi');
     assert.ok(running.ok);
-    const busy = s.app.engine.send('c5', 'again');
+    // 実行中の送信は待たせる（tests/queued-send.test.ts）。実行中のやり直しは断る
+    const busy = s.app.engine.retry('c5');
     assert.ok(!busy.ok);
     if (!busy.ok) {
-      assert.equal(busy.errorMessage, pick('この会話はまだ返事を作っています。止めるか、終わるまで待ってください', 'This conversation is still writing a reply. Stop it or wait until it finishes'));
-      assert.equal(busy.errorCode, 'engine.send.busy_chat');
+      assert.equal(busy.errorMessage, pick('この会話はまだ返事を作っています', 'This conversation is still writing a reply'));
+      assert.equal(busy.errorCode, 'engine.send.busy');
     }
     s.app.engine.stop(running.runId);
     await s.app.engine.wait(running.runId);
@@ -518,7 +519,7 @@ for (const language of ['ja', 'en'] as const) {
     await expectProblem(await s.post('/api/tasks', { title: 'x', when: 'tomorrow' }), 400, { error: 'invalid_field', code: 'http.bad_when', field: 'when', message: ['when は日時（例: 2026-11-06T09:00:00+09:00）にしてください', '"when" must be a date and time (example: 2026-11-06T09:00:00+09:00)'] });
     await expectProblem(await s.api('/api/profile', { method: 'PATCH', body: JSON.stringify({ shape: 'nope' }) }), 400, { error: 'invalid_field', code: 'http.bad_enum', field: 'shape', params: { field: 'shape', values: SHAPES }, message: [`shape は ${SHAPES} のどれかにしてください`, `shape must be one of ${SHAPES}`] });
     await expectProblem(await s.post('/api/memories', { book: 'x', content: 'a' }), 400, { error: 'invalid_field', code: 'http.bad_book', field: 'book', message: ['book は user か notes にしてください', 'book must be user or notes'] });
-    await expectProblem(await s.post('/api/approvals/none', { decision: 'maybe' }), 400, { error: 'invalid_field', code: 'http.bad_enum', field: 'decision', params: { field: 'decision', values: 'once / conversation / deny' }, message: ['decision は once / conversation / deny のどれかにしてください', 'decision must be one of once / conversation / deny'] });
+    await expectProblem(await s.post('/api/approvals/none', { decision: 'maybe' }), 400, { error: 'invalid_field', code: 'http.bad_enum', field: 'decision', params: { field: 'decision', values: 'once / conversation / folder / deny' }, message: ['decision は once / conversation / folder / deny のどれかにしてください', 'decision must be one of once / conversation / folder / deny'] });
     await expectProblem(await s.post('/api/approvals/none', { decision: 'once' }), 404, { error: 'not_found', code: 'http.approval_gone', message: ['この承認は既に終わっています（時間切れか、中止された可能性があります）', 'This approval has already ended (it may have timed out or been cancelled)'] });
     await expectProblem(await s.api('/api/templates/fr'), 404, { error: 'not_found', code: 'http.unknown_language', params: { language: 'fr', values: 'ja / en' }, message: ['言語「fr」の初期値はありません（ja / en）', 'There are no defaults for the language "fr" (ja / en)'] });
     await expectProblem(await s.post('/api/worker', { paused: 'yes' }), 400, { error: 'invalid_field', code: 'http.bad_bool', field: 'paused', params: { field: 'paused' }, message: ['paused は true / false にしてください', 'paused must be true or false'] });

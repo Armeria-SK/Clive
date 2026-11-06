@@ -179,3 +179,13 @@ test('画面が使う API: 実行・道具・振り返りの記録を、画面�
   assert.equal(LOG_LIMIT, 200, '画面が頼む件数の上限と、API の limit（200）は同じ');
   assert.ok(readFileSync(new URL('../web/src/api.ts', import.meta.url), 'utf8').includes('/api/tool-calls?limit=200'));
 });
+
+test('段 8b: 実行ログの「決めたのは」に、自動承認と計画モードが日本語・英語で出る（理由が API の行に載ることは、tests/auto-approve-engine.test.ts が実際の API で確かめる）', () => {
+  ja();
+  assert.equal(decidedByLabel('auto-mode'), '自動承認');
+  assert.equal(decidedByLabel('mode'), '計画モード');
+  en();
+  assert.equal(decidedByLabel('auto-mode'), 'Auto-approve');
+  assert.equal(decidedByLabel('mode'), 'Plan mode');
+  ja();
+});

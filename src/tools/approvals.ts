@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Placement } from './hooks/scope.ts';
+import type { AskKind } from './types.ts';
 
-export type ApprovalDecision = 'once' | 'conversation' | 'deny';
+export type ApprovalDecision = 'once' | 'conversation' | 'folder' | 'deny';
 export type ApprovalOutcome = 'approved' | 'denied' | 'expired' | 'cancelled';
 
 // 確かめの札で見せるコードのファイル（読めないものは text に理由の文を入れる）
@@ -57,6 +58,12 @@ export interface ApprovalRequest {
   details: string[];
   // コードを動かす確かめ。「この会話では許可」を出さず、同じ文字のコマンドの許可を覚えない
   onceOnly?: boolean | undefined;
+  // 道具ごとの方針が ask の確かめ。毎回承認を求める（「この会話では許可」を出さず、送られても今回だけ）。コードを動かす確かめ（onceOnly）とは別
+  everyTime?: boolean | undefined;
+  // 確かめになった理由の種類（画面には渡さない）
+  kinds?: AskKind[] | undefined;
+  // この札に添える「この返事のあいだ、このフォルダ以下への書き込みを許可」のフォルダ。外から読んだ内容のあとの file_write / file_edit の確かめ（理由の種類が taint だけ）にだけ付く
+  grantFolder?: string | undefined;
   preview?: PreviewFile[] | undefined;
   // 見つけたパスごとの判定（details の文と同じものを構造で渡す。無ければ空）
   paths?: ApprovalPath[] | undefined;
@@ -75,7 +82,7 @@ export interface ApprovalView extends ApprovalRequest {
 export function approvalPublic(v: ApprovalView) {
   return {
     id: v.id, tool: v.tool, title: v.title, body: v.body, cwd: v.cwd, reasons: v.reasons, details: v.details, expiresAt: v.expiresAt,
-    onceOnly: v.onceOnly === true, preview: v.preview ?? [], paths: v.paths ?? [], pathsMore: v.pathsMore ?? 0,
+    onceOnly: v.onceOnly === true, everyTime: v.everyTime === true, preview: v.preview ?? [], paths: v.paths ?? [], pathsMore: v.pathsMore ?? 0, grantFolder: v.grantFolder ?? null,
   };
 }
 
@@ -104,6 +111,11 @@ export class ApprovalBroker {
 
   isGranted(conversationId: string, hash: string): boolean { return this.#conversationGrants.has(`${conversationId}:${hash}`); }
 
+  // 会話を消したとき、その会話の「この会話では許可」の覚えも消す
+  forgetConversation(conversationId: string): void {
+    for (const key of [...this.#conversationGrants]) if (key.startsWith(`${conversationId}:`)) this.#conversationGrants.delete(key);
+  }
+
   request(req: ApprovalRequest, timeoutMs: number, signal: AbortSignal): Promise<ApprovalOutcome> {
     const now = Date.now();
     const view: ApprovalView = { ...req, id: randomUUID(), inputHash: inputHash(req.tool, req.input), createdAt: now, expiresAt: now + timeoutMs };
@@ -129,15 +141,32 @@ export class ApprovalBroker {
     });
   }
 
+  // 自動承認（判定役）が許したことを記録する。札は出さない。status は approved、scope は auto。reasons には、元の確かめの理由のあとに判定役の理由を 1 つ足す（最後の要素）。
+  // 戻り値の id を、道具の記録（tool_calls.approval_id）につなぐ
+  recordAuto(req: ApprovalRequest, classifierReason: string): string {
+    const now = Date.now();
+    const id = randomUUID();
+    this.#db.prepare(`INSERT INTO approvals (id, run_id, conversation_id, tool, input, input_hash, reasons, status, scope, created_at, expires_at, decided_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', 'auto', ?, ?, ?)`).run(id, req.runId, req.conversationId, req.tool, JSON.stringify(req.input), inputHash(req.tool, req.input), JSON.stringify([...req.reasons, classifierReason]), now, now, now);
+    return id;
+  }
+
   decide(id: string, decision: ApprovalDecision): boolean {
     const pending = this.#pending.get(id);
     if (!pending) return false;
-    // コードを動かす確かめは、古い画面から「この会話では許可」が送られても今回だけとして扱う
-    const scope = decision === 'conversation' && pending.view.onceOnly ? 'once' : decision;
+    // コードを動かす確かめと、方針が ask の確かめは、古い画面から「この会話では許可」が送られても今回だけとして扱う。フォルダの許可を添えていない札に「フォルダ」が送られたときも、今回だけ
+    const scope = decision === 'conversation' && (pending.view.onceOnly || pending.view.everyTime) ? 'once'
+      : decision === 'folder' && !pending.view.grantFolder ? 'once' : decision;
     if (scope === 'conversation') this.#conversationGrants.add(`${pending.view.conversationId}:${pending.view.inputHash}`);
-    this.#db.prepare('UPDATE approvals SET scope = ? WHERE id = ?').run(scope, id);
+    this.#db.prepare('UPDATE approvals SET scope = ?, grant_folder = ? WHERE id = ?').run(scope, scope === 'folder' ? pending.view.grantFolder ?? null : null, id);
     pending.resolve(decision === 'deny' ? 'denied' : 'approved');
     return true;
+  }
+
+  // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札なら、そのフォルダ（記録から読む）
+  grantedFolder(id: string): string | undefined {
+    const row = this.#db.prepare('SELECT grant_folder FROM approvals WHERE id = ?').get(id) as { grant_folder: string | null } | undefined;
+    return row?.grant_folder ?? undefined;
   }
 
   pending(): ApprovalView[] { return [...this.#pending.values()].map(p => p.view); }

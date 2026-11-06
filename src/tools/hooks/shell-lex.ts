@@ -51,7 +51,7 @@ export interface Statement {
 
 export type LexCode =
   | 'curly_quote' | 'dash' | 'space' | 'fullwidth' | 'control' | 'depth' | 'unclosed' | 'backtick' | 'backslash' | 'parse_token' | 'block_comment'
-  | 'provider_var' | 'dollar_form' | 'fd' | 'dev_net' | 'here_expand' | 'tilde_user' | 'ps_expand' | 'here_string' | 'ansi_c' | 'unexpected' | 'chain_op';
+  | 'provider_var' | 'dollar_form' | 'fd' | 'dev_net' | 'here_expand' | 'tilde_user' | 'ps_expand' | 'here_string' | 'ansi_c' | 'unexpected' | 'chain_op' | 'bash_sub';
 export interface LexFail { code: LexCode; detail: string }
 export type LexResult = { ok: true; statements: Statement[] } | { ok: false; fail: LexFail };
 
@@ -72,19 +72,136 @@ const blank = (): Statement => ({ kind: 'command', words: [], redirects: [], ass
 const plain = (text: string, over: Partial<Word> = {}): Word => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain', ...over });
 
 // ASCII の引用符（' と "）の中を空白に置き換えた文字列
-function outsideQuotes(src: string): string {
+function outsidePsStrings(src: string): string {
   let out = '';
-  let quote: string | null = null;
-  for (const ch of src) {
-    if (quote) {
-      if (ch === quote) quote = null;
+  let i = 0;
+  const n = src.length;
+  const single = (): void => {
+    out += ' '; i++;
+    while (i < n && src[i] !== "'") { out += ' '; i++; }
+    if (i < n) { out += ' '; i++; }
+  };
+  const double = (level: number): void => {
+    out += ' '; i++;
+    while (i < n) {
+      const c = src[i]!;
+      if (c === '"') { out += ' '; i++; if (src[i] === '"') { out += ' '; i++; continue; } return; }
+      if (c === '$' && src[i + 1] === '(' && level < MAX_DEPTH + 2) { out += '  '; i += 2; code(true, level + 1); continue; }
+      out += ' '; i++;
+    }
+  };
+  const code = (inSub: boolean, level: number): void => {
+    let depth = 0;
+    while (i < n) {
+      const c = src[i]!;
+      if (c === "'") { single(); continue; }
+      if (c === '"') { double(level); continue; }
+      // 語の頭の # は行末まで、<# … #> は #> までがコメント（字句の読み取りと同じ）。中の引用符を始まりと取り違えないよう空白にする（改行は残す）
+      if ((c === '#' && /[ \t\r\n;|&(){},'"<>]/u.test(src[i - 1] ?? ' ')) || (c === '<' && src[i + 1] === '#')) {
+        const block = c === '<';
+        const close = block ? src.indexOf('#>', i + 2) : -1;
+        const stop = block ? (close < 0 ? n : close + 2) : (src.indexOf('\n', i) < 0 ? n : src.indexOf('\n', i));
+        out += src.slice(i, stop).replace(/[^\n]/gu, ' ');
+        i = stop;
+        continue;
+      }
+      if (c === '(') depth++;
+      else if (c === ')') {
+        if (inSub && depth === 0) { out += ' '; i++; return; }
+        if (depth > 0) depth--;
+      }
+      out += c; i++;
+    }
+  };
+  code(false, 0);
+  return out;
+}
+
+// bash の引用符の中を空白に置き換えた文字列。lexBash と同じ組み方をする: "…" の中の $( … ) は closeParen で切り出して中をコードとして見る。
+// コメント（語の頭の # から行末）とヒアドキュメントの本文は、引用符を始めない（空白にはしない。中の全角も見る）
+function outsideBashQuotes(src: string, level = 0): string {
+  let out = '';
+  let i = 0;
+  let wordStart = true;
+  const n = src.length;
+  const pending: Array<{ delim: string; strip: boolean }> = [];
+  const sub = (at: number): boolean => {
+    const close = level < MAX_DEPTH + 2 ? closeParen(src, at) : -1;
+    if (close < 0) return false;
+    out += `  ${outsideBashQuotes(src.slice(at + 1, close), level + 1)} `;
+    i = close + 1;
+    return true;
+  };
+  const heredocBodies = (): void => {
+    for (const h of pending) {
+      while (i < n) {
+        const e = src.indexOf('\n', i);
+        const stop = e < 0 ? n : e + 1;
+        const line = src.slice(i, e < 0 ? n : e);
+        out += src.slice(i, stop);
+        i = stop;
+        if ((h.strip ? line.replace(/^\t+/u, '') : line) === h.delim) break;
+      }
+    }
+    pending.length = 0;
+  };
+  while (i < n) {
+    const c = src[i]!;
+    if (c === "'") {
+      const e = src.indexOf("'", i + 1);
+      const stop = e < 0 ? n : e + 1;
+      out += ' '.repeat(stop - i);
+      i = stop;
+      wordStart = false;
+      continue;
+    }
+    if (c === '"') {
       out += ' ';
-    } else if (ch === '"' || ch === "'") { quote = ch; out += ' '; } else out += ch;
+      i++;
+      while (i < n && src[i] !== '"') {
+        if (src[i] === '\\' && i + 1 < n) { out += '  '; i += 2; continue; }
+        if (src[i] === '$' && src[i + 1] === '(' && sub(i + 1)) continue;
+        out += ' ';
+        i++;
+      }
+      if (i < n) { out += ' '; i++; }
+      wordStart = false;
+      continue;
+    }
+    if (c === '#' && wordStart) {
+      while (i < n && src[i] !== '\n') { out += src[i]!; i++; }
+      continue;
+    }
+    if (c === '\n') {
+      out += c;
+      i++;
+      wordStart = true;
+      if (pending.length) heredocBodies();
+      continue;
+    }
+    if (c === '<' && src[i + 1] === '<') {
+      if (src[i + 2] === '<') { out += '<<<'; i += 3; wordStart = true; continue; }
+      const m = /^<<(-?)[ \t]*([^\s;&|()<>]*)/u.exec(src.slice(i, i + 400));
+      if (m) pending.push({ delim: m[2]!.replace(/['"\\]/gu, ''), strip: m[1] === '-' });
+      out += '<<';
+      i += 2;
+      wordStart = true;
+      continue;
+    }
+    if (c === '$' && src[i + 1] === '(' && sub(i + 1)) { wordStart = false; continue; }
+    if ((c === '<' || c === '>') && src[i + 1] === '(' && sub(i + 1)) { wordStart = true; continue; }
+    out += c;
+    i++;
+    wordStart = /[\s;&|()<>]/u.test(c);
   }
   return out;
 }
 
-function precheck(src: string): LexFail | null {
+function outsideQuotes(src: string, shell: ShellKind): string {
+  return isPowerShell(shell) ? outsidePsStrings(src) : outsideBashQuotes(src);
+}
+
+function precheck(src: string, shell: ShellKind): LexFail | null {
   const curly = CURLY.exec(src);
   if (curly) return fail('curly_quote', curly[0]);
   const dash = DASHES.exec(src);
@@ -98,17 +215,19 @@ function precheck(src: string): LexFail | null {
   // PowerShell は CR 1 つ（LF が続かないもの）を文の区切りに読む。CRLF だけは LF と同じ 1 つの改行として読む
   const lone = /\r(?!\n)/u.exec(src);
   if (lone) return fail('control', hex('\r'));
-  const wide = FULLWIDTH.exec(outsideQuotes(src));
+  const wide = FULLWIDTH.exec(outsideQuotes(src, shell));
   if (wide) return fail('fullwidth', wide[0]);
   return null;
 }
 
+interface BashEnv { crlf: boolean }
+
 export function lexShell(command: string, shell: ShellKind): LexResult {
-  const early = precheck(command);
+  const early = precheck(command, shell);
   if (early) return { ok: false, fail: early };
   const normalized = command.replace(/\r\n/gu, '\n');
   const sink: Statement[] = [];
-  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink);
+  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink, { crlf: command.includes('\r\n') });
   return failure ? { ok: false, fail: failure } : { ok: true, statements: sink };
 }
 
@@ -117,8 +236,28 @@ export function lexShell(command: string, shell: ShellKind): LexResult {
 const BASH_KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'for', 'case', 'esac', 'select', 'function', 'coproc', 'time', '!', '{', '}', 'trap']);
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
-// src[start] の ( に対応する ) の位置（引用符の中は数えない）。無ければ -1
+// src[start] の ( に対応する ) の位置（引用符の中は数えない）。無ければ -1。
+// bash は $( … ) の中をふつうの文として読むので、終わりの決め方は文法しだい（コメントの中の ) は閉じない、case の ) は閉じない）。
+// 次の形は、ガードの切り出した終わりが本物の bash とずれうるので、読めないとして SUB_AMBIGUOUS を返す:
+// 語の頭の # のコメント、引用符を数えた終わりと、引用符を無視して ( ) だけを数えた終わりが違う形（引用符の中に括弧がある）
+const SUB_AMBIGUOUS = -2;
 function closeParen(src: string, start: number): number {
+  const end = closeParenQuoted(src, start);
+  if (end < 0) return end;
+  return plainClose(src, start) === end ? end : SUB_AMBIGUOUS;
+}
+
+// src[open] の ( に対応する ) の位置（引用符は考えない）。無ければ -1
+function plainClose(src: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '(') depth++;
+    else if (src[i] === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function closeParenQuoted(src: string, start: number): number {
   let depth = 0;
   for (let i = start; i < src.length; i++) {
     const ch = src[i]!;
@@ -126,23 +265,26 @@ function closeParen(src: string, start: number): number {
     if (ch === '"') {
       for (i++; i < src.length && src[i] !== '"'; i++) {
         if (src[i] === '\\') i++;
-        else if (src[i] === '$' && src[i + 1] === '(') { const e = closeParen(src, i + 1); if (e < 0) return -1; i = e; }
+        else if (src[i] === '$' && src[i + 1] === '(') { const e = closeParen(src, i + 1); if (e < 0) return e; i = e; }
       }
       continue;
     }
+    if (ch === '#' && /[\s;&|()<>]/u.test(src[i - 1] ?? ' ')) return SUB_AMBIGUOUS;
     if (ch === '(') depth++;
     else if (ch === ')' && --depth === 0) return i;
   }
   return -1;
 }
 
-function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null {
+function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): LexFail | null {
   if (depth > MAX_DEPTH) return fail('depth');
   const n = src.length;
   let i = 0;
   let cur = blank();
   let pipePrev = false;
   let dbl = false;
+  // [[ … ]] を閉じた直後。bash は ]] の次の語を、then・do などの言葉として読める新しい文の頭と見る（if [[ -n x ]] then pwn; fi）
+  let afterCond = false;
   const stack: string[] = [];
   const pending: Array<{ delim: string; quoted: boolean; strip: boolean }> = [];
 
@@ -160,12 +302,14 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
     }
     pipePrev = pipeOut;
     cur = blank();
+    afterCond = false;
   };
 
   const readSubstitution = (at: number): { end: number; fail?: LexFail } => {
     const close = closeParen(src, at);
+    if (close === SUB_AMBIGUOUS) return { end: n, fail: fail('bash_sub') };
     if (close < 0) return { end: n, fail: fail('unclosed', '$(') };
-    const inner = lexBash(src.slice(at + 1, close), depth + 1, sink);
+    const inner = lexBash(src.slice(at + 1, close), depth + 1, sink, env);
     return inner ? { end: close, fail: inner } : { end: close };
   };
 
@@ -173,14 +317,23 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
   const readDollar = (inQuote: boolean): { text: string; dynamic: boolean } | LexFail => {
     const next = src[i + 1];
     if (next === "'" || (next === '"' && !inQuote)) return fail('ansi_c');
+    // $[ … ] は古い算術展開。中は式として読まれ（# はコメントでない）、$( … ) も展開される
+    if (next === '[') return fail('dollar_form', '$[…]');
+    // "…" の中の \ 改行は消えて、$ と次の文字（( { 名前）をつなぐ（"$\<改行>(pwn)" は "$(pwn)"）
+    if (inQuote && next === '\\' && src[i + 2] === '\n') return fail('backslash');
     if (next === '(') {
       if (src[i + 2] === '(') {
-        const e = src.indexOf('))', i + 3);
-        if (e < 0) return fail('unclosed', '$((');
-        if (!/^[0-9A-Za-z_\s+\-*/%()]*$/u.test(src.slice(i + 3, e).replace(/\$[A-Za-z_][A-Za-z0-9_]*/gu, ''))) return fail('dollar_form', '$((…))');
-        const text = src.slice(i, e + 2);
-        i = e + 2;
-        return { text, dynamic: true };
+        // 算術になるのは、2 つ目の ( に対応する ) のすぐ次がまた ) のときだけ。そうでなければ bash は $( の中の ( … ) の部分シェルとして読み、中の文を動かす（$((true)<改行>/path/cmd))）
+        const e = plainClose(src, i + 2);
+        if (e >= 0 && src[e + 1] === ')') {
+          const body = src.slice(i + 3, e);
+          if (!/^[0-9A-Za-z_\s+\-*/%()]*$/u.test(body.replace(/\$[A-Za-z_][A-Za-z0-9_]*/gu, ''))) return fail('dollar_form', '$((…))');
+          // 名前や $変数が入ると、値が式として評価される（値に a[$(コマンド)] があればコマンドが動く）。整数の定数だけでなければ今回だけ
+          if (!/^[\s0-9+\-*/%()]*$/u.test(body)) cur.shapes.push(`arith:${body.trim().slice(0, 40)}`);
+          const text = src.slice(i, e + 2);
+          i = e + 2;
+          return { text, dynamic: true };
+        }
       }
       const r = readSubstitution(i + 1);
       if (r.fail) return r.fail;
@@ -203,7 +356,8 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
   const readWord = (): Word | LexFail => {
     const w = plain('');
     const stops = dbl ? ' \t\n' : ' \t\n;&|()<>';
-    while (i < n && !stops.includes(src[i]!)) {
+    // [[ … ]] の中の語は空白でだけ切るが、]] のすぐあとの ; & | ( ) < > では、bash も ]] を閉じる
+    while (i < n && !stops.includes(src[i]!) && !(dbl && w.text === ']]' && !w.quoted && ';&|()<>'.includes(src[i]!))) {
       const ch = src[i]!;
       if (ch === "'") {
         const e = src.indexOf("'", i + 1);
@@ -218,7 +372,13 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
           if (i >= n) return fail('unclosed', '"');
           const c = src[i]!;
           if (c === '"') { i++; break; }
-          if (c === '\\') return fail('backslash');
+          if (c === '\\') {
+            const esc = src[i + 1];
+            if (esc === '\n') { if (env.crlf) return fail('backslash'); i += 2; continue; }
+            if (esc === '$' || esc === '`' || esc === '"' || esc === '\\') { w.text += esc; i += 2; continue; }
+            w.text += c; i++;
+            continue;
+          }
           if (c === '`') return fail('backtick');
           if (c === '$') {
             const r = readDollar(true);
@@ -238,6 +398,13 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
       } else if (ch === '~' && w.text === '' && !w.quoted) {
         const next = src[i + 1];
         if (next === undefined || next === '/' || /\s/u.test(next) || ';&|()<>'.includes(next)) { w.home = true; w.text = '~'; i++; } else return fail('tilde_user');
+      } else if ((ch === '<' || ch === '>') && src[i + 1] === '(') {
+        // [[ … ]] の中の語は空白でだけ切るので、<( … ) >( … ) もここに来る。本物の bash はプロセス置換として中のコマンドを動かす
+        const r = readSubstitution(i + 1);
+        if (r.fail) return r.fail;
+        if (ch === '>') cur.shapes.push('process_out');
+        w.text += src.slice(i, r.end + 1); w.dynamic = true;
+        i = r.end + 1;
       } else if (ch === '*' || ch === '?' || ch === '[') { w.glob = true; w.text += ch; i++; } else if (ch === '{') {
         const close = src.indexOf('}', i);
         const inner = close > i ? src.slice(i + 1, close) : '';
@@ -277,6 +444,7 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
       case 'do': if (!['for', 'while'].includes(stack.at(-1) ?? '')) return fail('unexpected', 'do'); return true;
       case 'done': { const top = stack.pop(); if (top !== 'for' && top !== 'while') return fail('unexpected', 'done'); end(false); return true; }
       case 'for': cur.header = 'for'; stack.push('for'); return true;
+      case 'case': if (depth > 0) return fail('bash_sub'); cur.shapes.push('control'); return false;
       case '{': case '}': return true;
       default: cur.shapes.push('control'); return false;
     }
@@ -291,7 +459,7 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
       if (pending.length) { const f = readHeredocs(); if (f) return f; }
       continue;
     }
-    if (ch === '#' && !dbl) { while (i < n && src[i] !== '\n') i++; continue; }
+    if (ch === '#') { while (i < n && src[i] !== '\n') i++; continue; }
     if (!dbl) {
       if (ch === ';') { i += src[i + 1] === ';' ? 2 : 1; end(false); continue; }
       if (ch === '&' && src[i + 1] === '&') { i += 2; end(false); continue; }
@@ -305,7 +473,10 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
       if (ch === '&' && src[i + 1] !== '>') { i++; cur.background = true; end(false); continue; }
       if (ch === '(' || ch === ')') {
         if (ch === '(' && cur.words.length > 0 && !/\s/u.test(src[i - 1] ?? ' ')) cur.shapes.push('function');
-        if (ch === '(' && src[i + 1] === '(') cur.shapes.push('control');
+        // (( … )) は算術のコマンド。中は式として読まれ、# はコメントでない（(( ls # )); pwn は pwn も動かす）
+        if (ch === '(' && src[i + 1] === '(') return fail('unexpected', '((');
+        // NAME=( … ) は配列の代入。閉じ ) のあとに続く # もコメントでなく語の一部（ech=()#o } a | pwn）
+        if (ch === '(' && src[i - 1] === '=') return fail('unexpected', '=(');
         i++;
         end(false);
         continue;
@@ -339,9 +510,13 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
       if ((c === '<' || c === '>') && src[i + 1] === '(') {
         const r = readSubstitution(i + 1);
         if (r.fail) return r.fail;
-        cur.words.push(plain(src.slice(i, r.end + 1), { dynamic: true }));
-        if (c === '>') cur.shapes.push('process_out');
+        const head = src.slice(i, r.end + 1);
         i = r.end + 1;
+        // 閉じ ) のすぐあとに続く文字は同じ語の続き（# はコメントでなく語の一部）
+        const tail = readWord();
+        if (isFail(tail)) return tail;
+        cur.words.push(plain(head + tail.text, { dynamic: true, glob: tail.glob, quoted: tail.quoted }));
+        if (c === '>') cur.shapes.push('process_out');
         continue;
       }
       if (rest.startsWith('<<<')) {
@@ -369,6 +544,9 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
         const to = dup[2]!;
         const from = fd || (dup[1] === '<' ? '0' : '1');
         if (!((from === '2' && to === '1') || (from === '1' && to === '2') || to === '-')) return fail('fd', rest.slice(0, 4));
+        // >&2# のように語の文字が続くと、bash は fd の複製でなく、その語（2#）というファイルへの書き込みと読む。# もコメントでなく語の一部
+        const after = rest[dup[0].length];
+        if (after !== undefined && !' \t\n;&|()<>'.includes(after)) return fail('fd', rest.slice(0, dup[0].length + 1));
         i += dup[0].length;
         cur.redirects.push({ op: `${dup[1]}&`, fd: from, target: null });
         continue;
@@ -388,6 +566,7 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
     const w = readWord();
     if (isFail(w)) return w;
     if (i === before) return fail('unexpected', src[i] ?? '');
+    if (afterCond) end(false);
     const atCommand = cur.words.length === 0 && cur.header === undefined && cur.assigns.length === 0;
     if (atCommand && !dbl && !w.quoted && !w.dynamic && !w.glob && BASH_KEYWORDS.has(w.text)) {
       const r = keyword(w.text);
@@ -396,7 +575,7 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
     }
     cur.words.push(w);
     if (cur.words.length === 1 && !w.quoted && w.text === '[[') dbl = true;
-    else if (dbl && w.text === ']]') dbl = false;
+    else if (dbl && w.text === ']]') { dbl = false; afterCond = true; }
   }
   if (pending.length) return fail('unclosed', '<<');
   if (dbl) return fail('unclosed', '[[');
@@ -407,7 +586,7 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
 
 // ── PowerShell ──────────────────────────────────────────────────────────
 
-interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean }
+interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][] }
 
 const PS_WORD_STOPS = new Set([' ', '\t', '\r', '\n', ';', '|', '&', '(', ')', '{', '}', ',', "'", '"', '`', '$', '<', '>']);
 const PS_OTHER_CONTROL = new Set([
@@ -425,13 +604,28 @@ const PS_METHOD_OK = new Set([
   'tostring', 'tolower', 'toupper', 'tolowerinvariant', 'toupperinvariant', 'trim', 'trimstart', 'trimend', 'replace', 'split', 'substring', 'startswith', 'endswith',
   'contains', 'indexof', 'lastindexof', 'padleft', 'padright', 'join', 'format',
 ]);
-const isNumberWord = (v: string): boolean => /^[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
+const isNumberWord = (v: string): boolean => /^[-+]?[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
+
+function naiveSubEnd(src: string, from: number): number {
+  let depth = 1;
+  for (let i = from; i < src.length; i++) {
+    if (src[i] === '(') depth++;
+    else if (src[i] === ')' && --depth === 0) return i + 1;
+  }
+  return -1;
+}
 
 function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
+  const scanned = scanPs(src, shell, 0, 0, false);
+  return isFail(scanned) ? scanned : scanned.toks;
+}
+
+function scanPs(src: string, shell: ShellKind, from: number, level: number, sub: boolean): { toks: Tok[]; end: number } | LexFail {
   const toks: Tok[] = [];
   const n = src.length;
-  let i = 0;
+  let i = from;
   let sp = true;
+  let parens = 0;
   const push = (t: Omit<Tok, 'sp'>): void => { toks.push({ ...t, sp }); sp = false; };
   const prevEndsValue = (): boolean => {
     const p = toks.at(-1);
@@ -443,7 +637,7 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
     if (ch === ' ' || ch === '\t') { sp = true; i++; continue; }
     if (ch === '\r') { i++; continue; }
     if (ch === '\n') { push({ t: 'p', v: '\n' }); sp = true; i++; continue; }
-    if (ch === '#') { while (i < n && src[i] !== '\n') i++; continue; }
+    if (ch === '#') { if (sub) return fail('unexpected', '#'); while (i < n && src[i] !== '\n') i++; continue; }
     if (ch === '<') return fail(src[i + 1] === '#' ? 'block_comment' : 'unexpected', '<');
     if (ch === '`') return fail('backtick');
     if (ch === ';') { push({ t: 'p', v: ';' }); i++; continue; }
@@ -468,6 +662,7 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
     if (ch === '"') {
       let value = '';
       let dyn = false;
+      const subs: Tok[][] = [];
       let j = i + 1;
       for (;;) {
         if (j >= n) return fail('unclosed', '"');
@@ -476,12 +671,24 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
         if (c === '`') return fail('backtick');
         if (c === '$') {
           const next = src[j + 1];
-          if (next === '(' || next === '{') return fail('ps_expand', `$${next}`);
-          if (next !== undefined && /[A-Za-z_?]/u.test(next)) dyn = true;
+          if (next === '{') return fail('ps_expand', '${');
+          if (next === '$' && src[j + 2] === '(') return fail('ps_expand', '$$(');
+          if (next === '(') {
+            if (level >= MAX_DEPTH) return fail('depth');
+            const inner = scanPs(src, shell, j + 2, level + 1, true);
+            if (isFail(inner)) return inner;
+            if (naiveSubEnd(src, j + 2) !== inner.end) return fail('ps_expand', '$(');
+            value += src.slice(j, inner.end);
+            subs.push(inner.toks);
+            dyn = true;
+            j = inner.end;
+            continue;
+          }
+          if (/^[\p{L}\p{Nd}_?$^:]/u.test(src.slice(j + 1, j + 3))) dyn = true;
         }
         value += c; j++;
       }
-      push({ t: 'str', v: value, dyn }); i = j + 1; continue;
+      push({ t: 'str', v: value, dyn, ...(subs.length ? { subs } : {}) }); i = j + 1; continue;
     }
     if (ch === '@') {
       const next = src[i + 1];
@@ -494,14 +701,14 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
         i += m[0].length + close.index + close[0].length; continue;
       }
       if (next === '"') return fail('here_string', '@"');
-      if (next === '(') { push({ t: 'arr', v: '@(' }); i += 2; continue; }
+      if (next === '(') { push({ t: 'arr', v: '@(' }); i += 2; parens++; continue; }
       if (next === '{') { push({ t: 'hash', v: '@{' }); i += 2; continue; }
       const m = /^@([A-Za-z_][A-Za-z0-9_]*)/u.exec(src.slice(i, i + 80));
       if (m) { push({ t: 'splat', v: m[1]! }); i += m[0].length; continue; }
     }
     if (ch === '$') {
       const next = src[i + 1];
-      if (next === '(') { push({ t: 'sub', v: '$(' }); i += 2; continue; }
+      if (next === '(') { push({ t: 'sub', v: '$(' }); i += 2; parens++; continue; }
       if (next === '{') return fail('provider_var', '${…}');
       const m = /^\$(?:([A-Za-z_][A-Za-z0-9_]*):)?([A-Za-z_][A-Za-z0-9_]*)|^\$[?_^$]/u.exec(src.slice(i, i + 120));
       if (!m) return fail('unexpected', '$');
@@ -509,7 +716,12 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
       push({ t: 'var', v: m[1] !== undefined && m[1].toLowerCase() === 'env' ? `env:${m[2]}` : m[2] ?? m[0].slice(1), dyn: true });
       i += m[0].length; continue;
     }
-    if (ch === '(' || ch === ')' || ch === '{' || ch === '}' || ch === ',') { push({ t: 'p', v: ch }); i++; continue; }
+    if (ch === '(' || ch === ')' || ch === '{' || ch === '}' || ch === ',') {
+      if (ch === ')' && sub && parens === 0) return { toks, end: i + 1 };
+      if (ch === '(') parens++;
+      else if (ch === ')' && parens > 0) parens--;
+      push({ t: 'p', v: ch }); i++; continue;
+    }
     if (ch === ']') { push({ t: 'p', v: ']' }); i++; continue; }
     if (ch === '[') {
       const m = /^\[([A-Za-z_][A-Za-z0-9_.]*(?:\[\])?)\]/u.exec(src.slice(i, i + 120));
@@ -540,12 +752,14 @@ function tokenizePs(src: string, shell: ShellKind): Tok[] | LexFail {
     push({ t: 'word', v: text, glob: /[*?[]/u.test(text) });
     i = j;
   }
-  return toks;
+  if (sub) return fail('unclosed', '$(');
+  return { toks, end: n };
 }
 
 function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFail | null {
-  const toks = tokenizePs(src, shell);
-  if (isFail(toks)) return toks;
+  const scanned = tokenizePs(src, shell);
+  if (isFail(scanned)) return scanned;
+  let toks: Tok[] = scanned;
   let k = 0;
   const peek = (o = 0): Tok | undefined => toks[k + o];
   const isP = (t: Tok | undefined, v: string): boolean => t?.t === 'p' && t.v === v;
@@ -566,6 +780,20 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const a = peek();
       if (a?.t === 'p' && (a.v === '&&' || a.v === '||')) k++;
     }
+  };
+
+  const stringSubs = (t: Tok, depth: number): LexFail | null => {
+    for (const inner of t.subs ?? []) {
+      const savedToks = toks;
+      const savedK = k;
+      toks = inner;
+      k = 0;
+      const r = statements(null, depth + 1);
+      toks = savedToks;
+      k = savedK;
+      if (r) return r;
+    }
+    return null;
   };
 
   const pipeline = (depth: number): LexFail | null => {
@@ -604,6 +832,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       const m = t.t === 'word' ? /^([^=]+)(=?)(.*)$/su.exec(t.v)! : null;
       keys.push((m ? m[1]! : t.v).toLowerCase());
       k++;
+      const keySubs = stringSubs(t, depth);
+      if (keySubs) return keySubs;
       let rest = m ? m[3]! : '';
       if (!m || m[2] === '') {
         const eq = peek();
@@ -624,14 +854,15 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     return plain('@{…}', { kind: 'hash', dynamic: true, hashKeys: keys });
   };
 
-  // 値のあとに続く .メンバー・.メソッド( … )・[添字] を読む。許していないメソッドの印を返す
-  const chain = (depth: number, st: Statement): LexFail | null => {
+  // 値のあとに続く .メンバー・.メソッド( … )・[添字] を読む。許していないメソッドの印を返す。calls が false なら、メソッドの呼び出しの ( の手前で止める（代入の左辺の試し読み用）
+  const chain = (depth: number, st: Statement, calls = true): LexFail | null => {
     for (;;) {
       const t = peek();
       if (t?.t === 'member') {
         k++;
         const open = peek();
         if (isP(open, '(') && !open!.sp) {
+          if (!calls) return null;
           if (!PS_METHOD_OK.has(t.v.toLowerCase())) st.shapes.push(`method:${t.v}`);
           k++;
           const r = statements(')', depth + 1);
@@ -649,7 +880,14 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     const t = peek()!;
     // .メンバー・[添字] が続くと、値は計算されたもの（'a'.Replace(..) など）。元の文字ではないので、パスとして読めない印の $( … ) にする
     if (t.t === 'var') { k++; const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(`$${t.v}`, { dynamic: true })); }
-    if (t.t === 'str') { k++; const start = k; const r = chain(depth, st); return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(t.v, { quoted: true, dynamic: t.dyn === true })); }
+    if (t.t === 'str') {
+      k++;
+      const inner = stringSubs(t, depth);
+      if (inner) return inner;
+      const start = k;
+      const r = chain(depth, st);
+      return r ?? (k > start ? plain('$(…)', { kind: 'paren', dynamic: true }) : plain(t.v, { quoted: true, dynamic: t.dyn === true }));
+    }
     if (t.t === 'p' && t.v === '(' || t.t === 'sub' || t.t === 'arr') {
       k++;
       const r = statements(')', depth + 1);
@@ -799,6 +1037,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       if (t.t === 'sub' || t.t === 'arr' || t.t === 'hash') level++;
       if (t.t === 'p' && (t.v === ')' || t.v === '}')) { if (level === 0) break; level--; }
       k++;
+      const inner = stringSubs(t, depth);
+      if (inner) return inner;
       if (level > MAX_DEPTH + 2) return fail('depth');
     }
     void depth;
@@ -859,28 +1099,16 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       }
       if (PS_OTHER_CONTROL.has(lower)) return controlSkip(depth);
     }
-    // 代入
+    // 代入。左辺（$a.b[ … ]）は chain で読む（添字の中の文もトップレベルの文と同じに判定される）。代入でなければ、読んだ位置と文を戻して、式として読み直す
     if (t.t === 'var') {
-      let j = 1;
-      for (;;) {
-        const x = peek(j);
-        if (x?.t === 'member') { j++; continue; }
-        if (isP(x, '[')) {
-          let level = 0;
-          for (;;) {
-            const y = peek(j);
-            if (!y) break;
-            j++;
-            if (isP(y, '[')) level++;
-            else if (isP(y, ']') && --level === 0) break;
-          }
-          continue;
-        }
-        break;
-      }
-      const op = peek(j);
+      const from = k;
+      const mark = sink.length;
+      k++;
+      const left = chain(depth, st, false);
+      if (left) return left;
+      const op = peek();
       if (op?.t === 'word' && ASSIGN_OPS.has(op.v)) {
-        k += j + 1;
+        k++;
         skipNl();
         const r = pipeline(depth + 1);
         if (r) return r;
@@ -888,6 +1116,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         st.assigns.push({ name: t.v, op: op.v, value: null });
         return finish(st);
       }
+      k = from;
+      sink.length = mark;
     }
     // コマンド
     const startsExpression = t.t !== 'word' && !isP(t, '&') ? true : t.t === 'word' && (/^[-+]?[0-9]/u.test(t.v) || t.v === '!' || t.v.toLowerCase() === '-not' || t.v.startsWith('..'));

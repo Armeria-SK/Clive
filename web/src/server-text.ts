@@ -1,4 +1,5 @@
 import { format } from '../../src/shared/messages/define.ts';
+import { configText } from '../../src/shared/messages/config.ts';
 import { engineText } from '../../src/shared/messages/engine.ts';
 import { httpText } from '../../src/shared/messages/http.ts';
 import { providerText } from '../../src/shared/messages/providers.ts';
@@ -11,7 +12,7 @@ import type { Lang } from './i18n/state.ts';
 // 画面の訳が食い違わない。コードが表に無い・差し込みの値が足りないときは null を返し、呼ぶ側はサーバーが書いた文（message）を出す。
 
 type Catalog = { readonly tables: Record<Lang, Record<string, string>> };
-const DOMAINS: Record<string, Catalog> = { http: httpText, task: taskText, store: storeText, provider: providerText, engine: engineText };
+const DOMAINS: Record<string, Catalog> = { http: httpText, task: taskText, store: storeText, provider: providerText, engine: engineText, config: configText };
 
 export type Params = Record<string, unknown> | undefined | null;
 
@@ -50,7 +51,7 @@ export function errorBodyText(body: unknown, language: Lang): string | null {
 
 const WARNING_KEY: Record<string, string> = {
   max_iterations: 'warn.max_iterations', context_trimmed: 'warn.context_trimmed', partial_discarded: 'warn.partial_discarded', retrying: 'warn.retrying',
-  compacted: 'warn.compacted', compaction_failed: 'warn.compaction_failed', server_truncation_suspected: 'warn.server_truncation',
+  compacted: 'warn.compacted', compaction_failed: 'warn.compaction_failed', queued_saved: 'warn.queued_saved', queued_not_started: 'warn.queued_not_started', server_truncation_suspected: 'warn.server_truncation',
 };
 
 // 返事の途中の警告（SSE の warning）。再試行の理由は、理由のコードがあれば画面の言語に、無ければサーバーの詳しい文のまま。

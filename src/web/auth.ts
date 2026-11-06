@@ -4,7 +4,8 @@ import { isLoopbackHost } from '../shared/url.ts';
 const LOGIN = /^[^\s,]{1,256}$/;
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-export type AuthResult = { ok: true; origin: string } | { ok: false; reason: string };
+// local: この PC（ループバック）から来た要求か。login: Tailscale から来た要求のログイン名
+export type AuthResult = { ok: true; origin: string; local: boolean; login?: string } | { ok: false; reason: string };
 
 export class WebAuth {
   readonly origins: readonly string[];
@@ -37,7 +38,8 @@ export class WebAuth {
       if (typeof login !== 'string' || !LOGIN.test(login)) return { ok: false, reason: 'tailnet' };
       if (this.#logins.size && !this.#logins.has(login.toLowerCase())) return { ok: false, reason: 'tailnet_login' };
     }
-    return { ok: true, origin: entry.origin };
+    const login = req.headers['tailscale-user-login'];
+    return { ok: true, origin: entry.origin, local: entry.local, ...(!entry.local && typeof login === 'string' ? { login } : {}) };
   }
 }
 

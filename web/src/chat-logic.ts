@@ -1,4 +1,5 @@
-import { ApiError, type ApprovalPathView, type ModelView } from './api.ts';
+import type { PermissionMode } from '../../src/shared/permission-mode.ts';
+import { ApiError, type ApprovalPathView, type ModelChoice, type ModelView } from './api.ts';
 import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
 import type { IconName } from './icon-paths.ts';
 import { probeMessage, serverText } from './server-text.ts';
@@ -118,6 +119,18 @@ export function sendTarget(conversationId: string | null, created: string | null
   return { id, created: id };
 }
 
+// 発言と一緒に送る、モデルと考える深さの選び。会話がまだ無いときは、画面で覚えている選びを最初の発言と一緒に送る（サーバーにまだ覚える会話が無いため）。
+// 会話があれば送らない（サーバーが覚えている）。override（使えるモデルで送る道など、その場で決めた選び）は、画面で覚えている選びより優先して、そのまま送る
+// （画面の状態は、押した直後はまだ古いので使わない。モデルだけを替えるときは、古い考える深さも持ち越さない）
+// 会話の変更のうち、使用量の輪を数え直すもの: 使うモデルが変わるとき、権限モードが変わるとき（計画モードは、モデルに渡す道具の一覧と指示が変わる）
+export const recountsUsage = (kind: string): boolean => kind === 'model' || kind === 'mode';
+
+export function sendChoiceOf(conversationId: string | null, current: { modelId: string | null; effort: string | null; permissionMode?: PermissionMode }, override?: ModelChoice): ModelChoice {
+  if (override) return { ...override };
+  if (conversationId) return {};
+  return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}), ...(current.permissionMode && current.permissionMode !== 'normal' ? { permissionMode: current.permissionMode } : {}) };
+}
+
 export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';
 
 const TOOL_KINDS: ReadonlySet<ChatItemKind> = new Set<ChatItemKind>(['tool', 'run']);
@@ -207,6 +220,7 @@ export const SLASH_COMMANDS = [
   { name: 'stop', desc: 'slash.stop' },
   { name: 'rename', desc: 'slash.rename' },
   { name: 'archive', desc: 'slash.archive' },
+  { name: 'summary', desc: 'slash.summary' },
 ] as const satisfies ReadonlyArray<{ name: string; desc: PlainKey }>;
 
 export type SlashCommand = (typeof SLASH_COMMANDS)[number];
@@ -216,6 +230,14 @@ export function slashMatches(input: string): SlashCommand[] {
   if (!input.startsWith('/')) return [];
   const query = input.slice(1).toLowerCase();
   return SLASH_COMMANDS.filter(c => c.name.startsWith(query));
+}
+
+// 実行ごとのお知らせの並び。key が同じ（同じ実行の同じ種類）お知らせは、並べずに最新の内容で置き換える
+// （要約した件数・外した件数が増えるたびに、同じお知らせが並ばないように）。max 件を超えたら古いものから落とす
+export function mergeNotice<T extends { runId: string; key?: string | undefined }>(list: readonly T[], notice: T, max = 8): T[] {
+  const at = notice.key === undefined ? -1 : list.findIndex(n => n.runId === notice.runId && n.key === notice.key);
+  const next = at >= 0 ? list.map((n, i) => (i === at ? notice : n)) : [...list, notice];
+  return next.slice(-max);
 }
 
 export function renameTitleOf(input: string): string | null {
@@ -265,6 +287,12 @@ export function firstLine(value: string, max = 160): string {
 }
 
 export const formatCountdown = (ms: number): string => formatElapsed(Math.max(0, ms));
+
+// 「この返事のあいだ、このフォルダ以下への書き込みを許可」のボタンに出すフォルダ名: 長い絶対パスは、末尾の 2 つの名前だけ（全部はボタンの title）
+export function grantFolderLabel(folder: string): string {
+  const parts = folder.split(/[\\/]+/u).filter(Boolean);
+  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : parts.join('/') || folder;
+}
 
 // 承認の札の、見つけたパスごとの判定の札。中は読み書き・読むだけで文が分かれ、知らない判定は「判定できない」
 export function approvalPathKey(path: Pick<ApprovalPathView, 'verdict' | 'mode'>): PlainKey {

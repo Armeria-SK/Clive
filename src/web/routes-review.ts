@@ -4,6 +4,7 @@ import { curiosityText } from '../curiosity/text.ts';
 import { languageOf } from '../shared/language.ts';
 import { TRIGGER_TEXT } from '../memory/review.ts';
 import { SkillError } from '../tools/skills/store.ts';
+import { isPolicyable, isToolPolicy, toolPolicy } from '../tools/tool-policy.ts';
 import { taskView } from '../tasks/store.ts';
 import { domainProblem, problem, readJson, requireObject, requireString, sendJson, type Router } from './http.ts';
 
@@ -21,6 +22,29 @@ function idOf(raw: string): number {
 }
 
 export function registerReviewRoutes(router: Router, app: App): void {
+  // ── 道具と、道具ごとの方針 ──
+  const toolView = (tool: ReturnType<App['tools']['list']>[number], config = app.config()) => ({
+    name: tool.name, effect: tool.effect, allowedIn: tool.allowedIn, policy: toolPolicy(config, tool.name), configurable: isPolicyable(tool.name),
+  });
+  router.add('GET', '/api/tools', ({ res }) => {
+    const config = app.config();
+    sendJson(res, 200, { tools: app.tools.list().map(tool => toolView(tool, config)) });
+  });
+  // 1 つの道具の方針だけを変える（設定を読み直して policies の 1 つを書き換えて保存）。緩める変更の確かめは画面の側（設定の「広がる変更」と同じ文）で、サーバーは PUT /api/settings と同じ人だけが呼べる
+  router.add('PATCH', '/api/tools/:name', async ({ req, res, params }) => {
+    const name = params[0]!;
+    const tool = app.tools.get(name);
+    if (!tool) throw problem(404, 'not_found', 'tool_missing', { params: { name } });
+    const body = requireObject(await readJson(req));
+    if (!isToolPolicy(body.policy)) throw problem(400, 'invalid_field', 'bad_enum', { field: 'policy', params: { field: 'policy', values: 'allow / ask / block' } });
+    if (!isPolicyable(name)) throw problem(400, 'invalid_field', 'tool_not_policyable', { field: 'name', params: { name } });
+    const current = app.config();
+    const policies = { ...current.tools.policies };
+    if (body.policy === 'allow') delete policies[name]; else policies[name] = body.policy;
+    const saved = await app.applyConfig({ ...current, tools: { ...current.tools, policies } }, { probe: false });
+    sendJson(res, 200, { tool: toolView(tool, saved) });
+  });
+
   // ── スキル ──
   router.add('GET', '/api/skills', ({ res }) => sendJson(res, 200, {
     skills: app.skills.list().map(({ body: _body, ...s }) => s),

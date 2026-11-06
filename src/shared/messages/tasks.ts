@@ -30,6 +30,7 @@ const ja = {
   'summary.cancelled_from_ui': '画面から取り消しました',
 
   'reason.no_model': '使えるモデルが無いため待ちます: {detail}',
+  'reason.local_wait': '手元のモデルで話した会話から作ったタスクなので、使える手元のモデルが無いあいだは待ちます（外のモデルには回しません）',
   'reason.preempted': 'ユーザーとの会話を優先するため中断しました（続きから再開します）',
   'reason.checkpoint': '{minutes} 分後に再開します',
   'reason.no_progress': '進展が無かったので、少し休んでから再開します',
@@ -43,6 +44,7 @@ const ja = {
   'title.task': 'タスク: {title}',
   'review.nothing': '振り返る記録がありませんでした',
   'review.no_reply': '（返事なし）',
+  'review.local_skipped': 'ローカルのモデルで話した会話で、使えるローカルの裏方モデルが無いため、振り返りを飛ばしました（外のモデルには渡しません）',
 
   'notify.waiting_reminder': '返事を待っています: {title}',
   'notify.budget.title': '1時間の実行の上限に達したので、タスクを少し待たせています',
@@ -100,6 +102,7 @@ const en: Record<keyof typeof ja, string> = {
   'summary.cancelled_from_ui': 'Cancelled from the screen',
 
   'reason.no_model': 'Waiting because no model is available: {detail}',
+  'reason.local_wait': 'This task came from a conversation that used a local model, so it waits while no local model is available (it is never sent to an external model)',
   'reason.preempted': 'Paused to give priority to the conversation with the user (it will resume from where it left off)',
   'reason.checkpoint': 'Will resume in {minutes} min',
   'reason.no_progress': 'No progress was made, so it will rest for a while and then resume',
@@ -113,6 +116,7 @@ const en: Record<keyof typeof ja, string> = {
   'title.task': 'Task: {title}',
   'review.nothing': 'There was nothing to review',
   'review.no_reply': '(no reply)',
+  'review.local_skipped': 'This conversation used a local model and no local background model is available, so the review was skipped (it is never sent to an external model)',
 
   'notify.waiting_reminder': 'Waiting for your reply: {title}',
   'notify.budget.title': 'The hourly run limit was reached, so tasks are being held back for a while',

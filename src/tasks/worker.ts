@@ -3,6 +3,7 @@ import { DEFAULT_LANGUAGE, type AppConfig, type Language } from '../config/schem
 import type { Conversations } from '../db/conversations.ts';
 import type { KV } from '../db/kv.ts';
 import type { ChatEngine } from '../engine/chat.ts';
+import { isLocalPinned } from '../engine/local-model.ts';
 import type { EngineResult } from '../engine/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import { curiosityText } from '../curiosity/text.ts';
@@ -315,10 +316,19 @@ export class Worker {
     const prompt = this.#reviewInput(job);
     const language = this.#language();
     if (!prompt) { reviews.finish(job.id, 'done', taskText(language, 'review.nothing')); return 'idle'; }
+    // 手元のモデルで話した会話（選んだモデルが設定から消えた会話も）と、手元のモデルだけで動かすタスクの振り返りは、手元の裏方モデルだけで行う。使えるものが無ければ、外のモデルに回さず、その振り返りを飛ばす
+    const local = isLocalPinned(this.#d.config(), job.conversation_id ? conversations.get(job.conversation_id)?.model_id : null) || (job.task_id !== null && this.#d.tasks.get(job.task_id)?.local_only === 1);
+    const skipLocal = () => { reviews.finish(job.id, 'done', taskText(language, 'review.local_skipped')); return 'idle' as const; };
+    if (local && !engine.localReviewAvailable()) return skipLocal();
     const lastMessageId = job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
-    const conversation = conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }) });
-    const started = engine.runReview(conversation.id, prompt, job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {});
+    // 止められて・再起動でやり直す振り返りは、前の回の振り返りの会話に続きを書く（新しく作ると、前の回の会話が記録から外れる）。会話は作るときに材料も覚える
+    const source = { conversationId: job.conversation_id, taskId: job.task_id };
+    const earlier = job.review_conversation_id ? conversations.get(job.review_conversation_id) : undefined;
+    if (earlier?.kind === 'task') conversations.setSource(earlier.id, source);
+    const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }), source });
+    const started = engine.runReview(conversation.id, prompt, { ...(job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {}), ...(local ? { localOnly: true } : {}) });
     if (!started.ok) {
+      if (local) return skipLocal();
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.review_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-review' });
       return 'no_model';
     }
@@ -372,6 +382,11 @@ export class Worker {
     const prompt = taskPrompt(task, tasks.events(task.id), c.timezone, language);
     const started = engine.runTask(task, conversationId, prompt);
     if (!started.ok) {
+      // 手元のモデルだけで動かすタスクは、使える手元のモデルが無いあいだ、外のモデルに回さず待つ（回数は数えない。不調の通知も出さない: 設定のせいではなく、約束どおりの待ち）
+      if (started.localOnly) {
+        tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.local_wait') });
+        return 'no_model';
+      }
       tasks.setReady(task.id, { runAt: this.#now() + 10 * 60_000, reason: taskText(language, 'reason.no_model', { detail: started.errorMessage.split('\n')[0]! }) });
       this.#d.notifications.notify({ kind: 'health_alert', title: taskText(language, 'notify.task_no_model'), body: started.errorMessage, link: '#/settings', dedupKey: 'no-model-for-tasks' });
       return 'no_model';

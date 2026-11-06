@@ -23,6 +23,7 @@ export interface SectionViewProps extends SectionProps {
   lastSavedAt: number | null;
   onNameSaved: (profile: Profile) => void;
   onRerunSetup: () => void;
+  onKeyChanged: () => void;
 }
 
 export function SectionView(props: SectionViewProps) {
@@ -31,7 +32,7 @@ export function SectionView(props: SectionViewProps) {
     case 'models':
       return <ModelsSection {...base} probes={props.models} probing={props.probing} onProbe={props.onProbe} selectedId={props.selectedModel} onSelect={props.onSelectModel} />;
     case 'providers':
-      return <ProvidersSection {...base} selectedId={props.selectedProvider} onSelect={props.onSelectProvider} />;
+      return <ProvidersSection {...base} selectedId={props.selectedProvider} onSelect={props.onSelectProvider} onKeyChanged={props.onKeyChanged} />;
     case 'keys': return <KeysSection draft={props.draft} apiKeys={props.apiKeys} />;
     case 'tools': return <ToolsSection {...base} />;
     case 'worker': return <WorkerSection {...base} />;

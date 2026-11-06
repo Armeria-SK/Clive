@@ -12,6 +12,7 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import type { RunEvent } from '../src/engine/types.ts';
 import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
+import { lexShell } from '../src/tools/hooks/shell-lex.ts';
 import { gitVersionAtLeast } from '../src/tools/shell/git-env.ts';
 import { shellRun } from '../src/tools/builtin/shell.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
@@ -45,7 +46,7 @@ function setup(t: { after: (fn: () => void) => void }, shell: 'powershell' | 'ba
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
-  const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, { registry, approvals, db, emit: e => events.push(e) });
+  const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
   const files = (name: string) => join(paths.workspace, name);
   const seed = () => {
     writeFileSync(files('a.txt'), 'line1\nline2\nline3\n');
@@ -298,6 +299,92 @@ test('実機（Windows PowerShell 5.1・制限モード）: git grep -e \'\' -- 
   assert.equal(existsSync(marker), false, 'Clive のシェルで x.sh が動いた');
 });
 
+// "…" の中の $( … ) は、中の文をトップレベルの文と同じに調べる（§11.15）。読むだけ・整えるだけは承認なしで本当に動き、中で書く・消す・コードを動かすものは確かめになって、拒否すれば何も起きない
+test('実機（Windows PowerShell 5.1・制限モード）: "…" の中の $( … ) は、読むだけなら承認なしで本当に動き、中で書く・消す部分式は確かめになって、拒否すれば何も書かれない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  const rows: Array<[string, RegExp]> = [
+    ['Get-ChildItem *.txt | ForEach-Object { "$($_.Name) $($_.Length)" }', /a\.txt 18/u],
+    ['Write-Output "$((Get-Item a.txt).Length) bytes"', /18 bytes/u],
+    ['Write-Host "year $(Get-Date -Format yyyy)"', /year 20[0-9]{2}/u],
+    ['Write-Output "a$("x $(Get-Date -Format yyyy)")c"', /ax 20[0-9]{2}c/u],
+    ['Write-Output "名前は $((Get-Item a.txt).Name)"', /名前は a\.txt/u],
+    ['foreach ($f in Get-ChildItem *.txt) { Write-Host "[$($f.Name)]" }', /\[a\.txt\]/u],
+    ['"$(Get-Date -Format yyyy)-$(Get-Item a.txt | ForEach-Object { $_.Name })"', /20[0-9]{2}-a\.txt/u],
+    ["Write-Output \"it's $((Get-Item a.txt).Name)\"", /it's a\.txt/u],
+  ];
+  for (const [command, expected] of rows) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, expected, command);
+  }
+  const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  raw('Write-Output "$(Set-Content raw.txt hello)"');
+  assert.equal(existsSync(s.files('raw.txt')), true, '前提: 素の PowerShell では、"…" の中の部分式が本当に書く');
+  rmSync(s.files('raw.txt'));
+  for (const command of [
+    'Write-Output "$(Set-Content out.txt hello)"', 'Write-Output "$(Set-Content SOUL.md pwned)"', 'Write-Output "$(Remove-Item a.txt)"', 'Write-Output "$(New-Item -ItemType Directory made)"', 'Write-Output "$(Copy-Item a.txt c.txt)"',
+    'Write-Output "x$("y $(Move-Item a.txt moved.txt)")"', "Write-Output \"$(iex 'Get-Date')\"", 'Get-ChildItem *.txt | ForEach-Object { "$(Remove-Item $_.FullName)" }', 'Write-Output "$(Get-Date)" > out2.txt', 'Write-Output "$(Rename-Item notes.md -NewName renamed.md)"',
+  ]) await expectAsk(s, command);
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '人格が書き換わった');
+  assert.equal(readFileSync(s.files('a.txt'), 'utf8'), 'line1\nline2\nline3\n', 'a.txt が変わった');
+  assert.equal(readFileSync(s.files('notes.md'), 'utf8'), 'notes\n');
+  for (const name of ['out.txt', 'made', 'c.txt', 'moved.txt', 'out2.txt', 'renamed.md']) assert.equal(existsSync(s.files(name)), false, `${name} ができた`);
+  // 秘密の読み取りは確かめにも進まず止まり、秘密は出ない。読みきれない形は動かす前に止まる
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  assert.match(raw('Write-Output "$(Get-Content .env)"'), /SECRET=1/u, '前提: 素の PowerShell では、部分式が秘密を読む');
+  const secret = await s.call('Write-Output "$(Get-Content .env)"');
+  assert.equal(secret.decision, 'deny');
+  assert.doesNotMatch(secret.output.content, /SECRET=1/u);
+  for (const command of ['Write-Output "${env:PATH}"', 'Write-Output "$$(Get-Date)"', "Write-Output \"$(Write-Output ')')\"", 'Write-Output "$(Get-Date # c`n)"']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, /書き方を判定できません/u, command);
+  }
+});
+
+// 代入の左辺の添字（$a[ … ] = 1）の中の $( … ) も、トップレベルの文と同じに調べる。以前は代入かどうかの先読みが添字の中を読み飛ばして、確かめなしで書いた・消した
+test('実機（Windows PowerShell 5.1・制限モード）: 代入の左辺の添字の中で書く・消す部分式は、素の PowerShell では動くが、Clive のシェルでは確かめになり、拒否すれば何も書かれない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('x'), 'keep');
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  const raw = (command: string) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage';${command}`], { cwd: s.paths.workspace, encoding: 'utf8' });
+  raw('$a = @(1,2); $a[$(Set-Content premise.txt hello; 0)] = 5');
+  assert.equal(existsSync(s.files('premise.txt')), true, '前提: 素の PowerShell（制限モード）では、添字の中の部分式が本当に書く');
+  raw('$a = @(1,2); $a[$(Remove-Item x; 0)] = 5');
+  assert.equal(existsSync(s.files('x')), false, '前提: 素の PowerShell では、添字の中の部分式が本当に消す');
+  raw('$a = @{}; $a[$(Set-Content SOUL.md pwned; 1)] = 1');
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8').trim(), 'pwned', '前提: 素の PowerShell では、添字の中の部分式が人格を書き換える');
+  rmSync(s.files('premise.txt'));
+  writeFileSync(s.files('x'), 'keep');
+  writeFileSync(s.files('SOUL.md'), 'persona');
+  for (const command of [
+    '$a = @(1,2); $a[$(Remove-Item x; 0)] = 5', '$a = @(1,2); $a[$(Set-Content out.txt hello; 0)] = 5', '$a = @{}; $a[$(Set-Content SOUL.md pwned; 1)] = 1', '$a = @{}; $a["k$(Set-Content out2.txt hello)"] = 1',
+    '$a = @(1,2); $a[$(Remove-Item x; 0)] += 5', '$a = @(1,2); $a[($(Remove-Item x; 0))] = 5', '$a = @(1,2); $a[0..$(Remove-Item x; 1)] = 5', '$a = @{}; $a.b = @{}; $a.b[$(Set-Content out3.txt hello; 1)] = 1',
+    '$a = @{}; $a[$a[$(Set-Content out4.txt hello; 1)]] = 1',
+  ]) await expectAsk(s, command);
+  assert.equal(readFileSync(s.files('x'), 'utf8'), 'keep', 'x が消えた');
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '人格が書き換わった');
+  for (const name of ['premise.txt', 'out.txt', 'out2.txt', 'out3.txt', 'out4.txt']) assert.equal(existsSync(s.files(name)), false, `${name} ができた`);
+  for (const command of ['$a = @(1,2); $a[$(Get-Content .env | Out-Null; 0)] = 5', '$a = @{}; $a[$(Get-Content .env)] = 1', '$a = @{}; $a["$(Get-Content .env)"] = 1']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
+  }
+  // ふつうの代入は、今までどおり承認なしで動く
+  for (const [command, expected] of [
+    ['$a = @(1,2,3); $a[1] = 9; $a -join ","', /1,9,3/u], ['$a = @(1,2,3); $a[-1] = 9; $a -join ","', /1,2,9/u], ['$h = @{}; $h["a"] = 1; $h.a', /\b1\b/u], ['$h = @{}; $h["k$(Get-Date -Format yyyy)"] = 7; $h.Count', /\b1\b/u],
+    ['$a = @(1,2,3); $i = 2; $a[$i] = 5; $a -join ","', /1,2,5/u], ['$h = @{}; $h.b = @{}; $h.b["x"] = 3; $h.b.x', /\b3\b/u],
+  ] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
 const bashPath = which('bash');
 const bashAvailable = bashPath !== undefined && spawnSync(bashPath, ['--noprofile', '--norc', '-c', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
 
@@ -317,6 +404,174 @@ test('実機（bash）: 一覧に当たるコマンドは承認なしで動き�
   for (const command of ['cp tmp/SOUL.md .', 'mv tmp/SOUL.md .', 'cp -r tmp/. .', 'rm -rf -- *', 'echo x > SOUL.md', "node -e 1", 'awk 1 a.txt', 'tar -xf out.tar']) await expectAsk(s, command);
   assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona');
   assert.equal(existsSync(s.files('tmp/SOUL.md')), true);
+});
+
+// "…" の中の \ は、$ ` " \ 改行の前でだけ特別（§11.15）。読むだけの形は承認なしで本当に動き、\$( は文字のままで何も動かさない
+test('実機（bash）: "…" の中の \\ を含む読むだけのコマンドは承認なしで本当に動き、echo "\\$(rm x)" は文字を出すだけで何も消さない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  writeFileSync(s.files('lines.txt'), 'main.ts\nnotes.md\nfoo|bar\nline1\nline3\n');
+  writeFileSync(s.files('x'), 'keep');
+  const rows: Array<[string, string]> = [
+    ['grep "\\.ts$" lines.txt', 'main.ts'],
+    ['grep "line1\\|line3" lines.txt', 'line1\nline3'],
+    ['grep "foo\\|nothing" lines.txt', 'foo|bar'],
+    ['echo "a\\nb"', 'a\\nb'],
+    ['echo "\\$HOME"', '$HOME'],
+    ['echo "say \\"hi\\""', 'say "hi"'],
+    ['echo "\\$(rm x)"', '$(rm x)'],
+    ['echo "tab\\there" | wc -c', '10'],
+  ];
+  for (const [command, expected] of rows) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.output.content.split('\n\n').slice(2).join('\n\n').trim(), expected, command);
+  }
+  assert.equal(readFileSync(s.files('x'), 'utf8'), 'keep', 'echo "\\$(rm x)" で x が消えた');
+});
+
+// Windows の Git Bash に bash -c で渡すと、連続する \\ が 1 つに減る。Clive のシェルはスクリプトを標準入力で渡す（runner.ts）ので減らず、ガードの読みどおりに動く
+test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の bash -c では減って置換が動くが、Clive のシェルでは減らず、ガードの読みどおり文字のまま出て、置換の touch は動かない', { skip: (process.platform !== 'win32' || !bashAvailable) && 'Windows の Git Bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  const dangerous = 'echo "\\\\\\$(touch made)"';
+  const raw = spawnSync(bashPath!, ['--noprofile', '--norc', '-c', dangerous], { cwd: s.paths.workspace, encoding: 'utf8' });
+  assert.equal(raw.stdout, '\\\n', '前提: 素の bash -c では、\\\\\\$ が \\\\$ に減って、$( が置換になる');
+  assert.equal(existsSync(s.files('made')), true, '前提: 置換の touch が動く');
+  rmSync(s.files('made'));
+  const body = (outcome: { output: { content: string } }): string => outcome.output.content.split('\n\n').slice(2).join('\n\n').trim();
+  const lexed = lexShell(dangerous, 'bash');
+  assert.ok(lexed.ok && lexed.statements.length === 1 && lexed.statements[0]!.words[1]!.text === '\\$(touch made)', 'ガードは、置換のない 1 つの文として読む');
+  const outcome = await s.call(dangerous);
+  assert.equal(outcome.decision, 'allow', outcome.output.content);
+  assert.equal(outcome.decidedBy !== 'user', true, '承認を求めた');
+  assert.equal(outcome.output.isError, false, outcome.output.content);
+  assert.equal(body(outcome), '\\$(touch made)', 'ガードの読みと同じ文字が出る');
+  assert.equal(existsSync(s.files('made')), false, 'Clive のシェルで置換の touch が動いた');
+  for (const [command, expected] of [
+    ['echo "a\\\\b"', 'a\\b'], ['echo "\\\\\\\\"', '\\\\'], ['echo "x\\\\" "y"', 'x\\ y'], ['echo "\\\\$HOME_UNSET_XYZ"', '\\'], ['grep -c "line\\\\|notes" a.txt', '3'],
+  ] as const) {
+    const run = await s.call(command);
+    assert.equal(run.decision, 'allow', `${command}: ${run.output.content}`);
+    assert.equal(run.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(body(run), expected, command);
+  }
+  // 本物の置換（\\ のあとの $( ）は、今までどおり中の文が判定される: コードを動かす文は確かめになり、拒否すれば動かない
+  await expectAsk(s, 'echo "\\\\$(node -e 1)"');
+});
+
+// 最終審査で再現: 空になりうる変数（PowerShell の $1 $0 $é $日 $$ $^ $?、bash の $1 $@ $* $!）を名前に含む読むパスは、文字どおりの名前と読まれて .env の確かめを通り抜けた。
+// 本物のシェルでは .env を読むこと（前提）と、Clive のシェルでは確かめなしに読まず、拒否すれば秘密が出ないことを確かめる。ただ出すだけの "$1" は承認なしで動く
+async function expectAskedNotRun(s: ReturnType<typeof setup>, command: string): Promise<void> {
+  let settled = false;
+  const pending = s.call(command).then(outcome => { settled = true; return outcome; });
+  for (let i = 0; i < 300 && !settled && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+  const request = s.approvals.pending()[0];
+  assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
+  s.approvals.decide(request.id, 'deny');
+  const outcome = await pending;
+  assert.notEqual(outcome.decision, 'allow', command);
+  assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
+}
+
+test('実機（Windows PowerShell 5.1・制限モード）: Get-Content ".env$1" は素のシェルでは .env を読むが、Clive のシェルでは確かめなしに読まない。"$1" をただ出すだけは承認なしで動く', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  for (const command of ['Get-Content ".env$1"', 'Get-Content ".env$0"', 'Get-Content ".env$é"', 'Get-Content ".env$日"', 'Select-String -Path ".env$1" -Pattern SECRET', 'Get-Content -Path ".env$12"']) {
+    assert.match(raw(command), /SECRET=1/u, `前提: 素のシェルでは .env を読む: ${command}`);
+    await expectAskedNotRun(s, command);
+  }
+  for (const [command, expected] of [['Write-Output "a$1 b"', /a b/u], ['Write-Output "$1"', /^[\s\S]*$/u], ['Get-Content a.txt -TotalCount 1', /line1/u]] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
+// 最終審査の指摘: 値を式として評価する bash の構文・組み込みは、変数の値や引用符で囲んだ文字列の中の a[$(コマンド)]（配列の添字）で、コマンドを動かす。
+// 素の bash では動くこと（前提）と、Clive のシェルでは今回だけの確かめになり、拒否すれば動かないことを確かめる。整数の定数だけの式・普通の [ ] の比較は承認なしで動く
+test('実機（bash）: 値を式として評価する形（[[ x -eq 0 ]]・$((x))・test -v・let・declare -i）は、素の bash では添字の $( ) が動くが、Clive のシェルでは今回だけの確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  const marker = s.files('ran.txt');
+  writeFileSync(s.files('pwn.sh'), '#!/bin/sh\necho ran > ran.txt\n', { mode: 0o755 });
+  const rows = [
+    "x='a[$(./pwn.sh)]'; [[ x -eq 0 ]]", "x='a[$(./pwn.sh)]'; echo $((x))", "x='a[$(./pwn.sh)]'; echo $((1 + $x))", "test -v 'a[$(./pwn.sh)]'", "[ -v 'a[$(./pwn.sh)]' ]", "[[ -v 'a[$(./pwn.sh)]' ]]",
+    "[[ 'a[$(./pwn.sh)]' -eq 0 ]]", "let 'a[$(./pwn.sh)]=1'", "declare -i n='a[$(./pwn.sh)]'", "typeset -i n='a[$(./pwn.sh)]'", "printf -v 'a[$(./pwn.sh)]' x", "declare 'a[$(./pwn.sh)]=1'",
+  ];
+  for (const command of rows) {
+    rmSync(marker, { force: true });
+    spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' });
+    assert.equal(existsSync(marker), true, `前提: 素の bash では ./pwn.sh が動く: ${command}`);
+    rmSync(marker);
+    await expectBlocked(s, command);
+    assert.equal(existsSync(marker), false, `Clive のシェルで ./pwn.sh が動いた: ${command}`);
+  }
+  for (const [command, expected] of [['echo $((6*7))', /42/u], ['[[ 5 -gt 3 ]] && echo yes', /yes/u], ['[ "$HOME" ] && [ 1 -eq 1 ] && echo ok', /ok/u], ['[[ -v HOME ]] && echo set', /set/u]] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
+test('実機（bash）: cat .env$@ や cat ".env$1" は素の bash では .env を読むが、Clive のシェルでは確かめなしに読まない。"$1" $@ をただ出すだけは承認なしで動く', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  const raw = (command: string): string => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  for (const command of ['cat .env$@', 'cat ".env$1"', 'cat .env$*', 'cat .env$!', 'grep SECRET .env$@']) {
+    assert.match(raw(command), /SECRET=1/u, `前提: 素の bash では .env を読む: ${command}`);
+    await expectAskedNotRun(s, command);
+  }
+  for (const [command, expected] of [['echo "a$1b" $@', /ab/u], ['cat a.txt', /line1/u]] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
+// 全角の見張りは、字句の読み取りと同じ引用符の組み方で、引用符の外の全角（＂--pre=x＂ は Windows で " になって引数を割る）を止める
+test('実機（bash）: "…" の中の $( ) の中の引用符・コメント・ヒアドキュメントの引用符に惑わされず、引用符の外の全角は動かす前に止まる。引用符の中の全角は動く', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  for (const command of [`echo "$(echo '"')" ＂--pre=x＂`, "echo a # it's\necho ＂--pre=x＂ done", "cat <<'EOF'\nit's\nEOF\necho ＂--pre=x＂ done", 'echo "$(echo ＡＢ)"']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, /書き方を判定できません/u, command);
+    assert.doesNotMatch(outcome.output.content, /done/u, `${command}: 動いた`);
+  }
+  for (const [command, expected] of [[`echo "$(echo 'ＡＢ')"`, 'ＡＢ'], [`echo "ＡＢ $(echo '"')"`, 'ＡＢ "']] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.output.content.split('\n\n').slice(2).join('\n\n').trim(), expected, command);
+  }
+});
+
+// 最終審査で再現: $( ) の終わりの切り出しが bash とずれて、コメントの後ろ・case の )・$(( の部分シェル・[[ ]] のコメントと閉じ方・$[ ]・(( )) が、中の文を隠していた。
+// 素の bash では pwn.sh が動くこと（前提）と、Clive のシェルでは止まるか確かめになり、拒否すれば pwn.sh が動かないことを確かめる。ふつうの [[ ]] は承認なしで動く
+test('実機（bash）: 文を隠す形（$( ) の中のコメント・case の )・$(( の部分シェル・[[ ]]・$[ ]・(( ））は、素の bash では pwn.sh が動くが、Clive のシェルでは止まるか確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  const marker = s.files('ran.txt');
+  writeFileSync(s.files('pwn.sh'), '#!/bin/sh\necho ran > ran.txt\n', { mode: 0o755 });
+  const rows = [
+    'echo "$(# )\n./pwn.sh)"', 'x="$(# )\n./pwn.sh)"', 'echo "a$(#)\n./pwn.sh\n)"', 'echo "$(: # ) ;\n./pwn.sh)"', 'cat <(# )\n./pwn.sh)', 'echo "$(case x in x) ./pwn.sh;; esac)"', 'echo "$((true)\n./pwn.sh))"',
+    '[[ -n x # "\n]] && ./pwn.sh; echo "a" # "\n]]', 'if [[ -n x ]]; then ./pwn.sh ]] ; fi', 'if [[ -n x ]] then ./pwn.sh; fi', 'echo $[1 # $(./pwn.sh)]', '(( ls # )); ./pwn.sh', '[[ -n <(./pwn.sh) ]]', '[[ x =~ >(./pwn.sh) ]]',
+  ];
+  for (const command of rows) {
+    rmSync(marker, { force: true });
+    spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' });
+    assert.equal(existsSync(marker), true, `前提: 素の bash では pwn.sh が動く: ${JSON.stringify(command)}`);
+    rmSync(marker);
+    await expectBlocked(s, command);
+    assert.equal(existsSync(marker), false, `Clive のシェルで pwn.sh が動いた: ${JSON.stringify(command)}`);
+  }
+  for (const [command, expected] of [['if [[ -f a.txt ]]; then echo yes; fi', /yes/u], ['[[ -n x ]] && echo ok || echo no', /ok/u], ['echo "$(echo a#b) $#"', /a#b/u], ['echo $((1 + 2))', /3/u]] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.match(outcome.output.content, expected, command);
+  }
 });
 
 const gitAvailable = spawnSync('git', ['--version']).status === 0;

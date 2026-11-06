@@ -23,7 +23,7 @@ function dynamicOnce(words: readonly Word[], acc: Acc, cmd: string): void {
 }
 
 // ── 読むだけのコマンド ──
-gnu({ names: ['ls'], ro: true, flags: '-a -A -l -h -R -1 -t -r -S -d -F -i -s --color=never', pos: ['path-r…'] });
+gnu({ names: ['ls'], ro: true, flags: '-a -A -l -h -R -1 -t -r -S -d -F -i -s --color=never', pos: ['path-n…'] });
 gnu({ names: ['cat'], ro: true, flags: '-n -b -s -A -E -T -v', pos: ['path-r…'] });
 gnu({ names: ['head'], ro: true, numeric: true, flags: '-n:n -c:n -q -v', pos: ['path-r…'] });
 gnu({ names: ['tail'], ro: true, numeric: true, flags: '-n:n -c:n -q -v', pos: ['path-r…'] });
@@ -56,7 +56,7 @@ gnu({ names: ['file'], flags: '-b -i -L --mime-type --mime-encoding', pos: ['pat
 gnu({ names: ['stat'], ro: true, flags: '-c:s --format:s -L -t', pos: ['path-r…'] });
 gnu({ names: ['du'], ro: true, flags: '-s -h -a -c -k -m -d:n --max-depth:n', pos: ['path-r…'] });
 gnu({ names: ['df'], ro: true, flags: '-h -T -k', pos: ['path-r…'] });
-gnu({ names: ['tree'], flags: '-L:n -a -d -f -i -n -I:pat -P:pat --noreport', pos: ['path-r…'] });
+gnu({ names: ['tree'], flags: '-L:n -a -d -f -i -n -I:pat -P:pat --noreport', pos: ['path-n…'] });
 gnu({ names: ['basename', 'dirname'], ro: true, flags: '', pos: ['s…'] });
 gnu({ names: ['realpath'], ro: true, flags: '-e -m -s --relative-to:path-r', pos: ['path-r…'] });
 gnu({ names: ['readlink'], ro: true, flags: '-f -e -m -n', pos: ['path-r…'] });
@@ -108,11 +108,38 @@ register(['printf'], (words, acc, ctx) => {
   }
 }, true);
 const FILE_TESTS = new Set(['-e', '-f', '-d', '-r', '-w', '-x', '-s', '-L', '-h', '-p', '-S', '-b', '-c', '-O', '-G', '-N', '-k', '-u', '-g', '-t']);
+// 値を式や配列の添字として評価する形は、値が整数の定数だけでなければ今回だけ（持ち主の許可でも外せない）。値に a[$(コマンド)] が入っていると、そのコマンドが動くため
+const INT_LITERAL = /^[+-]?[0-9]+$/u;
+const PLAIN_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const NUM_OPS = new Set(['-eq', '-ne', '-lt', '-le', '-gt', '-ge']);
+const arithOnce = (acc: Acc, cmd: string, detail: string): void => acc.add('once', 'list.arith', { cmd, detail: detail.slice(0, 60) }, false);
 register(['test', '[', '[['], (words, acc) => {
+  const cmd = words[0]!.text;
   const args = words.slice(1);
   args.forEach((w, i) => {
     if (literal(w) && FILE_TESTS.has(w.text) && args[i + 1]) acc.read(args[i + 1]!);
+    if (!literal(w)) return;
+    // [[ は -eq などの両側を式として評価する。[ と test は整数でなければ失敗するだけ（本物の bash 5.3 で確かめた）。-v -R は、どれも名前の添字を評価する
+    if (cmd === '[[' && NUM_OPS.has(w.text)) {
+      const bad = [args[i - 1], args[i + 1]].find(x => x !== undefined && !(literal(x) && INT_LITERAL.test(x.text)));
+      if (bad) arithOnce(acc, cmd, `${w.text} ${bad.text}`);
+    }
+    if ((w.text === '-v' || w.text === '-R') && args[i + 1] && !(literal(args[i + 1]!) && PLAIN_NAME.test(args[i + 1]!.text))) arithOnce(acc, cmd, `${w.text} ${args[i + 1]!.text}`);
   });
+}, true);
+// let は引数を式として、declare・typeset・local は -i の値と NAME[…] の添字を評価する。普通の名前と、-i でなければ決まった文字の値、-i なら整数の値だけを安全とする（それ以外は評価されうる）
+register(['let', 'declare', 'typeset', 'local'], (words, acc) => {
+  const cmd = words[0]!.text;
+  const args = words.slice(1);
+  const integer = cmd !== 'let' && args.some(w => literal(w) && /^-[A-Za-z]*i[A-Za-z]*$/u.test(w.text));
+  const safe = args.every(w => {
+    if (!literal(w)) return false;
+    if (cmd === 'let') return /^[\s0-9+\-*/%()]+$/u.test(w.text);
+    if (/^-[A-Za-z]+$/u.test(w.text)) return true;
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:=([\s\S]*))?$/u.exec(w.text);
+    return m !== null && (m[2] === undefined || (integer ? INT_LITERAL.test(m[2]) : /^[A-Za-z0-9_./:-]*$/u.test(m[2])));
+  });
+  if (safe) acc.add('once', 'list.command', { cmd }, true); else arithOnce(acc, cmd, args.map(w => w.text).join(' '));
 }, true);
 register(['env'], (words, acc) => { if (words.length > 1) formOnce(acc, 'env', words.slice(1).map(w => w.text).join(' ')); });
 register(['command'], (words, acc) => {
@@ -273,7 +300,7 @@ register(['find'], (words, acc, ctx) => {
   let i = 0;
   while (i < args.length && literal(args[i]) && ['-L', '-H', '-P'].includes(args[i]!.text)) i++;
   const startsExpr = (w: Word): boolean => w.kind === 'plain' && !w.dynamic && (w.text.startsWith('-') || w.text === '!' || w.text === '(');
-  while (i < args.length && !startsExpr(args[i]!)) acc.read(args[i++]!, true);
+  while (i < args.length && !startsExpr(args[i]!)) acc.readNames(args[i++]!, true);
   while (i < args.length) {
     const w = args[i++]!;
     if (!literal(w) && !w.glob) { formOnce(acc, 'find', w.text); continue; }
@@ -564,11 +591,15 @@ function langInfo(name: string, words: Word[], acc: Acc): void {
   if (/^pip3?$/u.test(name) && args.length > 0) { pipForms(words, acc); return; }
   formOnce(acc, name, rest);
 }
+// レジストリに問い合わせて、相手の書いた文字（説明・版・作者の文）を読む形。形が一覧の外でも、札で許して動かせば同じなので、検査より先に印を付ける
+const NPM_REGISTRY_READS = new Set(['view', 'info', 'show', 'v', 'outdated', 'search', 's', 'audit']);
+const PIP_REGISTRY_READS = new Set(['download', 'index', 'search']);
 function npmForms(words: Word[], acc: Acc): void {
   const args = words.slice(1);
   const sub = args[0];
   const rest = args.slice(1);
   const bad = (): void => formOnce(acc, 'npm', args.map(w => w.text).join(' '));
+  if (sub && literal(sub) && NPM_REGISTRY_READS.has(sub.text)) acc.fetch = true;
   if (!sub || !literal(sub) || !rest.every(literal)) { bad(); return; }
   const flags = (allowed: RegExp): boolean => rest.filter(isFlagLike).every(w => allowed.test(w.text));
   if (/^(?:ls|list)$/u.test(sub.text)) { if (!(flags(/^(?:--depth=[0-9]+|--all|--json|--prod|--omit=dev)$/u) && rest.every(isFlagLike))) bad(); return; }
@@ -585,6 +616,7 @@ function pipForms(words: Word[], acc: Acc): void {
   const sub = args[0];
   const rest = args.slice(1);
   const bad = (): void => formOnce(acc, words[0]!.text, args.map(w => w.text).join(' '));
+  if (sub && literal(sub) && (PIP_REGISTRY_READS.has(sub.text) || (sub.text === 'list' && rest.some(w => literal(w) && w.text === '--outdated')))) acc.fetch = true;
   if (!sub || !literal(sub) || !rest.every(literal)) { bad(); return; }
   if (sub.text === '--version' && rest.length === 0) return;
   if (sub.text === 'list') { if (!rest.every(w => w.text === '--outdated' || w.text === '--format=json')) bad(); return; }

@@ -1,13 +1,31 @@
+import type { PermissionMode } from '../../src/shared/permission-mode.ts';
+import type { ToolPolicy } from '../../src/tools/tool-policy.ts';
 import { getLanguage } from './i18n/state.ts';
 import { errorBodyText } from './server-text.ts';
 
-export interface Conversation { id: string; title: string | null; created_at: number; last_message_at: number }
+// 会話の要約（読むだけ）。要約が無ければ summary は null
+export interface ConversationSummary { summary: string | null; upto: number | null; summarizedMessages: number }
+export interface Conversation {
+  id: string; title: string | null; created_at: number; last_message_at: number;
+  // 要約があるか（全文は api.summary で読む）
+  has_summary?: boolean;
+  // アーカイブしているか（1 / 0）。会話を開いたときの応答にだけ付く
+  archived?: number;
+  // 会話で選んだモデルと考える深さ（null は自動・モデルの既定）
+  model_id?: string | null; effort?: string | null;
+  // 会話の権限モード（無い = ふつう）
+  permission_mode?: PermissionMode;
+}
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
   toolCalls?: Array<{ id: string; name: string; input: string }>;
   toolName?: string; toolCallId?: string; isError?: boolean;
   attachments?: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>;
 }
+// 会話で選ぶモデルと考える深さ。渡さなかった方は変えない。null は自動・モデルの既定に戻す
+export interface ModelChoice { modelId?: string | null; effort?: string | null; permissionMode?: PermissionMode }
+// 実行中に送って、まだ履歴に入っていない発言（今の実行の次の区切りで入る）
+export interface PendingMessage { id: string; text: string; attachments: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>; interrupt: boolean; createdAt: number }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
 export interface ApprovalPreview { path: string; text: string; truncated: boolean }
 // 見つけたパスごとの判定。in は許可フォルダの中（mode はそのフォルダの読み書き / 読むだけ）、out は外、deny は拒否、unknown は判定できない（path が無い）
@@ -17,6 +35,10 @@ export interface Approval {
   reasons: string[]; details: string[]; paths: ApprovalPathView[]; pathsMore?: number; expiresAt: number;
   // コードを動かす確かめ: 毎回確かめる（「この会話では許可」と Enter での許可は無い）。preview は動かすファイルの中身
   onceOnly: boolean; preview: ApprovalPreview[];
+  // 道具ごとの方針が「承認を求める」の確かめ: 毎回確かめる（「この会話では許可」は無い）。無い古い応答は false 扱い
+  everyTime?: boolean;
+  // 外から読んだ内容のあとの file_write / file_edit の確かめ（理由が「外から読んだ」だけ）に添える、「この返事のあいだ、このフォルダ以下への書き込みを許可」のフォルダ。添えないときは null（無い古い応答も null 扱い）
+  grantFolder?: string | null;
 }
 // 会話を次に送るときのコンテキストの使用量。tokens は古い発言を削る前の見積もり、available は削り始める境目、capacity はモデル全体、ratio は tokens / available（1 を超えうる）
 export interface ContextUsage { modelId: string; tokens: number; available: number; capacity: number; ratio: number }
@@ -29,11 +51,13 @@ export interface Probe {
 export interface ModelView {
   id: string; label: string; provider: string; model: string; providerKind?: string;
   contextLength?: number; minContext: number; maxOutputTokens: number; inChat: boolean; probe: Probe | null;
+  // そのモデルで選べる考える深さ（無ければ選ばせない）
+  efforts?: string[];
 }
 export interface SettingsView {
   config: Record<string, any>;
   apiKeys: Record<string, boolean>;
-  configError: { message: string; problems: string[]; issues?: Array<{ path: string; message: string }> } | null;
+  configError: { message: string; problems: string[]; issues?: Array<{ path: string; message: string; code?: string; params?: Record<string, unknown> }> } | null;
   restartRequired: boolean;
   configPath: string;
 }
@@ -43,10 +67,22 @@ export interface RunRow {
   input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; est_prompt_tokens: number | null; flags: string[];
 }
 
+// 道具の一覧（GET /api/tools）。policy は設定の tools.policies、configurable が false の道具（タスクの進め方に必要なもの）は方針を変えられない
+export interface ToolInfo {
+  name: string; effect: 'read' | 'write' | 'exec' | 'network' | 'meta'; allowedIn: Array<'chat' | 'task' | 'review'>; policy: ToolPolicy; configurable: boolean;
+}
+
+// POST /api/server/apply の応答。url があるときは、ポートが変わったので、画面はそこへ移る
+export interface ServerApplyResult { applied: { listen: boolean; auth: boolean }; server: { host: string; port: number }; url: string | null; restartRequired: boolean }
+
 export interface ToolCallRow {
   id: string; run_id: string; conversation_id: string | null; tool: string; input: string;
   decision: 'allow' | 'ask' | 'deny'; decided_by: string; approval_id: string | null; ok: number | null;
   duration_ms: number | null; output_preview: string | null; full_ref: string | null; created_at: number;
+  // 自動承認が許した呼び出しで、判定役の短い理由（ほかは null）
+  autoReason: string | null;
+  // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しで、許可したフォルダ（ほかは null）
+  grantFolder: string | null;
 }
 
 export type Book = 'user' | 'notes';
@@ -96,6 +132,9 @@ export interface TemplatesView { language: string; rules: string; files: Array<{
 export interface OnboardingView { done: boolean; steps: { language: boolean; user: boolean; identity: boolean; persona: boolean; model: boolean } }
 export interface PersonaWrite { userName?: string; callMe?: string; botName?: string; style?: 'calm' | 'friendly' | 'direct' | 'none'; styleNote?: string }
 export interface PersonaView { soul: string; user: string; tokens: { soul: number; user: number }; budget: number | null; max: number }
+// API キーの状態（GET /api/providers/:id/key）。鍵そのものは返らない
+// source: 'os' は、鍵が .env ではなく OS の環境変数にある（ここからは消せない。末尾 4 文字も無い）
+export interface ProviderKeyState { set: boolean; last4?: string | null; source?: 'os' }
 export interface EnvReloadView { loaded: boolean; apiKeys: Record<string, boolean>; notApplied: string[] }
 
 export class ApiError extends Error {
@@ -121,14 +160,22 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   conversations: () => call<{ conversations: Conversation[] }>('/api/conversations'),
+  archivedConversations: (query = '') => call<{ conversations: Conversation[] }>(`/api/conversations?archived=1${query.trim() ? `&q=${encodeURIComponent(query.trim())}` : ''}`),
   renameConversation: (id: string, title: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   archiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }),
   unarchiveConversation: (id: string) => call(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: false }) }),
-  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
+  messages: (id: string) => call<{ conversation: Conversation; messages: Message[]; pending: PendingMessage[]; activeRun: { runId: string; draft: string } | null; approvals: Approval[] }>(`/api/conversations/${id}/messages`),
+  cancelPending: (id: string, pendingId: string) => call<{ cancelled: true }>(`/api/conversations/${encodeURIComponent(id)}/pending/${encodeURIComponent(pendingId)}`, { method: 'DELETE' }),
+  deleteConversation: (id: string) => call<{ deleted: true }>(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  summary: (id: string) => call<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/summary`),
   contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
-  decide: (id: string, decision: 'once' | 'conversation' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
-  send: (id: string, text: string, attachments: string[] = []) => call<{ runId: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}) }) }),
+  decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
+  send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean } = {}) =>
+    call<{ runId: string; queued?: boolean; pendingId?: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}) }) }),
+  chooseMode: (id: string, permissionMode: PermissionMode) => call<{ conversation: Conversation }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ permissionMode }) }),
+  chooseModel: (id: string, choice: ModelChoice) => call<{ conversation: Conversation; effortReset?: boolean }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(choice) }),
   upload: async (file: File) => {
     const res = await fetch(`/api/uploads?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } });
     const body = await res.json().catch(() => ({}));
@@ -140,6 +187,7 @@ export const api = {
   runs: (limit = 200) => call<{ runs: RunRow[] }>(`/api/runs?limit=${limit}`),
   toolCalls: () => call<{ toolCalls: ToolCallRow[] }>('/api/tool-calls?limit=200'),
   settings: () => call<SettingsView>('/api/settings'),
+  applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
@@ -167,6 +215,8 @@ export const api = {
   rejectDraft: (id: number) => call(`/api/skill-drafts/${id}/reject`, { method: 'POST', body: '{}' }),
   reviews: () => call<{ jobs: ReviewJob[]; pending: number }>('/api/reviews'),
   reviewConversation: (conversationId: string) => call<{ queued: boolean }>('/api/reviews', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+  tools: () => call<{ tools: ToolInfo[] }>('/api/tools'),
+  setToolPolicy: (name: string, policy: ToolPolicy) => call<{ tool: ToolInfo }>(`/api/tools/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify({ policy }) }),
   skills: () => call<{ skills: SkillSummary[]; dir: string }>('/api/skills'),
   skill: (name: string) => call<{ skill: SkillSummary & { body: string } }>(`/api/skills/${encodeURIComponent(name)}`),
   saveSkill: (name: string, description: string, body: string) => call(`/api/skills/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ description, body }) }),
@@ -180,6 +230,9 @@ export const api = {
   onboarding: () => call<OnboardingView>('/api/onboarding'),
   onboardingDone: () => call<OnboardingView>('/api/onboarding/done', { method: 'POST', body: '{}' }),
   onboardingPersona: (input: PersonaWrite) => call<OnboardingView & { profile: Profile }>('/api/onboarding/persona', { method: 'POST', body: JSON.stringify(input) }),
+  providerKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`),
+  setProviderKey: (id: string, key: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'PUT', body: JSON.stringify({ key }) }),
+  deleteProviderKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'DELETE' }),
   reloadEnv: (env: string[] = []) => call<EnvReloadView>('/api/onboarding/reload-env', { method: 'POST', body: JSON.stringify({ env }) }),
   persona: () => call<PersonaView>('/api/workspace/persona'),
   savePersona: (patch: { soul?: string; user?: string }) => call<PersonaView>('/api/workspace/persona', { method: 'PUT', body: JSON.stringify(patch) }),

@@ -134,6 +134,8 @@ test('警告: コードから画面の言語の文にする。再試行は理由
     ['partial_discarded', {}, 'warn.partial_discarded', {}],
     ['compacted', { count: 12 }, 'warn.compacted', { count: 12 }],
     ['compaction_failed', {}, 'warn.compaction_failed', {}],
+    ['queued_saved', { count: 2 }, 'warn.queued_saved', { count: 2 }],
+    ['queued_not_started', { count: 2 }, 'warn.queued_not_started', { count: 2 }],
     ['server_truncation_suspected', { actual: 900, estimate: 5000 }, 'warn.server_truncation', { actual: 900, estimate: 5000 }],
   ];
   for (const language of ['ja', 'en'] as const) {

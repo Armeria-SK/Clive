@@ -45,7 +45,7 @@ function setup(t: { after: (fn: () => void) => void }, language: Language, mutat
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: taint, sources: taint ? ['A', 'B'] : [] }, log: () => undefined,
   };
-  const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, { registry, approvals, db, emit: e => events.push(e) });
+  const call = (name: string, args: unknown) => runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
   return { paths, ctx, call, approvals, events };
 }
 

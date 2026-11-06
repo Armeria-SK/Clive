@@ -65,6 +65,16 @@ export class ReviewJobs {
     this.#db.prepare('UPDATE memory_jobs SET status = ?, note = ?, finished_at = ? WHERE id = ?').run(status, note, this.#now(), id);
   }
 
+  // この会話を材料に、いま動いている振り返り
+  runningFor(conversationId: string): ReviewJob[] {
+    return this.#db.prepare("SELECT * FROM memory_jobs WHERE conversation_id = ? AND status = 'running'").all(conversationId) as unknown as ReviewJob[];
+  }
+
+  // この会話を材料にする、まだ始まっていない振り返りを消す（会話を消すとき、止めた振り返りの終わりを待つあいだに、次の振り返りが始まらないように。待つあいだに積み直されても、呼ぶ側が毎回また消す）
+  dropPendingFor(conversationId: string): number {
+    return Number(this.#db.prepare("DELETE FROM memory_jobs WHERE conversation_id = ? AND status = 'pending'").run(conversationId).changes);
+  }
+
   requeue(id: number): void {
     this.#db.prepare("UPDATE memory_jobs SET status = 'pending', run_id = NULL WHERE id = ?").run(id);
   }

@@ -42,7 +42,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e) });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
   return { paths, ctx, call, approvals, events, db, controller };
 }
 
@@ -285,7 +285,7 @@ test('V8: 道具には、持ち主が「今回だけ」の確かめを許した�
     execute: async (_input, _ctx, info) => { seen.push(info); return { content: 'ok' }; },
   };
   const registry = new ToolRegistry().register(probe);
-  const call = (mode: string) => runToolCall({ id: 'p', name: 'probe', arguments: { mode } }, s.ctx, { registry, approvals: s.approvals, db: s.db, emit: () => undefined });
+  const call = (mode: string) => runToolCall({ id: 'p', name: 'probe', arguments: { mode } }, s.ctx, { registry, approvals: s.approvals, db: s.db, emit: () => undefined, conversationAutoRead: () => false });
 
   await call('allow');
   const plain = call('ask');
@@ -574,7 +574,9 @@ test('PowerShell の引数: 文字コードの設定のあと、コマンドの�
     assert.ok(utf8 >= 0 && mode > utf8, `${choice}: 文字コードのあとに制限モード`);
     assert.ok(script.endsWith(';Get-Date') && script.indexOf('Get-Date') > mode, `${choice}: コマンドは制限モードのあと`);
   }
-  assert.deepEqual(resolveShell('bash').args('ls'), ['--noprofile', '--norc', '-c', 'ls']);
+  assert.deepEqual(resolveShell('bash').args('ls'), ['--noprofile', '--norc', '-c', "IFS= read -r -d '' s; [ -n \"$s\" ] || exit 127; eval \"$s\""]);
+  assert.equal(resolveShell('bash').stdin?.('ls'), 'ls', 'スクリプトは標準入力で渡す（引数の読み直しで変わらない）');
+  assert.deepEqual(resolveShell('sh').args('ls'), ['-c', 's=; n=$(printf "\\nx"); n=${n%x}; while IFS= read -r l || [ -n "$l" ]; do s="$s$l$n"; l=; done; [ -n "$s" ] || exit 127; eval "$s"']);
 });
 
 const autoShell = resolveShell('auto');

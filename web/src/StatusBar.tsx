@@ -6,6 +6,8 @@ import { Icon, type IconName } from './icons.tsx';
 import { formatElapsed, useT } from './i18n/index.ts';
 import { WORKER_STATE_LABEL, workerState } from './pages.ts';
 import { toggleTheme } from './theme.ts';
+import type { PermissionMode } from '../../src/shared/permission-mode.ts';
+import { MODE_ICON } from './ModeMenu.tsx';
 
 interface Props {
   connected: boolean;
@@ -21,6 +23,11 @@ interface Props {
   onOpenRunning: () => void;
   onOpenApproval: () => void;
   onOpenNotifications: () => void;
+  // チャットのページでだけ渡す。モデルの一覧を開く
+  onOpenModel?: (() => void) | undefined;
+  // チャットのページでだけ渡す。この会話の権限モード。自動承認と計画のあいだだけ、印を出す（ふつうは何も出さない）
+  mode?: PermissionMode | undefined;
+  onOpenMode?: (() => void) | undefined;
   inert?: boolean;
 }
 
@@ -63,7 +70,10 @@ export function StatusBar(props: Props) {
       <div className="sb-group">
         {approvals > 0 && <Item icon="shield" iconClass="on" tip={t('status.approvalsTip')} onClick={props.onOpenApproval} accent>{t('status.approvals', approvals)}</Item>}
         {props.usage && <Item icon="circle" tip={`${t('context.label')}: ${t('context.tip', compactTokens(props.usage.tokens), compactTokens(props.usage.available), compactTokens(props.usage.capacity))}${contextPercent(props.usage.ratio).over ? ` · ${t('context.over')}` : ''}`}>{contextPercent(props.usage.ratio).text}</Item>}
-        {modelName && <Item icon="cpu" tip={t('status.modelTip')}><span className="sb-mono">{modelName}</span></Item>}
+        {props.mode && props.mode !== 'normal' && (
+          <Item icon={MODE_ICON[props.mode]} iconClass={`mode-${props.mode}`} tip={t('mode.statusTip', t(`mode.${props.mode}`))} onClick={props.onOpenMode} accent>{t(`mode.${props.mode}`)}</Item>
+        )}
+        {modelName && <Item icon="cpu" tip={t(props.onOpenModel ? 'status.modelOpenTip' : 'status.modelTip')} onClick={props.onOpenModel}><span className="sb-mono">{modelName}</span></Item>}
         <Item icon="bell" iconClass={unread ? 'on' : undefined} tip={t('status.notifications')} onClick={props.onOpenNotifications} expanded={props.notificationsOpen}>{String(unread)}</Item>
         <Item icon={effective === 'dark' ? 'sun' : 'moon'} tip={effective === 'dark' ? t('theme.toLight') : t('theme.toDark')} onClick={toggleTheme} />
       </div>

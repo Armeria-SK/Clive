@@ -1,39 +1,51 @@
 import type { IconName } from './icon-paths.ts';
 import type { NotificationItem, SkillDraft, SkillSummary } from './api.ts';
 import type { PlainKey } from './i18n/index.ts';
+import type { ToolPolicy } from '../../src/tools/tool-policy.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
-export interface ToolEntry { name: string; icon: IconName; effect: ToolEffect; desc: PlainKey }
+// 組み込みの道具 24 個の絵と説明の辞書キー。名前・効果・使える場面・今の方針は、サーバー（GET /api/tools）から読む。
+// 名前の食い違いは tests/skills.test.ts が、サーバーの一覧と突き合わせて落とす。知らない道具（あとから増えたもの）は、絵だけ汎用で説明は出さない。
+export interface ToolLook { icon: IconName; desc: PlainKey | null }
+export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
+  file_read: { icon: 'file', desc: 'tool.file_read' },
+  file_write: { icon: 'filePen', desc: 'tool.file_write' },
+  file_edit: { icon: 'pencil', desc: 'tool.file_edit' },
+  file_list: { icon: 'folder', desc: 'tool.file_list' },
+  shell_run: { icon: 'terminal', desc: 'tool.shell_run' },
+  web_fetch: { icon: 'globe', desc: 'tool.web_fetch' },
+  web_search: { icon: 'search', desc: 'tool.web_search' },
+  memory_save: { icon: 'bookmark', desc: 'tool.memory_save' },
+  memory_update: { icon: 'bookmark', desc: 'tool.memory_update' },
+  memory_forget: { icon: 'bookmark', desc: 'tool.memory_forget' },
+  memory_search: { icon: 'bookmark', desc: 'tool.memory_search' },
+  history_search: { icon: 'search', desc: 'tool.history_search' },
+  history_read: { icon: 'msg', desc: 'tool.history_read' },
+  task_create: { icon: 'tasks', desc: 'tool.task_create' },
+  task_list: { icon: 'tasks', desc: 'tool.task_list' },
+  task_update: { icon: 'tasks', desc: 'tool.task_update' },
+  task_checkpoint: { icon: 'clock', desc: 'tool.task_checkpoint' },
+  task_complete: { icon: 'circleCheck', desc: 'tool.task_complete' },
+  ask_user: { icon: 'help', desc: 'tool.ask_user' },
+  skill_view: { icon: 'book', desc: 'tool.skill_view' },
+  skill_draft: { icon: 'book', desc: 'tool.skill_draft' },
+  curiosity_add: { icon: 'sparkles', desc: 'tool.curiosity_add' },
+  curiosity_list: { icon: 'sparkles', desc: 'tool.curiosity_list' },
+  curiosity_update: { icon: 'sparkles', desc: 'tool.curiosity_update' },
+};
 
-// 組み込みの道具 24 個。サーバーに道具の一覧の API が無い（gaps A3）ので、画面に固定で持つ。
-// 名前と効果の食い違いは tests/skills-logs.test.ts が、サーバーの builtinTools() と突き合わせて落とす。
-export const TOOL_CATALOG: readonly ToolEntry[] = [
-  { name: 'file_read', icon: 'file', effect: 'read', desc: 'tool.file_read' },
-  { name: 'file_write', icon: 'filePen', effect: 'write', desc: 'tool.file_write' },
-  { name: 'file_edit', icon: 'pencil', effect: 'write', desc: 'tool.file_edit' },
-  { name: 'file_list', icon: 'folder', effect: 'read', desc: 'tool.file_list' },
-  { name: 'shell_run', icon: 'terminal', effect: 'exec', desc: 'tool.shell_run' },
-  { name: 'web_fetch', icon: 'globe', effect: 'network', desc: 'tool.web_fetch' },
-  { name: 'web_search', icon: 'search', effect: 'network', desc: 'tool.web_search' },
-  { name: 'memory_save', icon: 'bookmark', effect: 'meta', desc: 'tool.memory_save' },
-  { name: 'memory_update', icon: 'bookmark', effect: 'meta', desc: 'tool.memory_update' },
-  { name: 'memory_forget', icon: 'bookmark', effect: 'meta', desc: 'tool.memory_forget' },
-  { name: 'memory_search', icon: 'bookmark', effect: 'read', desc: 'tool.memory_search' },
-  { name: 'history_search', icon: 'search', effect: 'read', desc: 'tool.history_search' },
-  { name: 'history_read', icon: 'msg', effect: 'read', desc: 'tool.history_read' },
-  { name: 'task_create', icon: 'tasks', effect: 'meta', desc: 'tool.task_create' },
-  { name: 'task_list', icon: 'tasks', effect: 'read', desc: 'tool.task_list' },
-  { name: 'task_update', icon: 'tasks', effect: 'meta', desc: 'tool.task_update' },
-  { name: 'task_checkpoint', icon: 'clock', effect: 'meta', desc: 'tool.task_checkpoint' },
-  { name: 'task_complete', icon: 'circleCheck', effect: 'meta', desc: 'tool.task_complete' },
-  { name: 'ask_user', icon: 'help', effect: 'meta', desc: 'tool.ask_user' },
-  { name: 'skill_view', icon: 'book', effect: 'read', desc: 'tool.skill_view' },
-  { name: 'skill_draft', icon: 'book', effect: 'meta', desc: 'tool.skill_draft' },
-  { name: 'curiosity_add', icon: 'sparkles', effect: 'meta', desc: 'tool.curiosity_add' },
-  { name: 'curiosity_list', icon: 'sparkles', effect: 'read', desc: 'tool.curiosity_list' },
-  { name: 'curiosity_update', icon: 'sparkles', effect: 'meta', desc: 'tool.curiosity_update' },
-];
+// 道具の並び: 画面の辞書の順（ファイル・シェル・Web・記憶・タスク・スキル・好奇心）。辞書に無い道具は、そのあとに名前順
+const LOOK_ORDER: readonly string[] = Object.keys(TOOL_LOOKS);
+export function orderTools<T extends { name: string }>(tools: readonly T[]): T[] {
+  const rank = (name: string): number => { const i = LOOK_ORDER.indexOf(name); return i < 0 ? LOOK_ORDER.length : i; };
+  return [...tools].sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+}
+
+export const toolLook = (name: string): ToolLook => (Object.hasOwn(TOOL_LOOKS, name) ? TOOL_LOOKS[name]! : { icon: 'wrench', desc: null });
+
+// 道具ごとの方針の名前（デザインの「承認なし / 承認を求める / 止める」）
+export const POLICY_LABEL: Record<ToolPolicy, PlainKey> = { allow: 'tools.policy.allow', ask: 'tools.policy.ask', block: 'tools.policy.block' };
 
 export const EFFECT_LABEL: Record<ToolEffect, PlainKey> = {
   read: 'tools.effect.read', write: 'tools.effect.write', exec: 'tools.effect.exec', network: 'tools.effect.network', meta: 'tools.effect.meta',

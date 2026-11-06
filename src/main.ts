@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { App } from './app.ts';
 import { ConfigError } from './config/store.ts';
 import { loadEnvFile, resolvePaths } from './paths.ts';
-import { isLoopbackHost } from './shared/url.ts';
+import { serverHostProblem } from './shared/url.ts';
 import { createWebServer } from './web/server.ts';
 
 const log = (line: string) => process.stdout.write(`${new Date().toISOString()} ${line}\n`);
@@ -18,19 +18,17 @@ async function start(): Promise<void> {
   mkdirSync(paths.data, { recursive: true });
   const app = new App({ paths, log });
   const config = app.config();
-  if (!isLoopbackHost(config.server.host)) {
-    throw new ConfigError(`server.host は 127.0.0.1 などのループバックにしてください（今は ${config.server.host}）。ほかの端末からは Tailscale Serve 経由で開きます（README の「ほかの端末から使う」）`);
-  }
+  // 待ち受けと認証は、起動したときの値（app.bootServer）で決める。起動の準備のあいだに設定ファイルが変わっても、反映は画面の「再起動する」から
+  const boot = app.bootServer;
+  const hostProblem = serverHostProblem(boot.host);
+  if (hostProblem) throw new ConfigError(hostProblem);
   if (!config.models.length) log('[WARN] モデルがまだ設定されていません。画面の「はじめの設定」で足してください（足すまで、送信とワーカーは動きません）');
   else log('[INFO] モデルのコンテキスト長を確認しています…');
   const results = await app.status.probeAll(config);
   for (const r of results) log(`[${r.status === 'ok' ? 'INFO' : 'WARN'}] ${r.modelId}: ${r.status} — ${r.message}`);
   const web = createWebServer(app);
-  await new Promise<void>((resolve, reject) => {
-    web.server.once('error', reject);
-    web.server.listen(config.server.port, config.server.host, resolve);
-  });
-  log(`[INFO] Clive が起動しました: http://${config.server.host}:${config.server.port}/`);
+  await web.listen();
+  log(`[INFO] Clive が起動しました: http://${boot.host}:${boot.port}/`);
   log('[INFO] ログインはありません。この URL を開ける人（この PC のほかのプログラムを含む）は誰でも Clive を操作できます');
   app.worker.start();
   log(`[INFO] ワーカー: ${config.worker.enabled ? `動いています（自発行動: ${config.worker.autonomy ? 'あり' : 'なし'}）` : '止めています（worker.enabled = false）'}`);
@@ -39,8 +37,7 @@ async function start(): Promise<void> {
     if (closing) return;
     closing = true;
     log('[INFO] 終了しています…');
-    web.server.close();
-    web.server.closeAllConnections();
+    web.close();
     app.close();
     process.exit(0);
   };

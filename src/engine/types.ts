@@ -81,7 +81,9 @@ export type RunEvent =
   | { type: 'warning'; runId: string; conversationId: string; code: string; message: string; params?: Record<string, string | number | MessageParams> }
   | { type: 'message.saved'; runId: string; conversationId: string; messageId: number; role: ChatMessage['role'] }
   | { type: 'tool.call'; runId: string; conversationId: string; callId: string; name: string; input: string }
-  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string }
+  | { type: 'tool.result'; runId: string; conversationId: string; callId: string; name: string; ok: boolean; decision: 'allow' | 'ask' | 'deny'; preview: string; autoReason?: string }
+  // 自動承認の判定役に聞いている（checking）/ 判定役が許した（allowed。reason は判定役の短い理由）/ 判定役が確かめると言った・答えられなかった（asked。このあと承認の札が出る）
+  | { type: 'tool.auto'; runId: string; conversationId: string; callId: string; name: string; state: 'checking' | 'allowed' | 'asked'; reason?: string }
   | { type: 'approval.requested'; runId: string; conversationId: string; approval: ReturnType<typeof approvalPublic> }
   | { type: 'approval.resolved'; runId: string; conversationId: string; approvalId: string; outcome: 'approved' | 'denied' | 'expired' | 'cancelled' }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
@@ -90,5 +92,9 @@ export type RunEvent =
     type: 'run.end'; runId: string; conversationId: string; ok: boolean;
     errorKind?: EngineErrorKind; errorMessage?: string; errorCode?: string; errorParams?: MessageParams; detail?: ContextDetail;
   }
+  // 会話の題・アーカイブ・削除が変わった（開いているほかの画面が一覧を読み直すため）
+  // 実行中に送った待ちの発言が増えた・取り消された・履歴に入った（画面が待ちの一覧を読み直す）
+  | { type: 'pending.changed'; conversationId: string }
+  | { type: 'conversation.changed'; conversationId: string; change: 'renamed' | 'archived' | 'unarchived' | 'deleted' }
   | { type: 'task.changed'; task: TaskView }
   | { type: 'notification'; notification: Notification };

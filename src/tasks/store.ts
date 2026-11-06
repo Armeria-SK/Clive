@@ -35,6 +35,8 @@ export interface Task {
   curiosity_id: number | null;
   cancelled_from: TaskStatus | null;
   created_in_conversation: string | null;
+  // 1 = 手元のモデルを選んだ会話から作った（手元のモデルだけで動かす）
+  local_only: number;
 }
 
 export type TaskView = Task & { cron_text: string | null };
@@ -55,6 +57,7 @@ export interface CreateTask {
   propose?: boolean | undefined;
   curiosityId?: number | undefined;
   createdInConversation?: string | undefined;
+  localOnly?: boolean | undefined;
   actor: string;
 }
 
@@ -138,13 +141,18 @@ export class TaskStore {
       if (runAt === null) throw new TaskError('error.bad_cron', { cron: input.cron });
       status = 'scheduled';
     }
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, cron, timezone, run_at, curiosity_id, created_in_conversation, local_only, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, title, input.body ?? '', input.nextAction ?? null, input.doneCriteria ?? null, status, input.origin,
-      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, now, now,
+      Math.min(3, Math.max(1, input.priority ?? 2)), input.cron ?? null, input.cron ? input.timezone ?? 'UTC' : null, runAt, input.curiosityId ?? null, input.createdInConversation ?? null, input.localOnly ? 1 : 0, now, now,
     );
     this.event(id, 'created', input.actor, status === 'inbox' ? taskText(this.#language(), 'event.proposed') : status === 'scheduled' ? taskText(this.#language(), 'event.repeat', { cron: input.cron! }) : null);
     return this.#changed(id);
+  }
+
+  // 手元のモデルだけで動かすタスクにする（一度付けたら外さない。手元のモデルの会話の文がメモに入ったタスクを、外のモデルに読ませないため）
+  markLocalOnly(id: string): void {
+    this.#db.prepare('UPDATE tasks SET local_only = 1 WHERE id = ? AND local_only = 0').run(id);
   }
 
   update(id: string, patch: { title?: string; body?: string; appendNote?: string; nextAction?: string | null; doneCriteria?: string | null; priority?: number; runAt?: number | null }, actor: string, runId?: string): Task {
@@ -277,8 +285,8 @@ export class TaskStore {
     // 前回分がまだ終わっていなければ、重ねて作らない
     if (this.hasOpenRun(template.id)) { this.event(template.id, 'skipped', 'system', taskText(this.#language(), 'event.skipped')); return undefined; }
     const id = randomUUID();
-    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, parent_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'ready', 'schedule', ?, ?, ?, ?)`).run(id, template.title, template.body, template.next_action, template.done_criteria, template.priority, template.id, now, now);
+    this.#db.prepare(`INSERT INTO tasks (id, title, body, next_action, done_criteria, status, origin, priority, parent_id, local_only, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'ready', 'schedule', ?, ?, ?, ?, ?)`).run(id, template.title, template.body, template.next_action, template.done_criteria, template.priority, template.id, template.local_only, now, now);
     this.event(id, 'created', actor, taskText(this.#language(), 'event.created_from', { title: template.title }));
     return this.#changed(id);
   }

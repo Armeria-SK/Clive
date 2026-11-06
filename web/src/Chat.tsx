@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { api, ApiError, type Approval, type ContextUsage, type Message, type ModelView, type Profile, type UploadView } from './api.ts';
+import { api, ApiError, type Approval, type ContextUsage, type Message, type ModelChoice, type ModelView, type PendingMessage, type Profile, type UploadView } from './api.ts';
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, sendTarget, toolInputSummary,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendChoiceOf, sendFailureOf, sendTarget, toolInputSummary,
   type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
+import { archiveConversation, unarchiveConversation, type ConversationChange } from './conversation-actions.ts';
+import { ModeMenu, OPEN_MODE_MENU_EVENT } from './ModeMenu.tsx';
+import { ModelMenu, OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
+import type { PermissionMode } from '../../src/shared/permission-mode.ts';
+import { SummaryDialog } from './SummaryDialog.tsx';
 import {
-  AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
+  AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PendingMessageRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
 } from './ChatMessages.tsx';
 import { Composer } from './Composer.tsx';
 import type { Draft } from './events.ts';
@@ -21,23 +26,27 @@ export { ToolMessage } from './ChatMessages.tsx';
 
 export interface RunNotice {
   runId: string;
-  kind: 'warning' | 'error' | 'switch' | 'memory' | 'compaction' | 'stopped';
+  kind: 'warning' | 'error' | 'switch' | 'memory' | 'compaction' | 'stopped' | 'auto';
   message: string;
   hint?: string | undefined;
   retryable?: boolean;
   eventId?: number;
+  // 同じ実行の同じ key のお知らせは、並べずに置き換える（要約した・外した件数の更新）
+  key?: string | undefined;
   code?: string | undefined;
   errorKind?: string | undefined;
   measured?: number | undefined;
   required?: number | undefined;
 }
 
-export type ConversationChange = { kind: 'renamed' | 'archived' | 'unarchived'; id: string };
+export type { ConversationChange } from './conversation-actions.ts';
 
 interface Props {
   conversationId: string | null;
   profile: Profile | null;
+  // 会話で選んでいないときに使うモデル（設定の順番の先頭の使えるもの）
   modelName: string | null;
+  defaultModelId: string | null;
   usage: ContextUsage | null;
   drafts: Draft[];
   runStarts: Record<string, number>;
@@ -50,7 +59,7 @@ interface Props {
   onConversationChanged: (change: ConversationChange) => void;
 }
 
-interface Failure extends SendFailure { card: ContextCardData | null }
+interface Failure extends SendFailure { card: ContextCardData | null; alternative?: { id: string; label: string } | undefined }
 
 let runsRequest: Promise<ChatRunRow[]> | null = null;
 
@@ -79,12 +88,14 @@ function noteIcon(notice: RunNotice): IconName {
   if (notice.kind === 'switch') return 'refresh';
   if (notice.kind === 'stopped') return 'square';
   if (notice.kind === 'compaction') return 'info';
+  if (notice.kind === 'auto') return 'shield';
   return notice.code === 'retrying' ? 'clock' : 'alert';
 }
 
-export function Chat({ conversationId, profile, modelName, usage, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
+export function Chat({ conversationId, profile, modelName, defaultModelId, usage, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
   const t = useT();
   const [messages, setMessages] = useState<Message[]>([]);
+  const [pending, setPending] = useState<PendingMessage[]>([]);
   const [title, setTitle] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(!conversationId);
   const [input, setInput] = useState('');
@@ -94,6 +105,13 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   const [uploading, setUploading] = useState(false);
   const [models, setModels] = useState<ModelView[]>([]);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [modelId, setModelId] = useState<string | null>(null);
+  const [effort, setEffort] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [mode, setMode] = useState<PermissionMode>('normal');
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [archivedNow, setArchivedNow] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const thread = useRef<HTMLDivElement>(null);
@@ -107,11 +125,16 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   const [liveSince] = useState(() => Date.now());
 
   const load = useCallback(async () => {
-    if (!conversationId) { setMessages([]); setLoaded(true); return; }
+    if (!conversationId) { setMessages([]); setPending([]); setLoaded(true); return; }
     try {
       const result = await api.messages(conversationId);
       setMessages(result.messages);
+      setPending(result.pending ?? []);
       setTitle(result.conversation.title);
+      setArchivedNow(result.conversation.archived === 1);
+      setModelId(result.conversation.model_id ?? null);
+      setEffort(result.conversation.effort ?? null);
+      setMode(result.conversation.permission_mode ?? 'normal');
       setLoaded(true);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) { setMessages([]); setLoaded(true); }
@@ -120,6 +143,57 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
 
   useEffect(() => { void load(); }, [load, revision]);
   useEffect(() => { void api.models().then(r => setModels(r.models)).catch(() => undefined); }, []);
+  useEffect(() => {
+    const open = () => { setModeMenuOpen(false); setMenuOpen(true); };
+    addEventListener(OPEN_MODEL_MENU_EVENT, open);
+    return () => removeEventListener(OPEN_MODEL_MENU_EVENT, open);
+  }, []);
+  useEffect(() => {
+    const open = () => { setMenuOpen(false); setModeMenuOpen(true); };
+    addEventListener(OPEN_MODE_MENU_EVENT, open);
+    return () => removeEventListener(OPEN_MODE_MENU_EVENT, open);
+  }, []);
+  // 会話を切り替えたとき、新しい会話はいつもふつうから（前の会話のモードを持ち越さない。会話があれば load が覚えているモードに置き換える）
+  useEffect(() => { if (!conversationId) setMode('normal'); }, [conversationId]);
+  // 入力欄に出すモデル: 会話で選んだもの。選んでいなければ（自動）設定の順番の先頭
+  const chosenModel = models.find(m => m.id === (modelId ?? defaultModelId));
+  const shownModel = modelId ? chosenModel?.model ?? modelId : modelName;
+  const efforts = chosenModel?.efforts ?? [];
+
+  // モデルとエフォートの選び方。会話がまだ無いときは、最初の発言と一緒に送る（ここでは覚えるだけ）。あるときはその場で会話に覚える
+  async function choose(choice: ModelChoice): Promise<void> {
+    setMenuOpen(false);
+    if (!conversationId) {
+      if (choice.modelId !== undefined) { setModelId(choice.modelId); if (choice.effort === undefined) setEffort(null); }
+      if (choice.effort !== undefined) setEffort(choice.effort);
+      return;
+    }
+    try {
+      const result = await api.chooseModel(conversationId, choice);
+      setModelId(result.conversation.model_id ?? null);
+      setEffort(result.conversation.effort ?? null);
+      const label = result.conversation.model_id ? models.find(m => m.id === result.conversation.model_id)?.label ?? result.conversation.model_id : t('model.auto');
+      toast({ kind: 'info', icon: 'cpu', title: t(choice.modelId !== undefined ? 'model.switched' : 'model.effortSwitched'), body: result.effortReset ? `${label} · ${t('model.effortReset')}` : label });
+      onConversationChanged({ kind: 'model', id: conversationId });
+    } catch (error) {
+      toast({ kind: 'info', icon: 'alert', title: t('model.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    }
+  }
+
+  // 権限モードの選び方。会話がまだ無いときは、最初の発言と一緒に送る（ここでは覚えるだけ）。あるときはその場で会話に覚える
+  async function chooseMode(next: PermissionMode): Promise<void> {
+    setModeMenuOpen(false);
+    if (next === mode) return;
+    if (!conversationId) { setMode(next); return; }
+    try {
+      const result = await api.chooseMode(conversationId, next);
+      setMode(result.conversation.permission_mode ?? 'normal');
+      toast({ kind: 'info', icon: 'shield', title: t('mode.switched'), body: t(`mode.${result.conversation.permission_mode ?? 'normal'}`) });
+      onConversationChanged({ kind: 'mode', id: conversationId });
+    } catch (error) {
+      toast({ kind: 'info', icon: 'alert', title: t('mode.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    }
+  }
 
   const lastIsUser = messages.at(-1)?.role === 'user';
   const errorNotice = notices.find(n => n.kind === 'error');
@@ -146,13 +220,15 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   async function fail(error: unknown, fallback: string): Promise<void> {
     const base = sendFailureOf(error, fallback, models);
     let card: ContextCardData | null = null;
+    let known = models;
     if (base.context) {
-      let known = models;
       try { known = (await api.models()).models; } catch { known = models; }
       card = contextCardOf(base.body, known);
     }
+    // 選んだモデルが使えなかったとき、いま使えるほかのモデルがあれば、それで送り直せるようにする（黙って切り替えはしない）
+    const other = base.context && modelId ? known.find(m => m.id !== modelId && m.probe?.status === 'ok') : undefined;
     stick.current = true;
-    setFailure({ ...base, card });
+    setFailure({ ...base, card, alternative: other ? { id: other.id, label: other.label } : undefined });
   }
 
   async function attach(files: FileList | null): Promise<void> {
@@ -187,33 +263,14 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   async function archive(): Promise<void> {
     setConfirmArchive(false);
     if (!conversationId) return;
-    const archivedId = conversationId;
-    try {
-      await api.archiveConversation(archivedId);
-      toast({
-        kind: 'info', icon: 'archive', title: t('chat.archive.done'), ...(title ? { body: title } : {}),
-        action: { label: t('chat.archive.undo'), run: () => { void unarchive(archivedId); } },
-      });
-      onConversationChanged({ kind: 'archived', id: archivedId });
-    } catch (error) {
-      toast({ kind: 'info', icon: 'alert', title: t('chat.archive.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
-    }
+    await archiveConversation(conversationId, title, t, onConversationChanged);
   }
 
-  async function unarchive(id: string): Promise<void> {
-    try {
-      await api.unarchiveConversation(id);
-      toast({ kind: 'info', icon: 'undo', title: t('chat.unarchive.done') });
-      onConversationChanged({ kind: 'unarchived', id });
-    } catch (error) {
-      toast({ kind: 'info', icon: 'alert', title: t('chat.unarchive.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
-    }
-  }
-
-  async function send(preset?: string): Promise<void> {
+  // 返事を作っている最中でも送れる: 今の実行の次の区切りで読まれる（interrupt なら、今の実行を止めて、この発言から始める）。
+  // override: その場で決めたモデルの選び（使えるモデルで送る道）。画面の状態（setState）は押した直後はまだ古いので、状態を待たず、これを送る
+  async function send(preset?: string, interrupt = false, override?: ModelChoice): Promise<void> {
     const text = (preset ?? input).trim();
     if ((!text && !attached.length) || sending) return;
-    if (draft) { toast({ kind: 'info', icon: 'alert', title: t('chat.busyTitle'), body: t('chat.busyBody') }); return; }
     const newTitle = renameTitleOf(text);
     if (newTitle) { await rename(newTitle); return; }
     if (isRenameWithoutTitle(text)) { toast({ kind: 'info', icon: 'alert', title: t('chat.rename.empty') }); return; }
@@ -224,7 +281,15 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
       const id = target.id;
       created.current = target.created;
       onClearNotices(id);
-      await api.send(id, text, attached.map(a => a.id));
+      await api.send(id, text, attached.map(a => a.id), sendChoiceOf(conversationId, { modelId, effort, permissionMode: mode }, override), interrupt && draft ? { interrupt: true } : {});
+      if (override?.modelId !== undefined) {
+        setModelId(override.modelId); setEffort(override.effort ?? null);
+        if (conversationId) onConversationChanged({ kind: 'model', id: conversationId });
+      }
+      if (override?.permissionMode !== undefined) {
+        setMode(override.permissionMode);
+        if (conversationId) onConversationChanged({ kind: 'mode', id: conversationId });
+      }
       if (preset === undefined) setInput('');
       setAttached([]);
       if (!conversationId) onCreated(id);
@@ -232,6 +297,21 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
     } catch (error) {
       await fail(error, t('chat.send.failed'));
     } finally { setSending(false); }
+  }
+
+  // 計画の返事のあと:「ふつう」に戻して、この計画どおりに進めるよう頼む（モードの変更は、この発言と一緒に送る）
+  async function proceedWithPlan(): Promise<void> {
+    await send(t('plan.proceedRequest'), false, { permissionMode: 'normal' });
+  }
+
+  async function cancelPending(pendingId: string): Promise<void> {
+    if (!conversationId) return;
+    try { await api.cancelPending(conversationId, pendingId); }
+    catch (error) {
+      if (error instanceof ApiError && error.status === 404) toast({ kind: 'info', icon: 'info', title: t('chat.pending.gone') });
+      else toast({ kind: 'info', icon: 'alert', title: t('chat.pending.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    }
+    await load();
   }
 
   async function retry(): Promise<void> {
@@ -256,6 +336,9 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
         return;
       case 'archive':
         if (conversationId) setConfirmArchive(true); else toast({ kind: 'info', icon: 'alert', title: t('chat.needsChat') });
+        return;
+      case 'summary':
+        if (conversationId) setSummaryOpen(true); else toast({ kind: 'info', icon: 'alert', title: t('chat.needsChat') });
         return;
     }
   }
@@ -283,9 +366,10 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   if (draft) {
     const liveHead = !visible.some(m => m.role === 'assistant' && m.runId === draft.runId);
     if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} head={liveHead} />);
-    else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} />);
+    else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} checking={draft.autoChecking === true} />);
     else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} startedAt={startedAt} />);
   }
+  for (const p of pending) push(`pending-${p.id}`, 'user', <PendingMessageRow pending={p} onCancel={() => void cancelPending(p.id)} />);
   notices.filter(n => n.kind !== 'error').forEach((n, i) => {
     const key = `n-${n.runId}-${i}`;
     if (n.kind === 'memory') push(key, 'note', <MemoryRow message={n.message} eventId={n.eventId} />);
@@ -298,7 +382,7 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   }
   if (failure) {
     push('send-failure', 'fail', failure.context
-      ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} />
+      ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} alternative={failure.alternative ? { label: failure.alternative.label, onUse: () => { void send(undefined, false, { modelId: failure.alternative!.id }); } } : undefined} />
       : <SendErrorCard message={failure.message} hint={failure.hint} setup={failure.noModels} />);
   }
 
@@ -308,6 +392,9 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
   });
 
   const empty = loaded && items.length === 0;
+  // 計画モードの返事が出そろったら、入力欄の上に「この計画で進める」を出す
+  const lastMessage = messages.at(-1);
+  const showProceed = mode === 'plan' && conversationId !== null && !draft && !sending && lastMessage?.role === 'assistant' && lastMessage.text.trim() !== '' && approvals.length === 0;
   const joined = joinsToolRun(items.map(item => item.kind));
   let previous: ChatItemKind | null = null;
   return (
@@ -317,6 +404,12 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
         onScroll={e => { stick.current = isNearBottom(e.currentTarget); }}
       >
         <div className="chat-col">
+          {archivedNow && conversationId && (
+            <div className="chat-archived-note" role="note">
+              <span>{t('archived.note')}</span>
+              <button type="button" className="btn btn-secondary" onClick={() => { setArchivedNow(false); void unarchiveConversation(conversationId, t, onConversationChanged); }}>{t('archived.restore')}</button>
+            </div>
+          )}
           {empty && <EmptyChat profile={profile} onPick={text => void send(text)} />}
           {items.map((item, index) => {
             const indent = item.kind === 'tool' || item.kind === 'run' || item.kind === 'note' || item.kind === 'fail';
@@ -330,14 +423,25 @@ export function Chat({ conversationId, profile, modelName, usage, drafts, runSta
       <div className="chat-dock">
         <div className="chat-dock-inner">
           <ApprovalDock approvals={approvals} />
+          {showProceed && (
+            <div className="chat-proceed" role="group" aria-label={t('plan.proceed')}>
+              <button type="button" className="btn btn-primary" onClick={() => void proceedWithPlan()}>{t('plan.proceed')}</button>
+              <span className="chat-proceed-hint">{t('plan.proceedHint')}</span>
+            </div>
+          )}
           <Composer
             textareaRef={textarea} fileInputRef={fileInput} input={input} attached={attached} uploading={uploading} sending={sending} generating={Boolean(draft)}
-            approvalId={frontApprovalId} assistantName={assistantName} modelName={modelName} usage={usage}
+            approvalId={frontApprovalId} assistantName={assistantName} modelName={shownModel} effort={effort} usage={usage}
+            modelMenuOpen={menuOpen} onModelMenu={() => { setModeMenuOpen(false); setMenuOpen(open => !open); }}
+            mode={mode} modeMenuOpen={modeMenuOpen} onModeMenu={() => { setMenuOpen(false); setModeMenuOpen(open => !open); }}
+            modeMenu={modeMenuOpen ? <ModeMenu selected={mode} onSelect={next => void chooseMode(next)} onClose={() => setModeMenuOpen(false)} /> : null}
+            modelMenu={menuOpen ? <ModelMenu models={models} selected={modelId} effort={effort} efforts={efforts} onModel={id => void choose({ modelId: id })} onEffort={value => void choose({ effort: value })} onClose={() => setMenuOpen(false)} /> : null}
             onInput={setInput} onAttach={files => void attach(files)} onDetach={id => setAttached(list => list.filter(a => a.id !== id))}
-            onSend={() => void send()} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
+            onSend={() => void send()} onStopAndSend={() => void send(undefined, true)} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}
           />
         </div>
       </div>
+      {summaryOpen && conversationId && <SummaryDialog conversationId={conversationId} title={title} onClose={() => setSummaryOpen(false)} />}
       {confirmArchive && (
         <ChatDialog
           title={t('chat.archive.title')} onClose={() => setConfirmArchive(false)}

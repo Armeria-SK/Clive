@@ -87,7 +87,7 @@ const BYPASS_PS = [
   'Get-Content a.txt -Wait', 'Get-Content -Path a.txt -Stream s', 'Get-ChildItem -Path function:', 'Get-Content function:foo', 'Get-Item HKLM:\\Software', 'Set-Location function:', 'New-Item -ItemType SymbolicLink -Path a -Value b',
   'New-Item -ItemType Junction -Path a -Value b', 'ForEach-Object Delete', 'Get-ChildItem | ForEach-Object -Parallel { $_ }', 'Get-Content a | ForEach-Object { $_.Delete() }', 'Get-ChildItem -Attributes Hidden', 'Select-String -Path a -Pattern b -Wait',
   'Invoke-WebRequest -Uri http://127.0.0.1:4777/api/health', 'Invoke-WebRequest -Uri https://e -Headers @{a=1}', 'iwr https://e -Proxy http://p', 'Get-Process | Stop-Process',
-  'Stop-Process -Name x', 'Rename-Item a -NewName b -Stream x', 'Remove-Item a -Stream x', 'Copy-Item a b -ToSession $s', 'Get-ChildItem | Out-GridView', 'Write-Output "$(ls)"', 'Write-Output "${env:PATH}"', 'Get-ChildItem -Pat src',
+  'Stop-Process -Name x', 'Rename-Item a -NewName b -Stream x', 'Remove-Item a -Stream x', 'Copy-Item a b -ToSession $s', 'Get-ChildItem | Out-GridView', 'Write-Output "$(Remove-Item x)"', 'Write-Output "${env:PATH}"', 'Get-ChildItem -Pat src',
   'Get-ChildItem -Rec', 'git -c core.pager=x log', 'grep x y', 'awk 1 f', 'sed -i x f', 'ls > $null; & $x', 'echo hi > SOUL.md; iex $x',
 ] as const;
 
@@ -99,7 +99,7 @@ test('審査で再現された抜けは、確かめなしには動かない（Po
 
 test('書き方を判定できないものは止める（deny）', () => {
   const bash = ['n\\ode --eval=1', '`ls`', "echo $'x'", 'echo ${x:-y}', 'ls >&3', 'exec 3<>/dev/tcp/h/80', 'cat /dev/tcp/h/80', 'echo ‘x’', 'echo “x”', 'ls –la', 'ls\u00a0-la', 'echo ＂x＂', 'ls "unclosed', 'echo ~root'];
-  const ps = ["``n`o`de --eval=1", 'ls --% x', '<# c #> ls', 'echo @"\nx\n"@', 'echo ${function:x}', 'echo "$(ls)"', 'Get-ChildItem –Path x', 'ls && ls'];
+  const ps = ["``n`o`de --eval=1", 'ls --% x', '<# c #> ls', 'echo @"\nx\n"@', 'echo ${function:x}', 'echo "${x}"', 'Get-ChildItem –Path x', 'ls && ls'];
   assert.deepEqual(bash.filter(c => levelOf(c, 'bash') !== 'deny'), []);
   assert.deepEqual(ps.filter(c => levelOf(c, 'powershell') !== 'deny'), []);
   assert.equal(levelOf('ls && ls', 'pwsh'), 'allow');

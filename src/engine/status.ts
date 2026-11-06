@@ -3,6 +3,7 @@ import type { KV } from '../db/kv.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
 import type { ProbeResult } from '../providers/types.ts';
 import { languageOf } from '../shared/language.ts';
+import { redactSecrets } from '../shared/redaction.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import { contextAvailable, MEMORY_BUDGET_RATIO } from './context-budget.ts';
 
@@ -49,7 +50,8 @@ export class ModelStatus {
       }
       try { return await adapter.probe(model, required, language); }
       catch (error) {
-        return { modelId: model.id, status: 'error', server: adapter.provider.kind, required, message: providerText(language, 'probe.check_failed', { detail: (error as Error).message }), messageCode: 'provider.probe.check_failed', messageParams: { detail: (error as Error).message }, checkedAt: Date.now() } satisfies ProbeResult;
+        const detail = redactSecrets((error as Error).message, this.#deps.registry.secrets());
+        return { modelId: model.id, status: 'error', server: adapter.provider.kind, required, message: providerText(language, 'probe.check_failed', { detail }), messageCode: 'provider.probe.check_failed', messageParams: { detail }, checkedAt: Date.now() } satisfies ProbeResult;
       }
     }));
     this.#results = new Map(results.map(r => [r.modelId, r]));

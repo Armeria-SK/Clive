@@ -9,6 +9,8 @@ export interface ModelRequest {
   messages: ChatMessage[];
   tools: ToolSpec[];
   maxOutputTokens: number;
+  // 考える深さ（reasoning_effort）。無ければ何も送らない（モデルの既定）
+  effort?: string | undefined;
   signal: AbortSignal;
 }
 
@@ -43,6 +45,8 @@ export interface ProbeResult {
   messageParams?: MessageParams | undefined;
   hint?: string | undefined;
   capabilities?: string[] | undefined;
+  // サーバーが /v1/models で知らせた、選べる考える深さ（supported_reasoning_efforts）。知らせないサーバーでは無い
+  efforts?: string[] | undefined;
   checkedAt: number;
 }
 

@@ -1,5 +1,6 @@
-import { useEffect, useRef, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import type { Approval, Conversation, Profile } from './api.ts';
+import { ConvMenu } from './ConvMenu.tsx';
 import { Avatar } from './Avatar.tsx';
 import type { Runtime } from './avatar.ts';
 import { conversationCountLabel, convMark } from './conversation-state.ts';
@@ -28,7 +29,14 @@ interface Props {
   onNavigate: () => void;
   onNewChat: () => void;
   onAvatar: () => void;
+  // 会話の行のメニュー（「…」・右クリック・長押し）
+  onRename: (conversation: Conversation) => void;
+  onSummary: (conversation: Conversation) => void;
+  onArchive: (conversation: Conversation) => void;
+  onDelete: (conversation: Conversation) => void;
 }
+
+const LONG_PRESS_MS = 500;
 
 interface NavItem { page: Page | 'new'; href: string; label: PlainKey; icon: IconName; badge?: ReactNode; badgeLabel?: string }
 
@@ -46,6 +54,11 @@ export function Sidebar(props: Props) {
   const { effective } = useTheme();
   const now = useNow(30_000);
   const activeId = route.page === 'chat' ? route.conversationId : null;
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pressed = useRef(false);
+  const startPress = (id: string) => { pressed.current = false; clearTimeout(pressTimer.current); pressTimer.current = setTimeout(() => { pressed.current = true; setMenuFor(id); }, LONG_PRESS_MS); };
+  const endPress = () => clearTimeout(pressTimer.current);
 
   const seen = useRef<Set<string> | null>(null);
   const fresh = useRef(new Set<string>());
@@ -115,9 +128,15 @@ export function Sidebar(props: Props) {
         {conversations.map(c => {
           const mark = convMark(drafts, approvals, c.id);
           const active = c.id === activeId;
+          const open = menuFor === c.id;
           return (
-            <li key={c.id} className={isFresh(c.id) ? 'flash' : undefined}>
-              <a href={chatHash(c.id)} className={`conv${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined} onClick={props.onNavigate}>
+            <li key={c.id} className={`conv-item${isFresh(c.id) ? ' flash' : ''}${open ? ' menu-open' : ''}`}>
+              <a
+                href={chatHash(c.id)} className={`conv${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined}
+                onClick={e => { if (pressed.current) { pressed.current = false; e.preventDefault(); return; } props.onNavigate(); }}
+                onContextMenu={e => { e.preventDefault(); setMenuFor(c.id); }}
+                onTouchStart={() => startPress(c.id)} onTouchEnd={endPress} onTouchMove={endPress} onTouchCancel={endPress}
+              >
                 <span className="conv-state">
                   {mark === 'generating' && <span className="spin" data-tip={t('conversation.generating')} data-tip-pos="right"><Icon name="loader" size={12} /><span className="sr-only">{t('conversation.generating')}</span></span>}
                   {mark === 'approval' && (
@@ -129,10 +148,15 @@ export function Sidebar(props: Props) {
                 <span className="conv-title">{c.title ?? t('conversation.untitled')}</span>
                 <span className="conv-time">{formatRelativeCompact(c.last_message_at, now)}</span>
               </a>
+              <button type="button" className="conv-more" aria-label={t('conv.more')} aria-haspopup="menu" aria-expanded={open} onClick={() => setMenuFor(open ? null : c.id)}>…</button>
+              {open && <ConvMenu conversation={c} onClose={() => setMenuFor(null)} onRename={props.onRename} onSummary={props.onSummary} onArchive={props.onArchive} onDelete={props.onDelete} />}
             </li>
           );
         })}
       </ul>
+      <a href="#/archived" className={`side-archived${route.page === 'archived' ? ' active' : ''}`} aria-current={route.page === 'archived' ? 'page' : undefined} onClick={props.onNavigate}>
+        <Icon name="archive" size={14} />{t('nav.archived')}
+      </a>
 
       {mode === 'narrow' && (
         <div className="side-foot">

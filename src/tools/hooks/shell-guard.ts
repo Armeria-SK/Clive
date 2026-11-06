@@ -2,6 +2,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
 import { guardText, type GuardMessageKey } from '../../shared/messages/guard.ts';
+import type { AskKind } from '../types.ts';
+import { askKindOf } from './ask-kinds.ts';
 import { entryMatches, parseAllowEntry } from './allow-entry.ts';
 import { classifyStatements, type CopyUse, type MatchCtx, type PathRef, type Reason, type RepoInfo } from './allowlist.ts';
 import { codeFindings } from './code-guard.ts';
@@ -9,7 +11,7 @@ import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
 import { containsToolConfig, curlConfigFile, isToolConfigPath, wgetConfigFile, type Env } from './tool-config.ts';
-import { expandPath, isInside, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy } from './scope.ts';
+import { expandPath, inDependencies, isInside, isSecretPath, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy, type SecretScope } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
 
 export type Decision = 'allow' | 'ask' | 'deny';
@@ -50,11 +52,14 @@ export interface ShellVerdict {
   onceOnly: boolean;
   // 確かめで中身を見せるファイルの絶対パス（3 つまで）
   scripts: string[];
-  askKinds: Array<'code'>;
+  // ふつうの確かめ・今回だけの確かめになった理由の種類（理由ごとに付く。自動承認が判定役に回すかの材料）
+  askKinds: AskKind[];
   // 見せたファイルのほかに、読み込まれるファイルや入れた部品のコードも動く（札に限界の文を添える）
   limits: boolean;
   // コマンドの git がすべて、設定に core.hooksPath の無い 1 つのリポジトリのもので、そのリポジトリ自身のフックの置き場所（.git/hooks）。そうでなければ null
   ownHooksDir: string | null;
+  // コマンドのどれかが外から取得する（curl・wget・Invoke-WebRequest など）か、外の中身を持ち込む（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）。実行すると外の中身を読むので、パイプラインは「外から読んだ」印を付ける
+  fetched: boolean;
 }
 
 const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
@@ -67,6 +72,8 @@ const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
 ]);
 const ELEVATE = /^\s*\(?\s*(?:sudo|doas|su|runas|pkexec)(?:\.exe)?\b/iu;
 const FORK_BOMB = /:\s*\(\s*\)\s*\{/u;
+// 外の中身を持ち込む git のサブコマンド（NET のうち、通信するもの。init と worktree は含めない）
+const PULLING_GIT: ReadonlySet<string> = new Set(['fetch', 'pull', 'clone', 'ls-remote', 'submodule']);
 const SHELL_SINKS = new Set(['sh', 'bash', 'zsh', 'pwsh', 'powershell', 'iex', 'invoke-expression', 'cmd', 'python', 'python3', 'node', 'perl', 'ruby']);
 const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git' };
 const CWD_CMDS = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir']);
@@ -90,8 +97,15 @@ function windowsNames(p: string): string {
   return p.split(sep).map(seg => (seg === '.' || seg === '..' ? seg : seg.replace(/[. ]+$/u, '') || seg)).join(sep);
 }
 
+// expandPath が展開できない変数の形（$1 $0 $@ $* $! $? $$ $^ $: ${1} と非 ASCII の名前）。空になりうるので、含むパスは決まらない
+const UNEXPANDABLE_VAR = /\$(?![A-Za-z_]|\{[A-Za-z_][A-Za-z0-9_]*\})(?=[\p{L}\p{Nd}?$^:@*#!{(-])/u;
+
 // 語が指すパス。リテラルは $ や % を展開しない（シェルも展開しない）。変数を含むものは既知の変数だけ展開する
 export function resolveWord(word: Word, base: string, windows: boolean, language: Language): Expanded {
+  if (word.dynamic) {
+    const m = UNEXPANDABLE_VAR.exec(word.text);
+    if (m) return { unresolved: guardText(language, 'scope.unknown_env', { name: [...word.text.slice(m.index, m.index + 4)].slice(0, 2).join('') }) };
+  }
   const text = word.dynamic ? word.text : word.text.replace(/[$%`]/gu, '_');
   const expanded = expandPath(text, base, process.env, language);
   if ('unresolved' in expanded) return expanded;
@@ -143,15 +157,20 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const reasons: string[] = [];
   const paths: CheckedPath[] = [];
   const scripts: string[] = [];
-  const askKinds: Array<'code'> = [];
+  const askKinds: AskKind[] = [];
   const selfHosts = opts.selfHosts ?? [];
   const env: Env = opts.env ?? process.env;
   let limits = false;
-  const add = (d: Decision, reason: string) => { decision = worst(decision, d); if (!reasons.includes(reason)) reasons.push(reason); };
-  const addCode = (reason: string) => {
-    add('ask', reason);
-    if (!askKinds.includes('code')) askKinds.push('code');
+  let fetched = false;
+  // 外の中身を持ち込むコマンド（git の取得・パッケージの導入）。curl などと違い、取ってきたものを動かす形を新しく止める（download_exec）ことはしないので、fetched とは別に持つ
+  let pulled = false;
+  // ask の理由には種類を付ける。付けなければ precheck（細かい種類なし）で、自動承認の判定役には回らない
+  const add = (d: Decision, reason: string, kind: AskKind = 'precheck') => {
+    decision = worst(decision, d);
+    if (!reasons.includes(reason)) reasons.push(reason);
+    if (d === 'ask' && !askKinds.includes(kind)) askKinds.push(kind);
   };
+  const addCode = (reason: string) => add('ask', reason, 'code');
   // コマンドの git が調べたリポジトリ。持ち主が許したときに、そのリポジトリ自身のフックだけを動かせるかを決める
   const repoLog: { repos: RepoInfo[]; unsafe: boolean } = { repos: [], unsafe: false };
   const ownHooksDir = (): string | null => {
@@ -163,7 +182,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const done = (): ShellVerdict => {
     const onceOnly = askKinds.includes('code') && decision !== 'deny';
     if (onceOnly) explainWithCodeGuard();
-    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir() };
+    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled };
   };
 
   // 今回だけにした理由を、より分かる文（ファイルのコードを動かします など）と、中身を見せるファイルで補う（判定は変えない）
@@ -245,11 +264,12 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
 
   const reasonText = (r: Reason): string => (r.key.startsWith('ask.') ? text('guard.needs_approval', { reason: text(r.key) }) : text(r.key, r.params));
   const allowEntries = (opts.allow ?? []).map(parseAllowEntry).filter((e): e is string[] => e !== null);
-  let fetched = false;
 
   // 1 つの絶対パスを、書く・読む・消すものとして調べる
-  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean): void => {
-    const placement = placePath(abs, opts.policy);
+  // intentWrite: 確かめの種類を決めるためだけの「書くための参照か」。ワイルドカードの手前のフォルダは write = false で調べるが、書く参照なら外の確かめは outside_write にする
+  // secrets: 名前だけを出すコマンドは 'files'（secrets・secret のフォルダだけでは止めない）、依存パッケージの中で見つけた分は 'none'（別に今回だけの確かめにする）
+  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write, secrets: SecretScope = 'all'): void => {
+    const placement = placePath(abs, opts.policy, secrets);
     if (primary) paths.push({ input, path: abs, placement, write });
     if (placement.kind === 'deny') { add('deny', placement.reason); return; }
     if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', text('guard.irreversible', { path: abs })); return; }
@@ -257,7 +277,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (write && isToolConfigPath(abs, env)) addCode(text('list.tool_config', { path: abs }));
     // 許可フォルダの外でも、git のフォルダへの書き込みはフックや設定でコードが動くので、外のふつうの確かめでなく今回だけ
     if (write && placement.kind === 'outside' && writeApprovalKind(abs, opts.policy) === 'git') addCode(text(WRITE_KEYS.git, { path: abs }));
-    if (placement.kind === 'outside') { add(opts.outsideRoots, text('guard.touches_outside', { path: abs })); return; }
+    if (placement.kind === 'outside') { add(opts.outsideRoots, text('guard.touches_outside', { path: abs }), intentWrite ? 'outside_write' : 'outside_read'); return; }
     if (write && placement.mode === 'read') { add('deny', text('guard.write_readonly', { path: abs })); return; }
     if (!write) return;
     const kind = writeApprovalKind(abs, opts.policy);
@@ -274,7 +294,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const input = ref.word.text;
     const relative = !ref.word.dynamic && !ref.word.home && !/^(?:[~/\\$%]|[A-Za-z]:)/u.test(input);
     if (relative && !cwdKnown) {
-      if (write) addCode(text('list.cwd_unknown', { input })); else add('ask', text('list.cwd_unknown', { input }));
+      if (write) addCode(text('list.cwd_unknown', { input })); else add('ask', text('list.cwd_unknown', { input }), 'opaque');
       return;
     }
     // バッククォートでエスケープした名前（'.en`v' は .env）は、エスケープを外した名前でも調べる。秘密のパスに当たるなら止める
@@ -289,24 +309,25 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if (primary) paths.push({ input, placement: { kind: 'unresolved', reason: expanded.unresolved }, write });
         if (write) addCode(text('list.write_dynamic', { input }));
         else if (ref.strict) addCode(text('list.read_dynamic', { input }));
-        else add('ask', text('list.read_dynamic', { input }));
+        else add('ask', text('list.read_dynamic', { input }), 'opaque');
         continue;
       }
       const globbing = ref.word.glob && !ref.word.dynamic;
       // ワイルドカードの手前のフォルダは、書く・消す対象ではない（当たるものだけが対象）。外・禁止のパスかどうかだけ見る
-      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary);
+      const scope: SecretScope = ref.names ? 'files' : 'all';
+      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary, write, scope);
       if (globbing) {
         // ワイルドカード: 今あるもののうち当たるものを全部調べる。列挙しきれないときは、手前のフォルダを調べて確かめる
-        const globbed = expandGlob(patternOf(ref.word, base, windows), dotfiles);
+        const globbed = expandGlob(patternOf(ref.word, base, windows), dotfiles, scope);
         // 列挙しきれないときも、列挙した分と、上限を超えた分から探した秘密のパスは調べる（秘密があれば止める）
         for (const match of globbed.matches) {
-          evalAbs(match, match, write, deletes, false);
+          evalAbs(match, match, write, deletes, false, write, scope);
           if (write && (ref.recursive || deletes) && isDirectory(match)) rangeCheck(match);
         }
-        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false);
+        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false, write, scope);
         if (!globbed.complete) {
           if (write) rangeCheck(globbed.prefix);
-          else add('ask', text('list.wild_many', { input }));
+          else add('ask', text('list.wild_many', { input }), 'opaque');
         }
       } else if (write && ref.recursive && isDirectory(expanded.path)) rangeCheck(expanded.path);
       if (ref.list) listCheck(ref, base, expanded.path, globbing);
@@ -318,15 +339,25 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const list = ref.list!;
     const heads = globbing ? expandGlob(patternOf(ref.word, base, windows), dotfiles) : { matches: [root], complete: true };
     let complete = heads.complete;
+    // 依存パッケージ（node_modules）の中で見つけた、秘密らしい名前のパス。止めずに、当たったパスを見せて今回だけの確かめにする
+    const inDeps = new Set<string>();
     const wanted = (name: string): boolean => (list.include.length === 0 || list.include.some(p => wildcardMatches(name, p))) && !list.exclude.some(p => wildcardMatches(name, p));
     for (const head of heads.matches) {
       if (list.items || !isDirectory(head)) { evalAbs(head, head, false, false, false); continue; }
       const tree = listTree(head, list.deep, undefined, list.skipHidden);
       complete = complete && tree.complete;
-      for (const entry of tree.entries) if (wanted(basename(entry)) || isDirectory(entry)) evalAbs(entry, entry, false, false, false);
+      for (const entry of tree.entries) {
+        if (!(wanted(basename(entry)) || isDirectory(entry))) continue;
+        if (inDependencies(entry) && isSecretPath(entry)) { inDeps.add(entry); evalAbs(entry, entry, false, false, false, false, 'none'); } else evalAbs(entry, entry, false, false, false);
+      }
       if (tree.secret && wanted(basename(tree.secret))) evalAbs(tree.secret, tree.secret, false, false, false);
+      for (const found of tree.depSecrets ?? []) if (wanted(basename(found))) inDeps.add(found);
     }
-    if (!complete) add('ask', text('list.wild_many', { input: ref.word.text }));
+    if (inDeps.size) {
+      const shown = [...inDeps].slice(0, 5);
+      addCode(text('list.secret_in_deps', { count: inDeps.size, paths: shown.join(', ') + (inDeps.size > shown.length ? ', …' : '') }));
+    }
+    if (!complete) add('ask', text('list.wild_many', { input: ref.word.text }), 'opaque');
   };
 
   // cp・mv・Copy-Item・Move-Item・Rename-Item・New-Item: 実際に書かれるパスを組み立てて調べる
@@ -417,14 +448,15 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const allowedByConfig = allowEntries.some(entry => entryMatches(entry, st.words, windows));
     for (const reason of result.reasons) {
       if (hard || denied) break;
+      if (reason.key === 'list.install' || (reason.key === 'list.git_net' && PULLING_GIT.has(String(reason.params.cmd)))) pulled = true;
       if (reason.exempt && allowedByConfig) continue;
       if (reason.key === 'list.install' || reason.key === 'list.expand') limits = limits || reason.key === 'list.install';
       if (reason.level === 'deny') add('deny', reasonText(reason));
       else if (reason.level === 'once') addCode(reasonText(reason));
-      else add('ask', reasonText(reason));
+      else add('ask', reasonText(reason), askKindOf(reason.key));
     }
     const asked = matchesPrefix(words, opts.ask);
-    if (asked && !allowedByConfig) add('ask', text('guard.needs_approval', { reason: asked }));
+    if (asked && !allowedByConfig) add('ask', text('guard.needs_approval', { reason: asked }), 'owner');
 
     for (const ref of result.paths) checkPath(ref, result.deletes);
     for (const use of result.copies) checkCopy(use);
