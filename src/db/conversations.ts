@@ -23,7 +23,7 @@ export interface ConversationRow {
 }
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
-export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary'> & { has_summary: boolean };
+export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted'> & { has_summary: boolean };
 
 export interface StoredMessage {
   id: number;
