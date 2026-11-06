@@ -21,6 +21,7 @@ import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolOutputLimit } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
 import { ContextOverflow, fitMessages } from './fit.ts';
+import { isLocalModel, isLocalProvider } from './local-model.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
@@ -305,9 +306,10 @@ export class ChatEngine {
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
 
-  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[] } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  // localOnly: 手元のモデルで話した会話の振り返り。裏方の順番のうち手元のモデルだけを使い、無ければ（チャットの順番や外のモデルに回さず）始めない
+  runReview(conversationId: string, prompt: string, options: { forbidTools?: readonly string[]; localOnly?: boolean } = {}): { ok: true; runId: string; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.review_running') };
-    const chain = this.#chain('background');
+    const chain = this.#chain('background', null, options.localOnly === true);
     if (!chain.usable.length) {
       const outcome = this.#noUsableModel(chain.problems);
       return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
@@ -320,6 +322,9 @@ export class ChatEngine {
   }
 
   wasPreempted(runId: string): boolean { return this.#preempted.has(runId); }
+
+  // 手元のモデルで話した会話の振り返りに使える、手元の裏方モデルがあるか
+  localReviewAvailable(): boolean { return this.#chain('background', null, true).usable.length > 0; }
 
   // 会話の最初に固定する system に入れる記憶の予算（トークン）。チャットと裏方で使える（確認が通った）モデルのうち、
   // 容量が分かるものの available のいちばん小さい値の 12%。容量が分かるモデルが無ければ undefined（予算なし = 全部入れる。0 にはしない）。
@@ -386,10 +391,11 @@ export class ChatEngine {
   }
 
   // 会話で選んだモデルがあれば（pinned）、そのモデルだけで鎖を作る。使えなければ、ほかのモデルへ切り替えずに、そのモデルの問題だけを返す
-  #chain(route: 'chat' | 'background', pinned: string | null = null): { usable: Route[]; problems: ModelProblem[] } {
+  // localOnly: 裏方の順番（routing.background）のうち、手元のモデルだけ。順番が空でもチャットの順番や設定のモデル全部には回さない
+  #chain(route: 'chat' | 'background', pinned: string | null = null, localOnly = false): { usable: Route[]; problems: ModelProblem[] } {
     const config = this.#d.config();
     const language = languageOf(config);
-    const ids = pinned ? [pinned] : candidateModelIds(config, route);
+    const ids = localOnly ? config.routing.background.filter(id => isLocalModel(config, id)) : pinned ? [pinned] : candidateModelIds(config, route);
     const usable: Route[] = [];
     const cooling: Route[] = [];
     const problems: ModelProblem[] = [];
@@ -483,6 +489,7 @@ export class ChatEngine {
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
     };
+    ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider));
     const addUsage = (u: Usage) => {
       for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
         if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;

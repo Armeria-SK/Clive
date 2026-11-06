@@ -39,6 +39,7 @@
     "title.task": "タスク: {title}",
     "review.nothing": "振り返る記録がありませんでした",
     "review.no_reply": "（返事なし）",
+    "review.local_skipped": "ローカルのモデルで話した会話で、使えるローカルの裏方モデルが無いため、振り返りを飛ばしました（外のモデルには渡しません）",
     "notify.waiting_reminder": "返事を待っています: {title}",
     "notify.budget.title": "1時間の実行の上限に達したので、タスクを少し待たせています",
     "notify.budget.body": "上限は 1 時間に {max} 回です（設定の worker.maxRunsPerHour）。急ぐタスクは「今すぐ実行」で動かせます",

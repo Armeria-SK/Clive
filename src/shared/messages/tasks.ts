@@ -43,6 +43,7 @@ const ja = {
   'title.task': 'タスク: {title}',
   'review.nothing': '振り返る記録がありませんでした',
   'review.no_reply': '（返事なし）',
+  'review.local_skipped': 'ローカルのモデルで話した会話で、使えるローカルの裏方モデルが無いため、振り返りを飛ばしました（外のモデルには渡しません）',
 
   'notify.waiting_reminder': '返事を待っています: {title}',
   'notify.budget.title': '1時間の実行の上限に達したので、タスクを少し待たせています',
@@ -113,6 +114,7 @@ const en: Record<keyof typeof ja, string> = {
   'title.task': 'Task: {title}',
   'review.nothing': 'There was nothing to review',
   'review.no_reply': '(no reply)',
+  'review.local_skipped': 'This conversation used a local model and no local background model is available, so the review was skipped (it is never sent to an external model)',
 
   'notify.waiting_reminder': 'Waiting for your reply: {title}',
   'notify.budget.title': 'The hourly run limit was reached, so tasks are being held back for a while',
