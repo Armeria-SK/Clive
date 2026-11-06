@@ -16,6 +16,14 @@ test('plainLine: 空白を 1 つに詰めて前後を落とす', () => {
   assert.equal(plainLine('  x   y  ', 10), 'x y');
 });
 
+test('plainLine: 見えにくい文字・双方向制御の抜け漏れを消す（行区切りは空白になる）', () => {
+  assert.equal(plainLine('a b؜c\u{E0041}d­e⁣f', 10), 'a bcdef');
+});
+
+test('plainLine: 絵文字のバリエーション選択子（U+FE0F）は残す', () => {
+  assert.equal(plainLine('👍️', 10), '👍️');
+});
+
 test('plainLine: 絵文字を半分に割らずに max 文字に切る', () => {
   assert.equal(plainLine('あいうえお', 3), 'あいう');
   assert.equal(plainLine('😀😀', 1), '😀');

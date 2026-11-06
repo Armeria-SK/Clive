@@ -1,14 +1,16 @@
 // 題・一覧の項目（plainLine）と、知らせの本文（plainBlock）を無害な形に整える。
-// 向きを変える文字・幅の無い文字を消し、制御文字を空白 1 つにして、空白を詰めて、max 文字に切る。
+// 向きを変える文字・幅の無い文字・見えにくい文字を消し、制御文字を空白 1 つにして、空白を詰めて、max 文字に切る。
 
 const BIDI = /[‎‏‪-‮⁦-⁩]/gu;
 const ZERO_WIDTH = /[​-‍⁠﻿]/gu;
+const INVISIBLE = /[­͏؜᠎⁡-⁤︀-︎￹-￻\u{E0000}-\u{E007F}]/gu;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/gu;
 
 const cleanLine = (line: string): string =>
   line
     .replace(BIDI, '')
     .replace(ZERO_WIDTH, '')
+    .replace(INVISIBLE, '')
     .replace(CONTROL, ' ')
     .replace(/\s+/gu, ' ')
     .trim();

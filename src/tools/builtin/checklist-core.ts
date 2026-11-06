@@ -60,10 +60,14 @@ export function writeChecklist(
   return list;
 }
 
+// system に入る項目があるか（終わっていない項目が 1 つでもあれば入る）
+export function checklistInjects(list: Checklist | undefined): boolean {
+  return list !== undefined && list.items.some(item => item.status !== 'done');
+}
+
 export function checklistSection(list: Checklist | undefined, language: Language): string {
-  if (list === undefined) return '';
+  if (list === undefined || !checklistInjects(list)) return '';
   const open = list.items.filter(item => item.status !== 'done');
-  if (open.length === 0) return '';
   const lines = [toolText(language, 'checklist.section')];
   if (list.tainted) lines.push(toolText(language, 'checklist.section_tainted'));
   for (const item of open) {

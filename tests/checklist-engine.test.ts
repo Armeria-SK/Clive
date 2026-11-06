@@ -144,6 +144,15 @@ for (const language of ['ja', 'en'] as const) {
   });
 }
 
+test('全部 済み の印付きの一覧は、あとの実行を「外から読んだ」にしない（書き込みは確かめなしで通る）', async t => {
+  const s = await setup(t);
+  await run(s, [call('web_fetch', FETCH), call('checklist_write', { items: [{ text: DONE, status: 'done' }] }), reply('written')]);
+  assert.equal(readChecklist(s.app.kv, C)?.tainted, true, '前提: 外から読んだ実行が書いた一覧は印付きで保存される');
+  const second = send(s, '書いて', [call('file_write', WRITE), reply('書きました')]);
+  await expectWritten(s, second);
+  assert.equal(s.app.runs.get(second)!.tainted, 0);
+});
+
 test('外から読んでいない実行が書いた一覧は、あとの実行を「外から読んだ」にしない（書き込みは確かめなしで通る）', async t => {
   const s = await setup(t);
   await run(s, [call('checklist_write', LIST), reply('書きました')]);

@@ -13,7 +13,7 @@ import { ProviderError, providerError, type ProviderAdapter } from '../providers
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
-import { checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
+import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
 import { PLAN_EFFECTS, REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
@@ -252,7 +252,8 @@ export class ChatEngine {
   }
 
   #checklistCarriesTaint(conversationId: string): boolean {
-    return readChecklist(this.#d.kv, conversationId)?.tainted === true;
+    const list = readChecklist(this.#d.kv, conversationId);
+    return list?.tainted === true && checklistInjects(list);
   }
 
   // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめではない）の印は持ち越さない
