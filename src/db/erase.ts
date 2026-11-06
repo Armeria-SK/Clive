@@ -33,8 +33,10 @@ export function eraseConversation(deps: EraseDeps, id: string): EraseResult {
   const files: string[] = [];
   let reviewIds: string[] = [];
   const result = transaction(db, (): Omit<EraseResult, 'files'> => {
-    reviewIds = (db.prepare(`SELECT DISTINCT j.review_conversation_id AS id FROM memory_jobs j JOIN conversations c ON c.id = j.review_conversation_id
-      WHERE j.conversation_id = ? AND c.kind = 'task'`).all(id) as Array<{ id: string }>).map(r => r.id);
+    // 振り返りの記録から辿れるものと、振り返りの会話自身が材料として覚えているもの（記録から辿れなくなったものも消す）
+    reviewIds = (db.prepare(`SELECT j.review_conversation_id AS id FROM memory_jobs j JOIN conversations c ON c.id = j.review_conversation_id
+      WHERE j.conversation_id = ? AND c.kind = 'task'
+      UNION SELECT id FROM conversations WHERE source_conversation_id = ? AND kind = 'task'`).all(id, id) as Array<{ id: string }>).map(r => r.id);
     for (const reviewId of reviewIds) eraseOne(deps, reviewId, files);
     db.prepare('UPDATE memory_jobs SET review_conversation_id = NULL, note = NULL WHERE conversation_id = ?').run(id);
     return { ...eraseOne(deps, id, files), reviews: reviewIds.length };

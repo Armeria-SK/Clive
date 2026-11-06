@@ -1,4 +1,4 @@
-import { redactSecrets } from '../shared/redaction.ts';
+import { redactExact, redactSecrets } from '../shared/redaction.ts';
 import { ProviderError, providerError, type Env } from './types.ts';
 import type { ProviderConfig } from '../config/schema.ts';
 
@@ -12,6 +12,13 @@ export function apiKey(provider: ProviderConfig, env: Env): string | undefined {
   if (!provider.apiKeyEnv) return undefined;
   const value = env[provider.apiKeyEnv];
   return value && value.trim() ? value.trim() : undefined;
+}
+
+// このプロバイダの API キーの値。相手のサーバーが返した本文から、鍵そのものを伏せるのに使う
+export function providerSecrets(provider: ProviderConfig, env: Env): string[] {
+  const name = provider.apiKeyEnv ?? (provider.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined);
+  const value = name ? env[name]?.trim() : undefined;
+  return value ? [value] : [];
 }
 
 export function requireApiKey(provider: ProviderConfig, env: Env): string | undefined {
@@ -32,9 +39,14 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
 
 const CONTEXT_PATTERNS = /context[ _-]?length|context window|maximum context|max(?:imum)?_?model_?len|too many tokens|exceeds? the (?:available )?context|prompt is too long|context_length_exceeded|n_ctx|num_ctx|input is too long/i;
 
-export async function readSnippet(response: Response, max = 2000): Promise<string> {
+// 実行の記録に残す相手の本文の上限。切り取る前に鍵を伏せる（切ったあとでは、境目をまたいだ鍵に一致しない）
+export const UPSTREAM_KEEP = 2000;
+const UPSTREAM_SHOWN = 200;
+
+// 本文を読む。secrets は、読んだ本文からまず伏せる（切り取りの前）
+export async function readSnippet(response: Response, secrets: readonly string[] = [], max = UPSTREAM_KEEP): Promise<string> {
   try {
-    const text = (await response.text()).slice(0, max);
+    const text = redactExact(await response.text(), secrets).slice(0, max);
     try {
       const json = JSON.parse(text) as { error?: unknown; message?: unknown };
       const error = json.error;
@@ -46,9 +58,14 @@ export async function readSnippet(response: Response, max = 2000): Promise<strin
   } catch { return ''; }
 }
 
-export function classifyHttpFailure(status: number, snippet: string, headers?: Headers): ProviderError {
-  // 相手のサーバーの本文は、画面に出す文にも値にも入れない。実行ログ用に、秘密を伏せて短くした本文だけ upstream に持たせる
-  const shown = redactSecrets(snippet).replace(/\s+/g, ' ').trim().slice(0, 200);
+// 実行の記録に書く相手の本文。鍵を伏せてから、空白を 1 つにそろえて 200 文字に切る（この順）。raw は classify が持たせた upstream
+export function upstreamText(raw: string, secrets: readonly string[]): string {
+  return redactSecrets(raw, secrets).replace(/\s+/gu, ' ').trim().slice(0, UPSTREAM_SHOWN);
+}
+
+export function classifyHttpFailure(status: number, snippet: string, headers?: Headers, secrets: readonly string[] = []): ProviderError {
+  // 相手のサーバーの本文は、画面に出す文にも値にも入れない。実行ログ用に、秘密を伏せた本文だけ upstream に持たせる（空白をそろえて短く切るのは、書くとき = upstreamText）
+  const shown = redactSecrets(snippet, secrets).trim().slice(0, UPSTREAM_KEEP);
   const upstream = shown ? { upstream: shown } : {};
   const retryAfterMs = parseRetryAfter(headers?.get('retry-after'));
   if (CONTEXT_PATTERNS.test(snippet)) {

@@ -18,6 +18,7 @@ import { httpText } from '../shared/messages/http.ts';
 import { configProblem, domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
 import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
+import { registerKeyRoutes } from './routes-keys.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { registerReviewRoutes } from './routes-review.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
@@ -56,7 +57,7 @@ function applyProblem(failure: ApplyFailure): HttpProblem {
 
 function settingsView(app: App) {
   const config = app.config();
-  const env = process.env;
+  const env = app.env;
   const keys = [...new Set(config.providers.map(p => p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)).filter((k): k is string => Boolean(k)))];
   return {
     config,
@@ -387,6 +388,7 @@ export function createWebServer(app: App): WebServer {
   registerOnboardingRoutes(router, app);
 
   // ── 設定とモデル ──
+  registerKeyRoutes(router, app);
   router.add('GET', '/api/settings', ({ res }) => sendJson(res, 200, settingsView(app)));
   router.add('GET', '/api/settings/schema', ({ res }) => sendJson(res, 200, AppConfig));
   router.add('PUT', '/api/settings', async ({ req, res }) => {

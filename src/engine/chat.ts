@@ -7,6 +7,7 @@ import type { AppPaths } from '../paths.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { EndpointLimiter } from '../providers/limiter.ts';
+import { UPSTREAM_KEEP, upstreamText } from '../providers/http.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
 import { ProviderError, providerError, type ProviderAdapter } from '../providers/types.ts';
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
@@ -484,12 +485,13 @@ export class ChatEngine {
     let ended: EngineResult | undefined;
     const done = this.#execute(runId, conversationId, chain, controller.signal, kind, task, forbid, effort)
       .catch((error): EngineResult => {
-        this.#d.log?.(`[ERROR] run ${runId}: ${(error as Error).stack ?? error}`);
-        this.#d.runs.finish(runId, { ok: false, attempts: 0, errorKind: 'internal', errorMessage: (error as Error).message });
+        const detail = redactSecrets((error as Error).message, this.#d.registry.secrets());
+        this.#d.log?.(`[ERROR] run ${runId}: ${redactSecrets(String((error as Error).stack ?? error), this.#d.registry.secrets())}`);
+        this.#d.runs.finish(runId, { ok: false, attempts: 0, errorKind: 'internal', errorMessage: detail });
         const language = languageOf(this.#d.config());
-        const internal = engineText(language, 'run.internal', { detail: (error as Error).message });
-        this.#d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail: (error as Error).message } });
-        return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail: (error as Error).message }, retryable: false };
+        const internal = engineText(language, 'run.internal', { detail });
+        this.#d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail } });
+        return { ok: false, runId, text: '', errorKind: 'internal', errorMessage: internal, errorCode: 'engine.run.internal', errorParams: { detail }, retryable: false };
       })
       .then(result => { ended = result; return result; })
       .finally(() => {
@@ -573,7 +575,7 @@ export class ChatEngine {
     const finishFail = (f: Failure): EngineResult => {
       const route = f.route ?? lastRoute;
       // 実行ログには、相手のサーバーの本文も残す（画面に届く出来事・結果には入れない）
-      d.runs.finish(runId, { ok: false, attempts: counters.attempts, errorKind: f.kind, errorMessage: f.upstream ? `${f.message}: ${f.upstream}` : f.message, flags, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, modelId: route.model.id, model: route.model.model, providerId: route.provider.id });
+      d.runs.finish(runId, { ok: false, attempts: counters.attempts, errorKind: f.kind, errorMessage: f.upstream ? `${f.message}: ${upstreamText(f.upstream, d.registry.secrets())}` : f.message, flags, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, modelId: route.model.id, model: route.model.model, providerId: route.provider.id });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: false, errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), ...(f.detail ? { detail: f.detail } : {}) });
       return { ok: false, runId, text: '', errorKind: f.kind, errorMessage: f.message, ...(f.code ? { errorCode: f.code, errorParams: f.params ?? {} } : {}), retryable: f.retryable, ...(f.detail ? { detail: f.detail } : {}) };
     };
@@ -808,7 +810,7 @@ export class ChatEngine {
         } catch (error) {
           const e = error instanceof ProviderError ? error
             : p.signal.aborted ? providerError('cancelled', 'cancelled', {}, { retryable: false })
-            : providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets((error as Error).message).slice(0, 200) });
+            : providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets((error as Error).message, d.registry.secrets()).slice(0, UPSTREAM_KEEP) });
           if (e.kind === 'cancelled' || p.signal.aborted) return { ok: false, cancelled: true, partial: text, failure: last, route };
           last = { kind: e.kind, message: e.text(language), ...(e.code ? { code: `provider.${e.code}`, params: e.params } : {}), retryable: e.retryable, route, ...(e.detail ? { detail: e.detail } : {}), ...(e.upstream ? { upstream: e.upstream } : {}) };
           if (text) {

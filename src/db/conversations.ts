@@ -22,10 +22,13 @@ export interface ConversationRow {
   ever_tainted: number;
   // 1 = この会話のどこかの実行で、自動承認の判定役が許可フォルダの外を読むのを許した。付いたら外れない
   ever_auto_read: number;
+  // 記憶の振り返りの会話だけが持つ。振り返りの材料にした会話・タスク（振り返りの会話には、その全文が入る）。外のモデルの履歴の検索・読み出しから隠す決まりに使う
+  source_conversation_id: string | null;
+  source_task_id: string | null;
 }
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
-export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read'> & { has_summary: boolean };
+export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read' | 'source_conversation_id' | 'source_task_id'> & { has_summary: boolean };
 
 export interface StoredMessage {
   id: number;
@@ -41,6 +44,8 @@ export function messageText(message: ChatMessage): string {
   if (message.role === 'tool') return `[${message.name}] ${message.content}`;
   return message.content;
 }
+
+export interface ReviewSource { conversationId?: string | null | undefined; taskId?: string | null | undefined }
 
 // 消した会話の id を覚えておく時間
 const DELETED_TTL_MS = 10 * 60_000;
@@ -70,12 +75,18 @@ export class Conversations {
     return true;
   }
 
-  create(input: { title?: string; kind?: 'chat' | 'task'; id?: string } = {}): ConversationRow {
+  // source: 記憶の振り返りの会話を作るとき、材料にした会話・タスク。作ると同時に覚える（作ってから振り返りの記録に結び付くまでの間にも、隠す決まりが効くように）
+  create(input: { title?: string; kind?: 'chat' | 'task'; id?: string; source?: ReviewSource } = {}): ConversationRow {
     const now = this.now();
     const id = input.id ?? randomUUID();
-    this.db.prepare(`INSERT INTO conversations (id, kind, title, created_at, last_message_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(id, input.kind ?? 'chat', input.title ?? null, now, now);
+    this.db.prepare(`INSERT INTO conversations (id, kind, title, created_at, last_message_at, source_conversation_id, source_task_id) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, input.kind ?? 'chat', input.title ?? null, now, now, input.source?.conversationId ?? null, input.source?.taskId ?? null);
     return this.get(id)!;
+  }
+
+  // 振り返りの会話の材料を覚え直す（前の回から続きを書くとき）
+  setSource(id: string, source: ReviewSource): void {
+    this.db.prepare('UPDATE conversations SET source_conversation_id = ?, source_task_id = ? WHERE id = ?').run(source.conversationId ?? null, source.taskId ?? null, id);
   }
 
   get(id: string): ConversationRow | undefined {

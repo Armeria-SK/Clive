@@ -7,15 +7,19 @@ import { MIGRATIONS } from '../src/db/migrations.ts';
 import { Runs } from '../src/db/runs.ts';
 import { tempDir } from './helpers.ts';
 
+// 移し替えの途中の形の DB には Conversations.create が使えない（create は、あとの移し替えで足される列に書くため）。会話の行を直に入れる
+function insertOldConversation(db: ReturnType<typeof openDatabase>, id: string, kind: 'chat' | 'task' = 'chat'): void {
+  db.prepare('INSERT INTO conversations (id, kind, title, created_at, last_message_at) VALUES (?, ?, ?, 1, 1)').run(id, kind, id);
+}
+
 // 段 8b（審査の直し）: 会話ごとの「外から読んだことがある」印（自動承認の判定役を、その会話では使わない）と、会話ごとの「自動承認で外を読んだことがある」印（その会話のシェルのコマンドと通信は、ずっと毎回確かめる）
 
 test('マイグレーション 12: conversations に ever_tainted、engine_runs に auto_read_outside が足される。前に外から読んだ実行のある会話は 1 になり、ほかは 0', t => {
   assert.ok(MIGRATIONS.length >= 12);
   const path = join(tempDir(t), 'clive.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 11));
-  const conversations = new Conversations(before);
   const runs = new Runs(before);
-  for (const id of ['clean', 'read-web', 'read-web-task']) conversations.create({ id, title: id });
+  for (const id of ['clean', 'read-web', 'read-web-task']) insertOldConversation(before, id);
   runs.start('r-clean', 'chat', 'clean');
   runs.start('r-web', 'chat', 'read-web');
   runs.markTainted('r-web');
@@ -71,9 +75,8 @@ test('マイグレーション 13: conversations に ever_auto_read が足され
   assert.ok(MIGRATIONS.length >= 13);
   const path = join(tempDir(t), 'clive.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 12));
-  const conversations = new Conversations(before);
   const runs = new Runs(before);
-  for (const id of ['clean', 'read-outside', 'later']) conversations.create({ id, title: id });
+  for (const id of ['clean', 'read-outside', 'later']) insertOldConversation(before, id);
   runs.start('r-clean', 'chat', 'clean');
   runs.start('r-outside', 'chat', 'read-outside');
   before.prepare('UPDATE engine_runs SET auto_read_outside = 1 WHERE id = ?').run('r-outside');
@@ -96,8 +99,7 @@ test('マイグレーション 13: conversations に ever_auto_read が足され
 test('マイグレーション 14: main の段階（8）の DB から更新すると、そのとき既にあるすべての会話に ever_tainted が付く（外から読んでいないと確かめられないので）。更新のあとに作る会話は 0', t => {
   const path = join(tempDir(t), 'clive.db');
   const main = openDatabase(path, MIGRATIONS.slice(0, 8));
-  const conversations = new Conversations(main);
-  for (const [id, kind] of [['old-chat', 'chat'], ['old-chat-with-run', 'chat'], ['old-task', 'task']] as const) conversations.create({ id, kind, title: id });
+  for (const [id, kind] of [['old-chat', 'chat'], ['old-chat-with-run', 'chat'], ['old-task', 'task']] as const) insertOldConversation(main, id, kind);
   new Runs(main).start('r-old', 'chat', 'old-chat-with-run');
   main.close();
   const db = openDatabase(path, MIGRATIONS);

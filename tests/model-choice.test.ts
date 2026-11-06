@@ -13,7 +13,7 @@ import { fail, fakeServer, reply, sse, tempDir } from './helpers.ts';
 test('マイグレーション 9: conversations に model_id と effort が足される。前からある会話は NULL（自動・モデルの既定）', t => {
   const path = join(tempDir(t), 'clive.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 8));
-  new Conversations(before).create({ id: 'old', title: '前からある会話' });
+  before.prepare("INSERT INTO conversations (id, kind, title, created_at, last_message_at) VALUES ('old', 'chat', '前からある会話', 1, 1)").run();
   before.close();
   const db = openDatabase(path, MIGRATIONS);
   try {

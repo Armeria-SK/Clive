@@ -321,7 +321,11 @@ export class Worker {
     const skipLocal = () => { reviews.finish(job.id, 'done', taskText(language, 'review.local_skipped')); return 'idle' as const; };
     if (local && !engine.localReviewAvailable()) return skipLocal();
     const lastMessageId = job.conversation_id ? conversations.messages(job.conversation_id, 1).at(-1)?.id : undefined;
-    const conversation = conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }) });
+    // 止められて・再起動でやり直す振り返りは、前の回の振り返りの会話に続きを書く（新しく作ると、前の回の会話が記録から外れる）。会話は作るときに材料も覚える
+    const source = { conversationId: job.conversation_id, taskId: job.task_id };
+    const earlier = job.review_conversation_id ? conversations.get(job.review_conversation_id) : undefined;
+    if (earlier?.kind === 'task') conversations.setSource(earlier.id, source);
+    const conversation = earlier?.kind === 'task' ? earlier : conversations.create({ kind: 'task', title: taskText(language, 'title.review', { label: TRIGGER_TEXT[language][job.trigger] }), source });
     const started = engine.runReview(conversation.id, prompt, { ...(job.trigger === 'book_full' ? { forbidTools: TIDY_FORBIDDEN_TOOLS } : {}), ...(local ? { localOnly: true } : {}) });
     if (!started.ok) {
       if (local) return skipLocal();

@@ -96,13 +96,27 @@ function isWord(code: number): boolean {
 }
 function isBase64Url(code: number): boolean { return isWord(code) || code === 45; }
 
-export function redactSecrets(input: string, exactSecrets: readonly string[] = []): string {
-  let redacted = input;
+const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/gu;
+
+// 鍵そのものを伏せる。鍵の途中の空白は、2 つ以上・改行・タブなど並びが変わっていても同じ鍵として伏せる（相手が空白をそろえて返しても残さない）。
+// JSON の文字列の中の書き方（\ と " のエスケープ）も伏せる。長い鍵から先に伏せる（短い鍵が長い鍵の一部のとき、断片を残さない）
+export function redactExact(input: string, exactSecrets: readonly string[]): string {
+  const forms = new Set<string>();
   for (const secret of exactSecrets) {
-    if (secret.length > 0) {
-      redacted = redacted.split(secret).join('[REDACTED]');
-    }
+    if (secret.trim().length === 0) continue;
+    forms.add(secret);
+    forms.add(JSON.stringify(secret).slice(1, -1));
   }
+  let redacted = input;
+  for (const form of [...forms].sort((a, b) => b.length - a.length)) {
+    const pattern = form.split(/\s+/u).map(part => part.replace(REGEX_SPECIAL, '\\$&')).join('\\s+');
+    redacted = redacted.replace(new RegExp(pattern, 'gu'), '[REDACTED]');
+  }
+  return redacted;
+}
+
+export function redactSecrets(input: string, exactSecrets: readonly string[] = []): string {
+  let redacted = redactExact(input, exactSecrets);
   redacted = sanitizeModelInputText(redacted).text;
   redacted = redacted.replace(
     SENSITIVE_ASSIGNMENT,

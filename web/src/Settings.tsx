@@ -11,8 +11,9 @@ import { AccessConfirm } from './settings/AccessConfirm.tsx';
 import { accessKey, accessWidening, type Access } from './settings/access.ts';
 import { applyEdits, deepEqual, diffConfig, profilePatch } from './settings/merge.ts';
 import {
-  blockUnload, closeAction, countChanges, isSection, parseProblem, problemsOf, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
+  blockUnload, closeAction, countChanges, isSection, issueMessage, parseProblem, problemsOf, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
+import { commitPendingId } from './settings/ids.ts';
 import { editsToKeep, restoreKept, type KeptEdits } from './settings/keep.ts';
 import { applyFailure, applyStep } from './settings/server-apply.ts';
 import { SectionView } from './settings/SectionView.tsx';
@@ -163,12 +164,21 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
       else toast({ icon: 'alert', title: t('settings.restart.failed'), ...(failure.message ? { body: failure.message } : {}) });
     } finally { setApplying(false); }
   }
+  // 鍵を入れた・消したあと、サーバー側で変わった設定（apiKeyEnv）とモデルの確認を読み直す。保存していない編集は戻す
+  const keyChanged = () => { keptToast.current = true; void load(true); };
   const copyAddress = (address: string) => {
     void copyText(address).then(ok => toast(ok
       ? { kind: 'done', icon: 'copy', title: t('settings.keys.copied') }
       : { icon: 'alert', title: t('settings.keys.copyFailed'), body: t('settings.keys.copyFailedBody') }));
   };
-  useSaveShortcut(() => { if (!confirm) void save(); });
+  // 打ちかけの ID の欄は、先に確定する。確定は画面の状態を更新するので、更新が済んだあとの save（最新の編集を持つもの）を呼ぶ
+  const saveLatest = useRef(save);
+  saveLatest.current = save;
+  useSaveShortcut(() => {
+    if (confirm) return;
+    if (commitPendingId(document)) setTimeout(() => { void saveLatest.current(); }, 0);
+    else void save();
+  });
   useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
   // × ・Esc・背景で閉じるとき、保存していない変更があれば、捨てる前に確かめる
   const requestClose = () => {
@@ -288,7 +298,7 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
                 <span className="set-banner-icon"><Icon name="alert" size={16} /></span>
                 <div className="set-banner-body">
                   <strong>{t('settings.configBroken')}</strong>
-                  <ul>{view.configError.problems.map(p => <li key={p}>{p}</li>)}</ul>
+                  <ul>{(view.configError.issues?.length ? view.configError.issues.map(i => `${i.path ? `${i.path}: ` : ''}${issueMessage(i)}`) : view.configError.problems).map(p => <li key={p}>{p}</li>)}</ul>
                 </div>
               </div>
             )}
@@ -325,7 +335,7 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
               models={models} probing={probing} onProbe={() => void probe()}
               selectedModel={selectedModel} onSelectModel={setSelectedModel} selectedProvider={selectedProvider} onSelectProvider={setSelectedProvider}
               apiKeys={view.apiKeys} configPath={view.configPath} hasConfigError={Boolean(view.configError)} lastSavedAt={lastSavedAt}
-              onNameSaved={renamed} onRerunSetup={onRerunSetup}
+              onNameSaved={renamed} onRerunSetup={onRerunSetup} onKeyChanged={keyChanged}
             />
           </div>
         </div>

@@ -16,7 +16,7 @@ import { tempDir, type Script } from './helpers.ts';
 test('マイグレーション 11: conversations に permission_mode が足される。前からある会話は normal。知らない値は入れられない', t => {
   const path = join(tempDir(t), 'clive.db');
   const before = openDatabase(path, MIGRATIONS.slice(0, 10));
-  new Conversations(before).create({ id: 'old', title: '前からある会話' });
+  before.prepare("INSERT INTO conversations (id, kind, title, created_at, last_message_at) VALUES ('old', 'chat', '前からある会話', 1, 1)").run();
   before.close();
   const db = openDatabase(path, MIGRATIONS);
   try {

@@ -1,13 +1,15 @@
+import { useState } from 'react';
 import type { ModelView } from '../api.ts';
 import { copyText } from '../clipboard.ts';
 import { Icon, type IconName } from '../icons.tsx';
 import { formatNumber, getLanguage, useT, type PlainKey } from '../i18n/index.ts';
 import { probeMessage } from '../server-text.ts';
 import { toast } from '../toast.tsx';
-import { FieldRow, NumberField, SegField, SubTitle, TextField } from './fields.tsx';
+import { FieldRow, IdField, NumberField, SegField, SubTitle, TextField } from './fields.tsx';
+import { KeyField } from './KeyField.tsx';
 import {
-  addModel, addProvider, addToRoute, keyUsage, moveInRoute, providerInUse, removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, secondsOf,
-  updateListItem, type Config, type Route,
+  addModel, addProvider, addToRoute, isEnvName, keyEnvUnsafe, keyReady, keyUsage, moveInRoute, providerInUse, providerKeyEnv, removeFromRoute, removeModel, removeProvider, renameModel, renameProvider, secondsOf,
+  sharedKeyWith, updateListItem, type Config, type Route,
 } from './model.ts';
 import { differs, errorFor, type SectionProps } from './types.ts';
 
@@ -136,7 +138,7 @@ export function ModelsSection({ draft, saved, update, problems, probes, probing,
             <TextField value={(selected.label as string) ?? ''} label={t('settings.models.fieldLabel')} onChange={v => edit({ label: v || undefined })} />
           </FieldRow>
           <FieldRow label={t('settings.models.fieldId')} desc={t('settings.models.fieldIdDesc')} changed={changed('id')} path={`${base}id`} error={errorFor(problems, `${base}id`)}>
-            <TextField value={selected.id as string} mono label={t('settings.models.fieldId')} onCommit={v => { const id = v.trim(); if (id && id !== selected.id) { update(c => renameModel(c, selected.id as string, id)); onSelect(id); } }} />
+            <IdField value={selected.id as string} kind="model" taken={models.map(m => m.id as string)} label={t('settings.models.fieldId')} onRename={id => { update(c => renameModel(c, selected.id as string, id)); onSelect(id); }} />
           </FieldRow>
           <FieldRow label={t('settings.models.fieldProvider')} changed={changed('provider')} path={`${base}provider`} error={errorFor(problems, `${base}provider`) ?? undefined}>
             <SegField value={selected.provider as string} label={t('settings.models.fieldProvider')} options={providerIds.map(id => ({ value: id, label: id }))} onChange={v => edit({ provider: v })} />
@@ -179,16 +181,20 @@ const PROVIDER_KINDS = [
 const SERVER_KINDS = ['lmstudio', 'llamacpp', 'vllm', 'tabbyapi', 'openrouter', 'openai', 'generic'] as const;
 const SERVER_LABEL: Record<(typeof SERVER_KINDS)[number], string> = { lmstudio: 'LM Studio', llamacpp: 'llama.cpp', vllm: 'vLLM', tabbyapi: 'TabbyAPI', openrouter: 'OpenRouter', openai: 'OpenAI', generic: 'generic' };
 
-interface ProvidersProps extends SectionProps { selectedId: string | null; onSelect: (id: string) => void }
+interface ProvidersProps extends SectionProps { selectedId: string | null; onSelect: (id: string) => void; onKeyChanged: () => void }
 
-export function ProvidersSection({ draft, saved, update, problems, selectedId, onSelect }: ProvidersProps) {
+export function ProvidersSection({ draft, saved, update, problems, selectedId, onSelect, onKeyChanged }: ProvidersProps) {
   const t = useT();
+  const [advOpen, setAdvOpen] = useState(false);
   const providers = draft.providers as Array<Record<string, any>>;
   const selected = providers.find(p => p.id === selectedId) ?? providers[0];
   const base = selected ? `providers.${selected.id}.` : '';
   const edit = (patch: Record<string, unknown>) => { if (selected) update(c => updateListItem(c, 'providers', selected.id as string, patch)); };
   const changed = (key: string) => differs(saved, draft, c => (c.providers as Array<Record<string, any>>).find(p => p.id === selected?.id)?.[key]);
   const inUse = selected ? providerInUse(draft, selected.id as string) : false;
+  const keyEnvError = selected ? errorFor(problems, `${base}apiKeyEnv`) : undefined;
+  const keyEnv = selected ? providerKeyEnv(draft, selected.id as string) : undefined;
+  const savedProvider = selected ? (saved.providers as Array<Record<string, any>>).find(p => p.id === selected.id) : undefined;
   return (
     <div className="set-stack">
       <div className="set-actions">
@@ -206,7 +212,7 @@ export function ProvidersSection({ draft, saved, update, problems, selectedId, o
       {selected && (
         <div className="set-rows">
           <FieldRow label={t('settings.providers.fieldId')} desc={t('settings.providers.fieldIdDesc')} changed={changed('id')} path={`${base}id`} error={errorFor(problems, `${base}id`)}>
-            <TextField value={selected.id as string} mono label={t('settings.providers.fieldId')} onCommit={v => { const id = v.trim(); if (id && id !== selected.id) { update(c => renameProvider(c, selected.id as string, id)); onSelect(id); } }} />
+            <IdField value={selected.id as string} kind="provider" taken={providers.map(p => p.id as string)} label={t('settings.providers.fieldId')} onRename={id => { update(c => renameProvider(c, selected.id as string, id)); onSelect(id); }} />
           </FieldRow>
           <FieldRow label={t('settings.providers.fieldKind')} changed={changed('kind')} path={`${base}kind`} error={errorFor(problems, `${base}kind`)}>
             <SegField value={selected.kind as string} label={t('settings.providers.fieldKind')} options={PROVIDER_KINDS.map(k => ({ value: k.value as string, label: k.label === 'OpenAI' ? t('settings.providers.kindOpenai') : k.label }))} onChange={v => edit({ kind: v })} />
@@ -214,9 +220,15 @@ export function ProvidersSection({ draft, saved, update, problems, selectedId, o
           <FieldRow label="URL" desc={t('settings.providers.fieldUrlDesc')} changed={changed('baseUrl')} path={`${base}baseUrl`} error={errorFor(problems, `${base}baseUrl`) ?? errorFor(problems, base.slice(0, -1))}>
             <TextField value={(selected.baseUrl as string) ?? ''} mono placeholder="https://…" label="URL" onChange={v => edit({ baseUrl: v || undefined })} />
           </FieldRow>
-          <FieldRow label={t('settings.providers.fieldKeyEnv')} desc={t('settings.providers.fieldKeyEnvDesc')} changed={changed('apiKeyEnv')} path={`${base}apiKeyEnv`} error={errorFor(problems, `${base}apiKeyEnv`)}>
-            <TextField value={(selected.apiKeyEnv as string) ?? ''} mono placeholder={t('settings.providers.none2')} label={t('settings.providers.fieldKeyEnv')} onChange={v => edit({ apiKeyEnv: v || undefined })} />
+          <FieldRow label={t('settings.providers.fieldKey')} desc={keyEnv && isEnvName(keyEnv) && !keyEnvUnsafe(draft, selected.id as string) ? t('settings.providers.fieldKeyDesc', keyEnv) : undefined} path={`${base}key`}>
+            <KeyField id={selected.id as string} saved={savedProvider} ready={keyReady(saved, draft, selected.id as string)} sharedWith={sharedKeyWith(draft, selected.id as string)} onChanged={onKeyChanged} unsafeEnv={keyEnvUnsafe(draft, selected.id as string)} onOpenAdvanced={() => setAdvOpen(true)} />
           </FieldRow>
+          <details className="set-adv" open={advOpen || Boolean(keyEnvError)} onToggle={e => setAdvOpen(e.currentTarget.open)}>
+            <summary>{t('settings.providers.advanced')}</summary>
+            <FieldRow label={t('settings.providers.fieldKeyEnv')} desc={t('settings.providers.fieldKeyEnvDesc')} changed={changed('apiKeyEnv')} path={`${base}apiKeyEnv`} error={keyEnvError}>
+              <TextField value={(selected.apiKeyEnv as string) ?? ''} mono placeholder={t('settings.providers.none2')} label={t('settings.providers.fieldKeyEnv')} onChange={v => edit({ apiKeyEnv: v || undefined })} />
+            </FieldRow>
+          </details>
           {selected.kind === 'openai_compatible' && (
             <FieldRow label={t('settings.providers.fieldServer')} changed={changed('server')} path={`${base}server`}>
               <SegField value={(selected.server as string) ?? 'generic'} label={t('settings.providers.fieldServer')} options={SERVER_KINDS.map(k => ({ value: k as string, label: SERVER_LABEL[k] }))} onChange={v => edit({ server: v })} />
@@ -266,7 +278,7 @@ export function KeysSection({ draft, apiKeys }: { draft: Config; apiKeys: Record
       </div>
       <div className="set-card">
         <span className="set-card-name">{t('settings.keys.howTitle')}</span>
-        <span className="set-card-message">{t('settings.keys.howBody')}</span>
+        <span className="set-card-message">{t('settings.keys.howBody')} {t('settings.key.howNow')}</span>
         <pre className="set-pre">{example}</pre>
         <div><button className="btn btn-secondary" onClick={copy}><Icon name="copy" size={13} />{t('settings.keys.copy')}</button></div>
       </div>
