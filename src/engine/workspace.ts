@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_LANGUAGE, type Language } from '../config/schema.ts';
 import type { AppPaths } from '../paths.ts';
+import type { PermissionMode } from '../shared/permission-mode.ts';
 
 export const WORKSPACE_FILES = ['SOUL.md', 'USER.md', 'CURIOSITY.md'] as const;
 export type WorkspaceFile = (typeof WORKSPACE_FILES)[number];
@@ -79,23 +80,26 @@ export function recordFileVersions(db: DatabaseSync, paths: AppPaths, now = Date
   }
 }
 
-const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string }> = {
+const DYNAMIC: Record<Language, { locale: string; format: Intl.DateTimeFormatOptions; time: (formatted: string, timezone: string) => string; reply: string; plan: string }> = {
   ja: {
     locale: 'ja-JP',
     format: { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit' },
     time: (formatted, timezone) => `現在時刻: ${formatted}（${timezone}）`,
     reply: '返事は日本語で書く（ユーザーが別の言語で話しかけたら、その言語で返す）',
+    plan: 'いまは「計画モード」です。ファイルの変更・コマンドの実行・記憶やタスクの書き込みはできません（読む道具と Web の読み取りだけ使えます）。実際には何も変えず、必要なら調べたうえで、最後に番号付きの手順の一覧で計画を示してください',
   },
   en: {
     locale: 'en-US',
     format: { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
     time: (formatted, timezone) => `Current time: ${formatted} (${timezone})`,
     reply: 'Write your replies in English (if the user speaks to you in another language, reply in that language).',
+    plan: 'You are in "plan mode". You cannot change files, run commands, or write memories or tasks (only tools that read, and reading the web, are available). Do not change anything: investigate if needed, then finish by presenting a plan as a numbered list of steps.',
   },
 };
 
-export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date()): string {
+// 毎回組み立てる system の部分（固定の system は変えない）。計画モード（plan）のときだけ、計画の指示を足す
+export function buildDynamic(timezone: string, language: Language = DEFAULT_LANGUAGE, now = new Date(), mode: PermissionMode = 'normal'): string {
   const text = DYNAMIC[language];
   const formatted = new Intl.DateTimeFormat(text.locale, { ...text.format, timeZone: timezone }).format(now);
-  return [text.time(formatted, timezone), text.reply].join('\n');
+  return [text.time(formatted, timezone), text.reply, ...(mode === 'plan' ? [text.plan] : [])].join('\n');
 }

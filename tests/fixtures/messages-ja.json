@@ -357,6 +357,7 @@
     "pipeline.tool_not_allowed": "ツール「{name}」はこの種類の実行では使えません",
     "pipeline.policy_blocked": "ツール「{name}」は、持ち主が設定で止めているので使えません。別の方法を考えるか、ユーザーに相談してください",
     "pipeline.review_forbidden": "振り返りでは「{name}」は使えません",
+    "pipeline.mode_plan": "いまは計画モードなので、ツール「{name}」は使えません（ファイルや記憶を読む道具と、Web の読み取りだけ使えます）。実際には何も変えずに、調べたうえで、手順の一覧で計画を示してください",
     "pipeline.bad_json": "引数が JSON として読めません。正しい JSON で呼び直してください: {raw}",
     "pipeline.bad_args": "引数の形が正しくありません。直して呼び直してください:\n- {errors}",
     "pipeline.denied": "実行しませんでした（拒否）:\n- {reasons}\n別の方法を考えるか、ユーザーに相談してください",

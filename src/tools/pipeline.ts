@@ -20,6 +20,9 @@ export const REVIEW_FORBIDDEN: ReadonlySet<ToolDef['effect']> = new Set(['write'
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
 
+// 計画モードで使える道具の効果: 読む道具（read）と Web の読み取り（network）。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、これを使う
+export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'network']);
+
 export interface PipelineDeps {
   registry: ToolRegistry;
   approvals: ApprovalBroker;
@@ -100,6 +103,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。会話の許可・フックの allow では越えられない
   const policy = policyFor(tool.name, ctx, deps);
   if (policy === 'block') return refuse('deny', 'policy', toolText(language, 'pipeline.policy_blocked', { name: tool.name }));
+  // 計画モードでは、読む道具と Web の読み取りのほかは使わせない（モデルに渡す一覧からも外している。二重の拒否）
+  if (effectiveMode(ctx, deps) === 'plan' && !PLAN_EFFECTS.has(tool.effect)) return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
   if (call.arguments === undefined) return refuse('deny', 'validation', toolText(language, 'pipeline.bad_json', { raw: (call.raw ?? '').slice(0, 300) }), true);
   const args = Value.Default(tool.input, Value.Clone(call.arguments));
   if (!Value.Check(tool.input, args)) {

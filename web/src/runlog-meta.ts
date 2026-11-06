@@ -18,7 +18,7 @@ const ERROR_KIND: Record<string, PlainKey> = {
 };
 const DECISION: Record<ToolCallRow['decision'], PlainKey> = { allow: 'runs.decision.allow', ask: 'runs.decision.ask', deny: 'runs.decision.deny' };
 const DECIDED_BY: Record<string, PlainKey> = {
-  builtin: 'runs.by.builtin', registry: 'runs.by.registry', validation: 'runs.by.validation', user: 'runs.by.user', 'conversation-grant': 'runs.by.grant', recheck: 'runs.by.recheck', policy: 'runs.by.policy', 'auto-mode': 'runs.by.auto',
+  builtin: 'runs.by.builtin', registry: 'runs.by.registry', validation: 'runs.by.validation', user: 'runs.by.user', 'conversation-grant': 'runs.by.grant', recheck: 'runs.by.recheck', policy: 'runs.by.policy', 'auto-mode': 'runs.by.auto', mode: 'runs.by.mode',
 };
 const JOB_STATUS: Record<ReviewJob['status'], PlainKey> = {
   pending: 'runs.reviews.status.pending', running: 'runs.reviews.status.running', done: 'runs.reviews.status.done', failed: 'runs.reviews.status.failed',

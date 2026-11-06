@@ -939,6 +939,7 @@ export const en: Dict = {
   'runs.by.recheck': 'Re-check after approval',
   'runs.by.policy': 'Tool setting',
   'runs.by.auto': 'Auto-approve',
+  'runs.by.mode': 'Plan mode',
   'runs.by.hook': name => `Hook ${name}`,
   'runs.toolResult.ok': 'Success',
   'runs.toolResult.failed': 'Failed',
