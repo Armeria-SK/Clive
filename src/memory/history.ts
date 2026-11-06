@@ -19,13 +19,14 @@ function snippet(text: string, terms: readonly string[], width = 160): string {
 
 // 外のモデルの実行に見せてよい会話の条件（visibleModelIds を渡したとき）。a は会話の別名。
 // 見せない: 会話で選んだモデル（conversations.model_id）がこの一覧に無い会話（選んでいない会話は出す）と、手元のモデルだけで動かすタスク（tasks.local_only）の会話。
-// 振り返りの会話（memory_jobs.review_conversation_id が指す会話。振り返りのきっかけの会話の全文が入っている）も、きっかけの会話が上の決まりで見せない会話か、きっかけのタスクが手元のものなら見せない。
+// 振り返りの会話（振り返りのきっかけの会話の全文が入っている）も、会話自身が覚えているきっかけ（source_conversation_id / source_task_id）の会話が上の決まりで見せない会話か、きっかけのタスクが手元のものなら見せない。
+// 振り返りの記録（memory_jobs）の結び付きは使わない: 記録は振り返りがやり直されると書き換わる
 // 値の差し込み（?）は、見せてよいモデルの id を 2 回（その会話の分と、きっかけの会話の分）この順に渡す
 function visibleSql(alias: string, visible: readonly string[]): string {
   const own = (a: string, task: string) => `(${a}.model_id IS NULL${visible.length ? ` OR ${a}.model_id IN (${visible.map(() => '?').join(', ')})` : ''}) AND NOT EXISTS (SELECT 1 FROM tasks ${task} WHERE ${task}.conversation_id = ${a}.id AND ${task}.local_only = 1)`;
-  return `${own(alias, 'lt')} AND NOT EXISTS (SELECT 1 FROM memory_jobs j WHERE j.review_conversation_id = ${alias}.id AND (
-    EXISTS (SELECT 1 FROM conversations s WHERE s.id = j.conversation_id AND NOT (${own('s', 'ls')}))
-    OR EXISTS (SELECT 1 FROM tasks jt WHERE jt.id = j.task_id AND jt.local_only = 1)))`;
+  return `${own(alias, 'lt')}
+    AND NOT EXISTS (SELECT 1 FROM conversations s WHERE s.id = ${alias}.source_conversation_id AND NOT (${own('s', 'ls')}))
+    AND NOT EXISTS (SELECT 1 FROM tasks jt WHERE jt.id = ${alias}.source_task_id AND jt.local_only = 1)`;
 }
 
 // visibleModelIds: 渡したとき、上の決まりで見せない会話の発言は出さない。

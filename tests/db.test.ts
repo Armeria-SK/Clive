@@ -120,3 +120,25 @@ test('マイグレーション 7: tasks に cancelled_from が足される。前
     assert.throws(() => db.prepare("UPDATE tasks SET cancelled_from = 'done' WHERE id = 'old'").run(), /CHECK/u);
   } finally { db.close(); }
 });
+
+test('マイグレーション 11: 振り返りの会話が、材料にした会話・タスクを自分で覚える。前からあるもので、振り返りの記録から辿れるものは、記録の値で埋める', t => {
+  const path = join(tempDir(t), 'clive.db');
+  const before = openDatabase(path, MIGRATIONS.slice(0, 10));
+  const conversation = (id: string, kind: 'chat' | 'task') => before.prepare('INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, ?, 1, 1)').run(id, kind);
+  for (const [id, kind] of [['src', 'chat'], ['rv1', 'task'], ['rv2', 'task'], ['rv3', 'task'], ['loose', 'task']] as const) conversation(id, kind);
+  const job = (key: string, trigger: string, conversationId: string | null, taskId: string | null, review: string | null) =>
+    before.prepare('INSERT INTO memory_jobs (trigger, dedup_key, conversation_id, task_id, review_conversation_id, created_at) VALUES (?, ?, ?, ?, ?, 1)').run(trigger, key, conversationId, taskId, review);
+  job('k1', 'idle', 'src', null, 'rv1');
+  job('k2', 'task', null, 'tk', 'rv2');
+  job('k3', 'book_full', null, null, 'rv3');
+  before.close();
+  const db = openDatabase(path, MIGRATIONS);
+  try {
+    const row = (id: string) => db.prepare('SELECT source_conversation_id AS c, source_task_id AS t FROM conversations WHERE id = ?').get(id) as { c: string | null; t: string | null };
+    assert.deepEqual({ ...row('rv1') }, { c: 'src', t: null });
+    assert.deepEqual({ ...row('rv2') }, { c: null, t: 'tk' });
+    assert.deepEqual({ ...row('rv3') }, { c: null, t: null }, '材料が無い振り返り（記憶の整理）は NULL');
+    assert.deepEqual({ ...row('loose') }, { c: null, t: null }, '振り返りの記録から辿れない会話は NULL のまま');
+    assert.deepEqual({ ...row('src') }, { c: null, t: null });
+  } finally { db.close(); }
+});

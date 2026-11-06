@@ -307,4 +307,14 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE engine_runs ADD COLUMN tainted INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE tasks ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0;
   `,
+  // 11: 振り返りの会話が、材料にした会話・タスクを自分で覚える（外のモデルの履歴の検索・読み出しから隠す決まりが、振り返りの記録の結び付きに頼らないように）。前からある会話のうち、振り返りの記録から辿れるものは、記録の値で埋める
+  `
+  ALTER TABLE conversations ADD COLUMN source_conversation_id TEXT;
+  ALTER TABLE conversations ADD COLUMN source_task_id TEXT;
+  CREATE INDEX ix_conversations_source ON conversations (source_conversation_id);
+  UPDATE conversations SET
+    source_conversation_id = (SELECT j.conversation_id FROM memory_jobs j WHERE j.review_conversation_id = conversations.id ORDER BY j.id DESC LIMIT 1),
+    source_task_id = (SELECT j.task_id FROM memory_jobs j WHERE j.review_conversation_id = conversations.id ORDER BY j.id DESC LIMIT 1)
+  WHERE kind = 'task' AND id IN (SELECT review_conversation_id FROM memory_jobs WHERE review_conversation_id IS NOT NULL);
+  `,
 ];
