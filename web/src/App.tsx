@@ -5,6 +5,7 @@ import { presenceOf } from './avatar.ts';
 import { Chat, type RunNotice } from './Chat.tsx';
 import { ArchivedPage } from './ArchivedPage.tsx';
 import { archiveConversation, unarchiveConversation, type ConversationChange } from './conversation-actions.ts';
+import { DeleteDialog } from './DeleteDialog.tsx';
 import { RenameDialog } from './RenameDialog.tsx';
 import { SummaryDialog } from './SummaryDialog.tsx';
 import { useRunEvents, type Draft, type RunEvent } from './events.ts';
@@ -92,6 +93,7 @@ export function App() {
   const taskConversations = useRef(new Map<string, string>());
   const [renaming, setRenaming] = useState<Conversation | null>(null);
   const [summaryFor, setSummaryFor] = useState<Conversation | null>(null);
+  const [deleting, setDeleting] = useState<Conversation | null>(null);
   const [archivedRevision, setArchivedRevision] = useState(0);
 
   const refreshList = useCallback(() => {
@@ -267,7 +269,8 @@ export function App() {
   const onConversationChanged = useCallback((change: ConversationChange) => {
     refreshList();
     setArchivedRevision(n => n + 1);
-    if (change.kind === 'archived') tabState.close(`chat:${change.id}`);
+    if (change.kind === 'archived' || change.kind === 'deleted') tabState.close(`chat:${change.id}`);
+    if (change.kind === 'deleted' && currentRef.current === change.id) location.hash = '#/';
     if (change.kind === 'unarchived') tabState.openChat(change.id);
     // モデルを替えたら、使用量の輪を、替えたモデルで数え直す
     if (change.kind === 'model') setEndRevision(n => n + 1);
@@ -370,7 +373,8 @@ export function App() {
         refreshList();
         setArchivedRevision(n => n + 1);
         bump(e.conversationId);
-        if (e.change === 'archived') tabState.close(`chat:${e.conversationId}`);
+        if (e.change === 'archived' || e.change === 'deleted') tabState.close(`chat:${e.conversationId}`);
+        if (e.change === 'deleted' && currentRef.current === e.conversationId) location.hash = '#/';
         break;
       case 'task.changed': {
         setTaskRevision(n => n + 1);
@@ -484,7 +488,7 @@ export function App() {
           waitingCount={waiting.size} restartRequired={restartRequired}
           setupPending={onboarding !== null && !onboarding.done && !setupOpen} onSetup={() => openSetupAt(onboarding ? resumeStep(onboarding.steps) : 'language')}
           onNavigate={() => setDrawerOpen(false)} onNewChat={tabState.openNewChat} onAvatar={openPanel}
-          onRename={setRenaming} onSummary={setSummaryFor} onArchive={c => void archiveConversation(c.id, c.title, t, onConversationChanged)}
+          onRename={setRenaming} onSummary={setSummaryFor} onArchive={c => void archiveConversation(c.id, c.title, t, onConversationChanged)} onDelete={setDeleting}
         />
         {narrow && drawerOpen && <div className="drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
         <main className="main">
@@ -531,7 +535,7 @@ export function App() {
             {shown.page === 'runs' && <Runs tab={shown.tab} refreshKey={`${taskRevision}:${runningId ?? ''}`} />}
             {shown.page === 'memory' && <Memory revision={memoryRevision} />}
             {shown.page === 'skills' && <SkillsPage target={shown.target} revision={notificationRevision} />}
-            {shown.page === 'archived' && <ArchivedPage revision={archivedRevision} onRestore={c => void unarchiveConversation(c.id, t, onConversationChanged)} />}
+            {shown.page === 'archived' && <ArchivedPage revision={archivedRevision} onRestore={c => void unarchiveConversation(c.id, t, onConversationChanged)} onDelete={setDeleting} />}
           </div>
         </main>
         {!narrow && pane}
@@ -554,6 +558,7 @@ export function App() {
         onClose={closePalette} onNewChat={tabState.openNewChat} onNewTask={openNewTask} onActivity={openActivity} onWorker={setWorker}
       />
       {renaming && <RenameDialog conversation={renaming} onClose={() => setRenaming(null)} onRenamed={id => onConversationChanged({ kind: 'renamed', id })} />}
+      {deleting && <DeleteDialog conversation={deleting} onClose={() => setDeleting(null)} onDeleted={id => onConversationChanged({ kind: 'deleted', id })} />}
       {summaryFor && <SummaryDialog conversationId={summaryFor.id} title={summaryFor.title} onClose={() => setSummaryFor(null)} />}
       {settingsExit.mounted && <Settings onProfile={setProfile} open={settingsOpen} leaving={settingsExit.leaving} onClose={closeSettings} kept={keptSettings} onRerunSetup={rerunSetup} />}
       {setupExit.mounted && <Onboarding leaving={setupExit.leaving} start={setupStart} profile={profile} onProfile={setProfile} onLater={laterSetup} onFinished={finishSetup} />}

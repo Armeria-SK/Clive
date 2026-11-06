@@ -9,14 +9,15 @@ interface Props {
   onRename: (conversation: Conversation) => void;
   onSummary: (conversation: Conversation) => void;
   onArchive: (conversation: Conversation) => void;
+  onDelete: (conversation: Conversation) => void;
 }
 
 // 左の一覧の会話の行のメニュー（行にポインタを乗せたときの「…」・右クリック・長押しで開く）
-export function ConvMenu({ conversation, onClose, onRename, onSummary, onArchive }: Props) {
+export function ConvMenu({ conversation, onClose, onRename, onSummary, onArchive, onDelete }: Props) {
   const t = useT();
   useEscapeLayer('model', true, onClose);
-  const item = (icon: IconName, label: string, run: (c: Conversation) => void) => (
-    <button type="button" role="menuitem" className="conv-menu-item" onClick={() => { onClose(); run(conversation); }}>
+  const item = (icon: IconName, label: string, run: (c: Conversation) => void, danger = false) => (
+    <button type="button" role="menuitem" className={`conv-menu-item${danger ? ' danger' : ''}`} onClick={() => { onClose(); run(conversation); }}>
       <Icon name={icon} size={14} />{label}
     </button>
   );
@@ -27,6 +28,7 @@ export function ConvMenu({ conversation, onClose, onRename, onSummary, onArchive
         {item('pencil', t('conv.rename'), onRename)}
         {conversation.has_summary && item('info', t('conv.summary'), onSummary)}
         {item('archive', t('conv.archive'), onArchive)}
+        {item('x', t('conv.delete'), onDelete, true)}
       </div>
     </>
   );

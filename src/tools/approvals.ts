@@ -104,6 +104,11 @@ export class ApprovalBroker {
 
   isGranted(conversationId: string, hash: string): boolean { return this.#conversationGrants.has(`${conversationId}:${hash}`); }
 
+  // 会話を消したとき、その会話の「この会話では許可」の覚えも消す
+  forgetConversation(conversationId: string): void {
+    for (const key of [...this.#conversationGrants]) if (key.startsWith(`${conversationId}:`)) this.#conversationGrants.delete(key);
+  }
+
   request(req: ApprovalRequest, timeoutMs: number, signal: AbortSignal): Promise<ApprovalOutcome> {
     const now = Date.now();
     const view: ApprovalView = { ...req, id: randomUUID(), inputHash: inputHash(req.tool, req.input), createdAt: now, expiresAt: now + timeoutMs };

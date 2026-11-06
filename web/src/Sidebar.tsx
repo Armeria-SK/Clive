@@ -33,6 +33,7 @@ interface Props {
   onRename: (conversation: Conversation) => void;
   onSummary: (conversation: Conversation) => void;
   onArchive: (conversation: Conversation) => void;
+  onDelete: (conversation: Conversation) => void;
 }
 
 const LONG_PRESS_MS = 500;
@@ -148,7 +149,7 @@ export function Sidebar(props: Props) {
                 <span className="conv-time">{formatRelativeCompact(c.last_message_at, now)}</span>
               </a>
               <button type="button" className="conv-more" aria-label={t('conv.more')} aria-haspopup="menu" aria-expanded={open} onClick={() => setMenuFor(open ? null : c.id)}>…</button>
-              {open && <ConvMenu conversation={c} onClose={() => setMenuFor(null)} onRename={props.onRename} onSummary={props.onSummary} onArchive={props.onArchive} />}
+              {open && <ConvMenu conversation={c} onClose={() => setMenuFor(null)} onRename={props.onRename} onSummary={props.onSummary} onArchive={props.onArchive} onDelete={props.onDelete} />}
             </li>
           );
         })}

@@ -9,7 +9,9 @@ import { defaultTexts } from '../engine/workspace.ts';
 import { languageOf } from '../shared/language.ts';
 import { engineText } from '../shared/messages/engine.ts';
 import { approvalWire } from '../tools/approvals.ts';
+import { eraseConversation } from '../db/erase.ts';
 import { searchHistory } from '../memory/history.ts';
+import { join } from 'node:path';
 import { MemoryError, planBooks } from '../memory/store.ts';
 import { defaultOrigins, WebAuth } from './auth.ts';
 import { httpText } from '../shared/messages/http.ts';
@@ -140,6 +142,20 @@ export function createWebServer(app: App): WebServer {
     const id = params[0]!;
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     sendJson(res, 200, app.conversations.summaryOf(id));
+  });
+  // 会話を消す（元に戻せない。画面は消えるものと残るものを見せて確かめてから呼ぶ）。返事を作っている最中の会話と、チャット以外の会話（タスク・振り返り）は断る。
+  // モデルの道具からは呼べない（道具を足していない）
+  router.add('DELETE', '/api/conversations/:id', ({ res, params }) => {
+    const id = params[0]!;
+    const conversation = app.conversations.get(id);
+    if (!conversation) throw problem(404, 'not_found', 'conversation_missing');
+    if (conversation.kind !== 'chat') throw problem(409, 'conflict', 'conversation_not_deletable');
+    if (app.engine.activeRuns().some(r => r.conversationId === id)) throw problem(409, 'conflict', 'conversation_running');
+    const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs') }, id);
+    app.approvals.forgetConversation(id);
+    if (erased.files.failed.length) app.log(`[WARN] 会話を消したあと、消せなかったファイルがあります: ${erased.files.failed.join(', ')}`);
+    app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted' });
+    sendJson(res, 200, { deleted: true, ...erased });
   });
   router.add('GET', '/api/conversations/:id/messages', ({ res, params }) => {
     const id = params[0]!;

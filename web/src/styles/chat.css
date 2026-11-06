@@ -208,6 +208,11 @@
 .chat-dialog-path .tag { padding: 1px 8px; font-size: 10.5px; }
 .summary-body { max-height: min(50vh, 420px); margin: 10px 0; padding: 4px 14px; overflow-y: auto; border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: var(--color-surface); }
 .chat-archived-note { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text); font-size: 13px; }
+.delete-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0; }
+.shell[data-mode="narrow"] .delete-lists { grid-template-columns: 1fr; }
+.delete-head { display: block; margin-bottom: 4px; color: var(--color-text); font-size: 13px; }
+.delete-list { margin: 0; padding-left: 18px; color: var(--color-text); font-size: 13px; line-height: 1.6; }
+.archived-delete { color: var(--color-accent-text); }
 .conv-rename-input { width: 100%; margin-top: 4px; }
 .archived-search { width: 100%; margin: 0 0 12px; }
 .archived-list { margin: 0; padding: 0; list-style: none; }

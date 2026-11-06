@@ -8,10 +8,11 @@ interface Props {
   // アーカイブ・戻す・削除のたびに増える（一覧を取り直す合図）
   revision: number;
   onRestore: (conversation: Conversation) => void;
+  onDelete: (conversation: Conversation) => void;
 }
 
-// アーカイブした会話の一覧。題で探せる。開いて読める・元に戻す
-export function ArchivedPage({ revision, onRestore }: Props) {
+// アーカイブした会話の一覧。題で探せる。開いて読める・元に戻す・削除（確かめを挟む）
+export function ArchivedPage({ revision, onRestore, onDelete }: Props) {
   const t = useT();
   const now = useNow(30_000);
   const [query, setQuery] = useState('');
@@ -50,6 +51,7 @@ export function ArchivedPage({ revision, onRestore }: Props) {
                     <span className="archived-time">{formatRelativeCompact(c.last_message_at, now)}</span>
                   </a>
                   <button type="button" className="btn btn-secondary" onClick={() => onRestore(c)}>{t('archived.restore')}</button>
+                  <button type="button" className="btn btn-ghost archived-delete" onClick={() => onDelete(c)}>{t('conv.delete')}</button>
                 </li>
               ))}
             </ul>
