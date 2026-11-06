@@ -316,6 +316,9 @@ const PS_DQ_ROWS = [
   // "$1" "$0" "$é" "$日" は、数字・Unicode の文字の変数名として展開する（空）。Get-Content ".env$1" は .env を読む。$@ $% $+ $, $; $.x $² $‿ $Ⅷ は文字のまま。"$:x" は : のあとの名前つき
   'Write-Output "$1"', 'Write-Output "$0"', 'Write-Output "$9"', 'Write-Output "$12"', 'Write-Output "a$1b"', 'Write-Output "$é"', 'Write-Output "$日"', 'Write-Output "$Ａ"', 'Write-Output "$ǅ"', 'Write-Output "$٣"', 'Write-Output "$ª"',
   'Write-Output "$_"', 'Write-Output "$:x"', 'Write-Output "$global:x"', 'Get-Content ".env$1"', 'Get-Content ".env$é"', 'Get-Content ".env$日"', 'Get-Content -Path ".env$0"',
+  // # の行コメントは、語の頭（空白・; ( ) { } , ' " | & のあと）だけ。中の引用符は始まりにならない。a#b は語
+  "Write-Output a # it's\nWrite-Output b", 'Write-Output a # "\nWrite-Output b', "Write-Output 'a' # x\nWrite-Output b", "Write-Output 'a'#x\nWrite-Output b", 'Write-Output "a"#x\nWrite-Output b', 'Write-Output (1)#x\nWrite-Output b',
+  "Write-Output a;#x'\nWrite-Output b", 'Write-Output a#b', "Write-Output a#b'c'", 'Write-Output a # ＡＢ\nWrite-Output b', "Write-Output {1}#x'\nWrite-Output b", 'Write-Output @(1)#x\nWrite-Output b',
   'Write-Output "$@"', 'Write-Output "$%"', 'Write-Output "$+"', 'Write-Output "$,"', 'Write-Output "$;"', 'Write-Output "$.x"', 'Write-Output "$²"', 'Write-Output "$‿"', 'Write-Output "$Ⅷ"', 'Write-Output "$&"',
 ];
 

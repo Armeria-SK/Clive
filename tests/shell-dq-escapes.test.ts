@@ -365,6 +365,22 @@ test('PowerShell: "$$" と "$^" を含む文字列は、値の分からない語
   assert.equal(level(f.ps('rg "$-" src')), 'allow', '文字のままの "$-" は今までどおり');
 });
 
+// 最終審査の低: PowerShell の全角の見張り（outsidePsStrings）が、# の行コメントや <# #> の中の ' " を引用符の始まりと取り違えて、そのあとの引用符の外の全角を見逃した。
+// 字句の読み取りと同じに、コメントは空白にして（引用符を始めない）から全角を探す。コメントの中の全角は止めない（コメントはどのプログラムにも渡らない）
+test('PowerShell: 全角の見張りは、# の行コメントと <# #> の中の引用符に惑わされず、コメントの外の全角を止める。コメントの中だけの全角は止めない', () => {
+  for (const shell of PS_SHELLS) {
+    for (const command of [
+      "Write-Output a # it's\nWrite-Output ＂x＂", 'Write-Output a # "\nWrite-Output ＂x＂', "rg a f # it's\nrg ＂--pre=x＂ f", "Write-Output 'a' # it's\nWrite-Output ＡＢ",
+      "Write-Output a;# it's\nWrite-Output ＡＢ", "Write-Output (1)# it's\nWrite-Output ＡＢ", "<# it's #>\nWrite-Output ＡＢ", '<# " #> Write-Output ＡＢ', "Write-Output a <# ' #> ＡＢ",
+      'Write-Output a#b ＡＢ', 'Write-Output "#" ＡＢ', "Write-Output '#' ＡＢ", 'Write-Output "$(1)#" ＡＢ',
+    ]) assert.equal(failure(command, shell), 'fullwidth', `${shell}: ${JSON.stringify(command)}`);
+    assert.equal(failure('Write-Output a # ＡＢ', shell), null, `${shell}: コメントの中だけの全角は止めない`);
+    assert.equal(failure("Write-Output a # ＡＢ it's\nWrite-Output b", shell), null);
+    assert.equal(failure('<# ＡＢ #> Write-Output a', shell), 'block_comment', `${shell}: <# #> は、全角でなく block_comment で止まる`);
+    assert.equal(failure('Write-Output "a ＡＢ" # c', shell), null, `${shell}: 引用符の中の全角は今までどおり可`);
+  }
+});
+
 // 最終審査で再現: Get-Content ".env$1" は、本物の PowerShell 5.1 では "$1"（空の変数）を展開して .env を読むのに、"…" の中の $ に数字・非 ASCII の文字・: が続く形を
 // 変数と見ず、文字どおりの名前 .env$1 と読んで確かめなしで通した。本物の Parser（tests/shell-lex-real.test.ts）が展開する文字列にする形は、すべて値の分からない語にする
 test('PowerShell: "…" の中の $ に数字・文字（Unicode も）・_ ? $ ^ : が続く形は、本物の Parser と同じに展開する文字列（値の分からない語）。それ以外は文字のまま', () => {

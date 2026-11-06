@@ -96,6 +96,15 @@ function outsidePsStrings(src: string): string {
       const c = src[i]!;
       if (c === "'") { single(); continue; }
       if (c === '"') { double(level); continue; }
+      // 語の頭の # は行末まで、<# … #> は #> までがコメント（字句の読み取りと同じ）。中の引用符を始まりと取り違えないよう空白にする（改行は残す）
+      if ((c === '#' && /[ \t\r\n;|&(){},'"<>]/u.test(src[i - 1] ?? ' ')) || (c === '<' && src[i + 1] === '#')) {
+        const block = c === '<';
+        const close = block ? src.indexOf('#>', i + 2) : -1;
+        const stop = block ? (close < 0 ? n : close + 2) : (src.indexOf('\n', i) < 0 ? n : src.indexOf('\n', i));
+        out += src.slice(i, stop).replace(/[^\n]/gu, ' ');
+        i = stop;
+        continue;
+      }
       if (c === '(') depth++;
       else if (c === ')') {
         if (inSub && depth === 0) { out += ' '; i++; return; }
