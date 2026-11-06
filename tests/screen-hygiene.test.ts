@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { PERMISSION_MODES } from '../src/shared/permission-mode.ts';
 
 // 画面（web/src）の片付けの見張り。辞書の外に日本語の文字が残っていないこと、辞書に使われない項目が溜まっていないことを、毎回の npm test で確かめる。
 
@@ -70,6 +71,13 @@ const DYNAMIC_PREFIXES: Record<string, string> = {
   'worker.': 'settings/BehaviorSections.tsx: ワーカーの状態の名前',
 };
 
+// 前半が同じキーのうち、組み立てて使うものが決まっているときの、そのキー（ここに無い同じ前半のキーは、キー全体が文字列で出てこなければ、使われていないとみなす）。
+// 権限モードは、名前 `mode.${mode}` と説明 `mode.${mode}Desc` だけを組み立てる。`mode.chip` `mode.menu` などの文は、キー全体で書く
+const DYNAMIC_ONLY: Record<string, readonly string[]> = {
+  'mode.': PERMISSION_MODES.flatMap(mode => [`mode.${mode}`, `mode.${mode}Desc`]),
+};
+const builtDynamically = (key: string): boolean => Object.keys(DYNAMIC_PREFIXES).some(prefix => key.startsWith(prefix) && (DYNAMIC_ONLY[prefix]?.includes(key) ?? true));
+
 test('辞書に、使われない項目が無い（キー全体が文字列で出てくるか、書き留めた「前半だけ組み立てるキー」の下にある）', () => {
   const dictionary = readFileSync(join(WEB, 'i18n', 'ja.ts'), 'utf8');
   const keys = [...dictionary.matchAll(/^ {2}'([^']+)':/gmu)].map(m => m[1]!);
@@ -97,6 +105,6 @@ test('辞書に、使われない項目が無い（キー全体が文字列で�
   assert.deepEqual(unlisted, [], '前半だけで組み立てるキーが増えた。値の種類を確かめて、DYNAMIC_PREFIXES に理由つきで足す');
   const stale = Object.keys(DYNAMIC_PREFIXES).filter(prefix => !dotHeads.includes(prefix) || !keys.some(key => key.startsWith(prefix)));
   assert.deepEqual(stale, [], '書き留めた前半が、もう使われていない・もう辞書に無い');
-  const unused = keys.filter(key => !literals.has(key) && !Object.keys(DYNAMIC_PREFIXES).some(prefix => key.startsWith(prefix)));
+  const unused = keys.filter(key => !literals.has(key) && !builtDynamically(key));
   assert.deepEqual(unused, []);
 });

@@ -180,7 +180,7 @@ test('画面が使う API: 実行・道具・振り返りの記録を、画面�
   assert.ok(readFileSync(new URL('../web/src/api.ts', import.meta.url), 'utf8').includes('/api/tool-calls?limit=200'));
 });
 
-test('段 8b: 実行ログの「決めたのは」に、自動承認と計画モードが日本語・英語で出る。自動承認の理由は道具の記録の行が持つ', () => {
+test('段 8b: 実行ログの「決めたのは」に、自動承認と計画モードが日本語・英語で出る（理由が API の行に載ることは、tests/auto-approve-engine.test.ts が実際の API で確かめる）', () => {
   ja();
   assert.equal(decidedByLabel('auto-mode'), '自動承認');
   assert.equal(decidedByLabel('mode'), '計画モード');
@@ -188,7 +188,4 @@ test('段 8b: 実行ログの「決めたのは」に、自動承認と計画モ
   assert.equal(decidedByLabel('auto-mode'), 'Auto-approve');
   assert.equal(decidedByLabel('mode'), 'Plan mode');
   ja();
-  const row: ToolCallRow = { id: 'k', run_id: 'r', conversation_id: 'c', tool: 'shell_run', input: '{}', decision: 'allow', decided_by: 'auto-mode', approval_id: 'a', ok: 1, duration_ms: 5, output_preview: null, full_ref: null, created_at: 1, autoReason: '依頼どおりです' };
-  assert.equal(row.autoReason, '依頼どおりです');
-  assert.ok(source('web/src/api.ts').includes('autoReason: string | null'));
 });

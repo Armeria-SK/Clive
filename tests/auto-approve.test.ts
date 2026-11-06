@@ -341,6 +341,22 @@ test('判定役を待っているあいだにモードを替えたら、判定�
   }
 });
 
+test('判定役を待っているあいだに実行が取り消されたら、道具の記録は「あなた」の取り消しと同じ（auto-mode で許した・断ったとは記録しない）。自動の記録も外を読んだ印も作らない', async t => {
+  const s = await setup(t);
+  s.state.classify = () => new Promise<string>(() => undefined);
+  const running = s.call('shell_run', { command: s.readOutside });
+  for (let i = 0; i < 300 && s.prompts.length === 0; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(s.prompts.length, 1, '判定役を待っている');
+  s.controller.abort();
+  const outcome = await running;
+  assert.deepEqual([outcome.decision, outcome.decidedBy, outcome.output.isError], ['ask', 'user', true]);
+  const row = s.db.prepare('SELECT decision, decided_by, ok FROM tool_calls').get() as { decision: string; decided_by: string; ok: number };
+  assert.deepEqual([row.decision, row.decided_by, row.ok], ['ask', 'user', 0], '承認の札を待っているあいだの取り消しと同じ記録');
+  assert.equal(s.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE scope = 'auto'").get()!.n, 0);
+  assert.equal(s.ctx.autoReadOutside, undefined);
+  assert.deepEqual(s.events.filter(e => e.type === 'tool.auto').map(e => (e as { state: string }).state), ['checking', 'asked']);
+});
+
 test('拒否は判定役に送らない: 判定役が何でも allow と答えても、拒否は拒否のまま（秘密のパス・強い禁止・禁止の一覧・読むだけのフォルダへの書き込み・外のフォルダへのファイル道具）', async t => {
   const s = await setup(t, { classify: () => ALLOW, mutate: c => { c.tools.roots = [{ path: 'workspace', mode: 'write' }, { path: 'reference', mode: 'read' }]; } });
   mkdirSync(join(s.paths.data, 'reference'), { recursive: true });

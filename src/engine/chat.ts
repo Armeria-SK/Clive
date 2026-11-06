@@ -101,7 +101,7 @@ export type SendOutcome =
 type Route = { model: ModelConfig; provider: ProviderConfig };
 
 interface ChatItem { content: string; images: ImageRef[]; attachments: AttachmentMeta[] }
-// held: 実行が始まったあとに会話のモデルが替わり、そのあとに送られた発言。今の実行（古いモデルの鎖）へは差し込まず、実行が終わってから新しいモデルの実行で読ませる
+// held: 実行が始まったあとに会話のモデルか権限モードが替わり、そのあとに送られた発言。今の実行（古いモデルの鎖・古いモードの実行）へは差し込まず、実行が終わってから新しいモデル・新しいモードの実行で読ませる
 // afterStop: 今の実行を止めたあとに送られた発言。止めた実行が終わるのを待って、新しい実行を始める（止める前に待たせた発言は、保存だけ）
 interface PendingMessage extends ChatItem { id: string; interrupt: boolean; createdAt: number; held: boolean; afterStop: boolean }
 
@@ -264,7 +264,7 @@ export class ChatEngine {
 
   // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは、実行が道具の呼び出しの中で待っているので、区切りに来ない。承認の答えが先）。
   // 添付つきの発言は外から来た文なので、この実行の残りも「外から読んだ」扱いにする。
-  // 実行が始まったあとにモデルを替えて送られた発言（held）は入れない（古いモデルへ渡さない）。実行が終わってから新しい実行で読ませる
+  // 実行が始まったあとにモデルか権限モードを替えて送られた発言（held）は入れない（古いモデル・古いモードの実行へ渡さない）。実行が終わってから新しい実行で読ませる
   #injectPending(runId: string, conversationId: string, ctx: ToolContext): void {
     const d = this.#d;
     const queue = this.#pending.get(conversationId);

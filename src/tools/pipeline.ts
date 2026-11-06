@@ -193,7 +193,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     }, deps.autoClassify, ctx.signal, deps.autoTimeoutMs);
     if (ctx.signal.aborted) {
       autoEvent('asked');
-      return finish({ output: { content: toolText(language, 'pipeline.cancelled'), isError: true }, decision: 'ask', decidedBy: 'auto-mode', invalidArguments: false });
+      return finish({ output: { content: toolText(language, 'pipeline.cancelled'), isError: true }, decision: 'ask', decidedBy: 'user', invalidArguments: false });
     }
     // 判定役を待つあいだにモードが替わっていたら、答えは使わない: ふつうに戻したら、いつもの札。計画にしたら、計画モードが禁じる道具は札にもせず断る
     const modeNow = effectiveMode(ctx, deps);
