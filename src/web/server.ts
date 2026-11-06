@@ -303,7 +303,7 @@ export function createWebServer(app: App): WebServer {
     sendJson(res, 200, modelsView(app));
   });
   // サーバーの設定（待ち受けと認証）を、プロセスを止めずに入れ替える。書き込みなので、ほかの書き込みと同じく Host・Origin・Sec-Fetch-Site を通った要求だけ。
-  // 反映する設定は、ここで 1 回だけ読む。モデルの道具からは呼べない（シェルからの接続は、この PC の中のサーバーへの接続として確かめ、拒否される）
+  // 反映する設定は、ここで 1 回だけ読む。モデルのシェルからこの API を呼ぶ形は、この PC の中のサーバーへの接続（code.loopback）として、毎回、中身を見せて人の承認を求める（今回だけ。人が拒否すれば呼ばれない）。確かめなしでは通らない
   router.add('POST', '/api/server/apply', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     if (body.force !== undefined && typeof body.force !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'force', params: { field: 'force' } });
