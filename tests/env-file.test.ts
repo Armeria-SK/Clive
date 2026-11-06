@@ -129,11 +129,11 @@ test('三種類の引用符と # を全部含む鍵は、安全に書けない�
   assert.deepEqual(f.files(), ['.env']);
 });
 
-test('消す: 同じ名前の行をすべて外し、ほかは残す。控えを作る。無ければ何もしない（ファイルも作らない）', t => {
+test('消す: 同じ名前の行をすべて外し、ほかは残す。控えは、鍵の入っていない新しい中身。無ければ何もしない（ファイルも作らない）', t => {
   const f = fixture(t, '# c\nK_API_KEY=a\nB=2\nexport K_API_KEY=b\n');
   assert.equal(removeEnvValue(f.path, 'K_API_KEY'), true);
   assert.equal(f.text(), '# c\nB=2\n');
-  assert.equal(readFileSync(`${f.path}.bak`, 'utf8'), '# c\nK_API_KEY=a\nB=2\nexport K_API_KEY=b\n');
+  assert.equal(readFileSync(`${f.path}.bak`, 'utf8'), '# c\nB=2\n', '控えに、消した鍵（前の .env にあったもの）を残さない');
   assert.equal(removeEnvValue(f.path, 'K_API_KEY'), false);
   assert.equal(f.text(), '# c\nB=2\n');
   const none = fixture(t);
@@ -289,4 +289,26 @@ test('控え（.env.bak）がリンクなら、書かずに断る（写すとリ
   assert.equal(f.text(), 'A=1\nK_API_KEY=old\n', '.env は変えない');
   assert.equal(readFileSync(target, 'utf8'), 'TARGET-CONTENT\n', 'リンク先は変えない');
   assert.equal(readdirSync(f.dir).some(name => name.endsWith('.tmp')), false, '一時ファイルは残らない');
+});
+
+test('消したあとの控え（.env.bak）には、消した鍵を残さない。ほかの行は、新しい .env と同じ中身で控える（ふつうに書き換えるときの控えは、今までどおり前の .env）', t => {
+  const f = fixture(t, '# c\nA=1\nK_API_KEY=old-secret-value\nB=2\n');
+  setEnvValue(f.path, 'K_API_KEY', 'newer-secret-value');
+  assert.equal(readFileSync(`${f.path}.bak`, 'utf8'), '# c\nA=1\nK_API_KEY=old-secret-value\nB=2\n', '置き換えるときは、前の .env を控える');
+  assert.equal(removeEnvValue(f.path, 'K_API_KEY'), true);
+  assert.equal(f.text(), '# c\nA=1\nB=2\n');
+  const backup = readFileSync(`${f.path}.bak`, 'utf8');
+  assert.equal(backup.includes('secret-value'), false, '控えに鍵が残っていない（前の鍵も、消した鍵も）');
+  assert.equal(backup, '# c\nA=1\nB=2\n');
+  assert.deepEqual(f.files(), ['.env', '.env.bak']);
+  assert.equal(removeEnvValue(f.path, 'K_API_KEY'), false, '無ければ何もしない（控えも触らない）');
+  assert.equal(readFileSync(`${f.path}.bak`, 'utf8'), '# c\nA=1\nB=2\n');
+});
+
+test('Linux: 消したあとの控えも 0600', { skip: !POSIX }, t => {
+  const f = fixture(t, 'A=1\nK_API_KEY=old\n');
+  chmodSync(f.path, 0o644);
+  removeEnvValue(f.path, 'K_API_KEY');
+  assert.equal(statSync(`${f.path}.bak`).mode & 0o777, 0o600);
+  assert.equal(statSync(f.path).mode & 0o777, 0o600);
 });

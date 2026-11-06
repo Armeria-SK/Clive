@@ -160,12 +160,17 @@ function checkBackup(path: string): void {
   if (lstatSync(`${path}.bak`, { throwIfNoEntry: false })?.isSymbolicLink()) throw new EnvFileError('link', '.env.bak がリンクなので書き換えません');
 }
 
-function save(path: string, previous: string | undefined, content: string): void {
+// backup: 'previous' は前の .env を控えにする。'content' は新しい中身を控えにする（鍵を消したあと、消した鍵の入った前の .env を控えに残さない）。
+// 控えを先に書く: 控えが書けなかったときは、.env を変えずに断る（鍵が控えにだけ残る形にしない）
+function save(path: string, previous: string | undefined, content: string, backup: 'previous' | 'content' = 'previous'): void {
   try {
     if (previous !== undefined) {
       checkBackup(path);
-      copyFileSync(path, `${path}.bak`);
-      if (!WINDOWS) chmodSync(`${path}.bak`, 0o600);
+      if (backup === 'content') atomicWriteFile(`${path}.bak`, content, 0o600);
+      else {
+        copyFileSync(path, `${path}.bak`);
+        if (!WINDOWS) chmodSync(`${path}.bak`, 0o600);
+      }
     }
     atomicWriteFile(path, content, 0o600);
   } catch (error) {
@@ -187,6 +192,6 @@ export function removeEnvValue(path: string, name: string): boolean {
   const current = readExisting(path);
   const next = removeEnvText(current, name);
   if (next === undefined) return false;
-  save(path, current, next);
+  save(path, current, next, 'content');
   return true;
 }

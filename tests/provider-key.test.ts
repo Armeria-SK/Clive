@@ -104,6 +104,21 @@ test('.env のほかの行・コメント・順番はそのまま残る。消す
   assert.equal((await s.del('my-llm')).status, 200, '無くても消せる（何もしない）');
 });
 
+test('消すと、控え（.env.bak）にも鍵を残さない。鍵は .env にも .env.bak にも無くなり、ほかの行は残る', async t => {
+  const s = await start(t);
+  writeFileSync(s.paths.env, 'OTHER=1\n');
+  await s.put('my-llm', { key: KEY });
+  await s.put('my-llm', { key: KEY2 });
+  assert.equal(readFileSync(`${s.paths.env}.bak`, 'utf8').includes(KEY), true, '前提: 置き換えたときの控えには、前の鍵が入る（今までどおり）');
+  assert.equal((await s.del('my-llm')).status, 200);
+  for (const file of [s.paths.env, `${s.paths.env}.bak`]) {
+    const text = readFileSync(file, 'utf8');
+    assert.equal(text.includes(KEY), false, `${file} に前の鍵`);
+    assert.equal(text.includes(KEY2), false, `${file} に消した鍵`);
+    assert.match(text, /OTHER=1/u);
+  }
+});
+
 test('書いたあと、モデルの確認をやり直す（鍵の名前が増えたときも、同じ名前に入れ直したときも、消したときも）', async t => {
   const s = await start(t);
   const checkedAt = () => s.app.status.get('m3')!.checkedAt;
