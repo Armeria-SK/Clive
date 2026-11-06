@@ -372,6 +372,17 @@ test('sendChoiceOf: 新しい会話の最初の発言は、画面で覚えてい
   assert.deepEqual(sendChoiceOf(null, stale, { modelId: 'alt', effort: 'low' }), { modelId: 'alt', effort: 'low' });
 });
 
+test('sendChoiceOf: 権限モードは、新しい会話の最初の発言にだけ、ふつう以外のときに添える。会話があれば送らない。「この計画で進める」のように押した選びは、そのまま送る', () => {
+  const none = { modelId: null, effort: null };
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'auto' }), { permissionMode: 'auto' });
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'plan' }), { permissionMode: 'plan' });
+  assert.deepEqual(sendChoiceOf(null, { ...none, permissionMode: 'normal' }), {}, 'ふつうは送らない（新しい会話はいつもふつうから）');
+  assert.deepEqual(sendChoiceOf(null, none), {});
+  assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'auto' }), {}, '会話があれば、サーバーが覚えている');
+  assert.deepEqual(sendChoiceOf('c1', { ...none, permissionMode: 'plan' }, { permissionMode: 'normal' }), { permissionMode: 'normal' }, '計画から進めるときは、ふつうに戻す選びを一緒に送る');
+  assert.deepEqual(sendChoiceOf(null, { modelId: 'm', effort: 'low', permissionMode: 'auto' }), { modelId: 'm', effort: 'low', permissionMode: 'auto' });
+});
+
 test('newConversationId / sendTarget: 最初の発言は画面が決めた id へ送り（会話を先に作らない）、断られたあとのやり直しは同じ id を使う', () => {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
   assert.match(newConversationId(), uuid, 'ふつうの環境（randomUUID がある）');

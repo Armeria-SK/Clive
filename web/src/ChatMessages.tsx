@@ -178,7 +178,7 @@ export function ThinkingRow({ profile, startedAt }: { profile: Profile | null; s
   );
 }
 
-export function RunningTool({ name, input, startedAt }: { name: string; input: string; startedAt: number | null }) {
+export function RunningTool({ name, input, startedAt, checking = false }: { name: string; input: string; startedAt: number | null; checking?: boolean }) {
   const t = useT();
   const seconds = secondsSince(startedAt, useNow(1000, startedAt !== null));
   return (
@@ -186,7 +186,7 @@ export function RunningTool({ name, input, startedAt }: { name: string; input: s
       <span className="chat-tool-chev" />
       <span className="chat-tool-icon spin"><Icon name="loader" size={14} /></span>
       <span className="chat-tool-name">{name}</span>
-      <span className="chat-shimmer chat-tool-first">{input}</span>
+      <span className="chat-shimmer chat-tool-first">{checking ? t('mode.autoChecking') : input}</span>
       {seconds !== null && <span className="chat-meta">{t('chat.seconds', seconds)}</span>}
     </div>
   );

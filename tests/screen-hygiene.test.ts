@@ -62,6 +62,7 @@ test('画面の文字は辞書に集める: web/src の辞書（i18n/）の外�
 const DYNAMIC_PREFIXES: Record<string, string> = {
   'chat.kind.': 'Composer.tsx: 入力欄の下の注記の種類ごとの文',
   'lang.': 'Palette.tsx / settings/LookSection.tsx: 言語の名前（LANGUAGES の値）',
+  'mode.': 'Composer.tsx / ModeMenu.tsx / StatusBar.tsx / Chat.tsx: 権限モード（PERMISSION_MODES の値）の名前と説明（mode.normal と mode.normalDesc など）',
   'runs.seg.': 'Runs.tsx: 実行ログの切り替えの名前（実行 / 道具 / 振り返り）',
   'settings.look.motion.': 'settings/LookSection.tsx: 動きの名前（MOTIONS の値）',
   'settings.look.state.': 'settings/LookSection.tsx: 様子の見本の名前',

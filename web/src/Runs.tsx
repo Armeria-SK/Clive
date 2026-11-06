@@ -64,7 +64,10 @@ function ToolsTable({ calls }: { calls: ToolCallRow[] }) {
           <span role="cell" className="lg-cell">{formatDateTime(call.created_at, 'precise')}</span>
           <span role="cell" className="lg-cell lg-mono" title={call.tool}>{call.tool}</span>
           <span role="cell" className="lg-cell"><span className={`tag ${decisionTag(call.decision)}`}>{decisionLabel(call.decision)}</span></span>
-          <span role="cell" className="lg-cell">{decidedByLabel(call.decided_by)}</span>
+          <span role="cell" className="lg-cell">
+            {decidedByLabel(call.decided_by)}
+            {call.autoReason && <span className="lg-sub" title={`${t('runs.autoReason')}: ${call.autoReason}`}>{call.autoReason}</span>}
+          </span>
           <span role="cell" className="lg-cell"><StatusCell status={toolStatus(call.ok)} /></span>
         </div>
       ))}

@@ -2,7 +2,7 @@ import { api, ApiError } from './api.ts';
 import type { useT } from './i18n/index.ts';
 import { toast } from './toast.tsx';
 
-export type ConversationChange = { kind: 'renamed' | 'archived' | 'unarchived' | 'model' | 'deleted'; id: string };
+export type ConversationChange = { kind: 'renamed' | 'archived' | 'unarchived' | 'model' | 'mode' | 'deleted'; id: string };
 type T = ReturnType<typeof useT>;
 
 // 会話の画面（/archive）と左の一覧のメニューで同じ動きにする。アーカイブは確かめなしで、トーストの「元に戻す」で戻せる

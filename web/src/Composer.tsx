@@ -4,6 +4,8 @@ import { compactTokens, contextPercent, slashMatches, type SlashCommand } from '
 import { useT } from './i18n/index.ts';
 import { Icon } from './icons.tsx';
 import { isComposing } from './keys.ts';
+import type { PermissionMode } from '../../src/shared/permission-mode.ts';
+import { MODE_ICON } from './ModeMenu.tsx';
 
 const MAX_HEIGHT = 200;
 const ATTACH_ACCEPT = '.txt,.md,.csv,.json,.yaml,.yml,.log,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/*,application/pdf,image/png,image/jpeg,image/gif,image/webp';
@@ -25,6 +27,11 @@ interface Props {
   modelMenu: ReactNode;
   modelMenuOpen: boolean;
   onModelMenu: () => void;
+  // 権限モード（ふつう / 自動承認 / 計画）の札。押すと onModeMenu
+  mode: PermissionMode;
+  modeMenu: ReactNode;
+  modeMenuOpen: boolean;
+  onModeMenu: () => void;
   usage: ContextUsage | null;
   onInput: (value: string) => void;
   onAttach: (files: FileList | null) => void;
@@ -138,6 +145,14 @@ export function Composer(props: Props) {
           >
             {uploading ? <span className="spin"><Icon name="loader" size={15} /></span> : <Icon name="paperclip" size={15} />}
           </button>
+          <span className="chat-model-wrap">
+            <button type="button" className={`chat-mode-chip mode-${props.mode}`} data-tip={t('mode.chip')} aria-haspopup="dialog" aria-expanded={props.modeMenuOpen} onClick={props.onModeMenu}>
+              <Icon name={MODE_ICON[props.mode]} size={13} />
+              <span className="chat-mode-name">{t(`mode.${props.mode}`)}</span>
+              <Icon name="chevD" size={11} />
+            </button>
+            {props.modeMenu}
+          </span>
           {modelName && (
             <span className="chat-model-wrap">
               <button type="button" className="chat-model-chip" data-tip={t('chat.model')} aria-haspopup="dialog" aria-expanded={props.modelMenuOpen} onClick={props.onModelMenu}>

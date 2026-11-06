@@ -1,3 +1,4 @@
+import type { PermissionMode } from '../../src/shared/permission-mode.ts';
 import type { ToolPolicy } from '../../src/tools/tool-policy.ts';
 import { getLanguage } from './i18n/state.ts';
 import { errorBodyText } from './server-text.ts';
@@ -12,6 +13,8 @@ export interface Conversation {
   archived?: number;
   // 会話で選んだモデルと考える深さ（null は自動・モデルの既定）
   model_id?: string | null; effort?: string | null;
+  // 会話の権限モード（無い = ふつう）
+  permission_mode?: PermissionMode;
 }
 export interface Message {
   id: number; role: 'user' | 'assistant' | 'tool'; text: string; runId: string | null; createdAt: number;
@@ -20,7 +23,7 @@ export interface Message {
   attachments?: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>;
 }
 // 会話で選ぶモデルと考える深さ。渡さなかった方は変えない。null は自動・モデルの既定に戻す
-export interface ModelChoice { modelId?: string | null; effort?: string | null }
+export interface ModelChoice { modelId?: string | null; effort?: string | null; permissionMode?: PermissionMode }
 // 実行中に送って、まだ履歴に入っていない発言（今の実行の次の区切りで入る）
 export interface PendingMessage { id: string; text: string; attachments: Array<{ id: string; name: string; kind: 'text' | 'pdf' | 'image' }>; interrupt: boolean; createdAt: number }
 export interface UploadView { id: string; name: string; mime: string; kind: 'text' | 'pdf' | 'image'; size: number; chars: number | null; pages: number | null }
@@ -164,6 +167,7 @@ export const api = {
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
   send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean } = {}) =>
     call<{ runId: string; queued?: boolean; pendingId?: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}) }) }),
+  chooseMode: (id: string, permissionMode: PermissionMode) => call<{ conversation: Conversation }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ permissionMode }) }),
   chooseModel: (id: string, choice: ModelChoice) => call<{ conversation: Conversation; effortReset?: boolean }>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(choice) }),
   upload: async (file: File) => {
     const res = await fetch(`/api/uploads?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } });

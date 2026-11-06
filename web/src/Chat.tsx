@@ -8,7 +8,9 @@ import {
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import { archiveConversation, unarchiveConversation, type ConversationChange } from './conversation-actions.ts';
+import { ModeMenu, OPEN_MODE_MENU_EVENT } from './ModeMenu.tsx';
 import { ModelMenu, OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
+import type { PermissionMode } from '../../src/shared/permission-mode.ts';
 import { SummaryDialog } from './SummaryDialog.tsx';
 import {
   AssistantMessage, EmptyChat, FailureCard, LiveReply, MemoryRow, NoteRow, PendingMessageRow, PreSendCard, RunningTool, SendErrorCard, ThinkingRow, ToolMessage, UserMessage,
@@ -24,7 +26,7 @@ export { ToolMessage } from './ChatMessages.tsx';
 
 export interface RunNotice {
   runId: string;
-  kind: 'warning' | 'error' | 'switch' | 'memory' | 'compaction' | 'stopped';
+  kind: 'warning' | 'error' | 'switch' | 'memory' | 'compaction' | 'stopped' | 'auto';
   message: string;
   hint?: string | undefined;
   retryable?: boolean;
@@ -86,6 +88,7 @@ function noteIcon(notice: RunNotice): IconName {
   if (notice.kind === 'switch') return 'refresh';
   if (notice.kind === 'stopped') return 'square';
   if (notice.kind === 'compaction') return 'info';
+  if (notice.kind === 'auto') return 'shield';
   return notice.code === 'retrying' ? 'clock' : 'alert';
 }
 
@@ -105,6 +108,8 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   const [modelId, setModelId] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mode, setMode] = useState<PermissionMode>('normal');
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [archivedNow, setArchivedNow] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -129,6 +134,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       setArchivedNow(result.conversation.archived === 1);
       setModelId(result.conversation.model_id ?? null);
       setEffort(result.conversation.effort ?? null);
+      setMode(result.conversation.permission_mode ?? 'normal');
       setLoaded(true);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) { setMessages([]); setLoaded(true); }
@@ -138,10 +144,17 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   useEffect(() => { void load(); }, [load, revision]);
   useEffect(() => { void api.models().then(r => setModels(r.models)).catch(() => undefined); }, []);
   useEffect(() => {
-    const open = () => setMenuOpen(true);
+    const open = () => { setModeMenuOpen(false); setMenuOpen(true); };
     addEventListener(OPEN_MODEL_MENU_EVENT, open);
     return () => removeEventListener(OPEN_MODEL_MENU_EVENT, open);
   }, []);
+  useEffect(() => {
+    const open = () => { setMenuOpen(false); setModeMenuOpen(true); };
+    addEventListener(OPEN_MODE_MENU_EVENT, open);
+    return () => removeEventListener(OPEN_MODE_MENU_EVENT, open);
+  }, []);
+  // 会話を切り替えたとき、新しい会話はいつもふつうから（前の会話のモードを持ち越さない。会話があれば load が覚えているモードに置き換える）
+  useEffect(() => { if (!conversationId) setMode('normal'); }, [conversationId]);
   // 入力欄に出すモデル: 会話で選んだもの。選んでいなければ（自動）設定の順番の先頭
   const chosenModel = models.find(m => m.id === (modelId ?? defaultModelId));
   const shownModel = modelId ? chosenModel?.model ?? modelId : modelName;
@@ -164,6 +177,21 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       onConversationChanged({ kind: 'model', id: conversationId });
     } catch (error) {
       toast({ kind: 'info', icon: 'alert', title: t('model.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
+    }
+  }
+
+  // 権限モードの選び方。会話がまだ無いときは、最初の発言と一緒に送る（ここでは覚えるだけ）。あるときはその場で会話に覚える
+  async function chooseMode(next: PermissionMode): Promise<void> {
+    setModeMenuOpen(false);
+    if (next === mode) return;
+    if (!conversationId) { setMode(next); return; }
+    try {
+      const result = await api.chooseMode(conversationId, next);
+      setMode(result.conversation.permission_mode ?? 'normal');
+      toast({ kind: 'info', icon: 'shield', title: t('mode.switched'), body: t(`mode.${result.conversation.permission_mode ?? 'normal'}`) });
+      onConversationChanged({ kind: 'mode', id: conversationId });
+    } catch (error) {
+      toast({ kind: 'info', icon: 'alert', title: t('mode.failed'), ...(error instanceof ApiError ? { body: error.message } : {}) });
     }
   }
 
@@ -253,10 +281,14 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       const id = target.id;
       created.current = target.created;
       onClearNotices(id);
-      await api.send(id, text, attached.map(a => a.id), sendChoiceOf(conversationId, { modelId, effort }, override), interrupt && draft ? { interrupt: true } : {});
+      await api.send(id, text, attached.map(a => a.id), sendChoiceOf(conversationId, { modelId, effort, permissionMode: mode }, override), interrupt && draft ? { interrupt: true } : {});
       if (override?.modelId !== undefined) {
         setModelId(override.modelId); setEffort(override.effort ?? null);
         if (conversationId) onConversationChanged({ kind: 'model', id: conversationId });
+      }
+      if (override?.permissionMode !== undefined) {
+        setMode(override.permissionMode);
+        if (conversationId) onConversationChanged({ kind: 'mode', id: conversationId });
       }
       if (preset === undefined) setInput('');
       setAttached([]);
@@ -265,6 +297,11 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
     } catch (error) {
       await fail(error, t('chat.send.failed'));
     } finally { setSending(false); }
+  }
+
+  // 計画の返事のあと:「ふつう」に戻して、この計画どおりに進めるよう頼む（モードの変更は、この発言と一緒に送る）
+  async function proceedWithPlan(): Promise<void> {
+    await send(t('plan.proceedRequest'), false, { permissionMode: 'normal' });
   }
 
   async function cancelPending(pendingId: string): Promise<void> {
@@ -329,7 +366,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   if (draft) {
     const liveHead = !visible.some(m => m.role === 'assistant' && m.runId === draft.runId);
     if (draft.text) push(`live-${draft.runId}`, 'assistant', <LiveReply profile={profile} text={draft.text} time={startedAt ?? liveSince} head={liveHead} />);
-    else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} />);
+    else if (draft.activeTool) push(`run-${draft.runId}-${draft.activeTool}`, 'run', <RunningTool name={draft.activeTool} input={toolInputSummary(draft.activeInput ?? '')} startedAt={startedAt} checking={draft.autoChecking === true} />);
     else push(`think-${draft.runId}`, 'think', <ThinkingRow profile={profile} startedAt={startedAt} />);
   }
   for (const p of pending) push(`pending-${p.id}`, 'user', <PendingMessageRow pending={p} onCancel={() => void cancelPending(p.id)} />);
@@ -355,6 +392,9 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   });
 
   const empty = loaded && items.length === 0;
+  // 計画モードの返事が出そろったら、入力欄の上に「この計画で進める」を出す
+  const lastMessage = messages.at(-1);
+  const showProceed = mode === 'plan' && conversationId !== null && !draft && !sending && lastMessage?.role === 'assistant' && lastMessage.text.trim() !== '' && approvals.length === 0;
   const joined = joinsToolRun(items.map(item => item.kind));
   let previous: ChatItemKind | null = null;
   return (
@@ -383,10 +423,18 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       <div className="chat-dock">
         <div className="chat-dock-inner">
           <ApprovalDock approvals={approvals} />
+          {showProceed && (
+            <div className="chat-proceed" role="group" aria-label={t('plan.proceed')}>
+              <button type="button" className="btn btn-primary" onClick={() => void proceedWithPlan()}>{t('plan.proceed')}</button>
+              <span className="chat-proceed-hint">{t('plan.proceedHint')}</span>
+            </div>
+          )}
           <Composer
             textareaRef={textarea} fileInputRef={fileInput} input={input} attached={attached} uploading={uploading} sending={sending} generating={Boolean(draft)}
             approvalId={frontApprovalId} assistantName={assistantName} modelName={shownModel} effort={effort} usage={usage}
-            modelMenuOpen={menuOpen} onModelMenu={() => setMenuOpen(open => !open)}
+            modelMenuOpen={menuOpen} onModelMenu={() => { setModeMenuOpen(false); setMenuOpen(open => !open); }}
+            mode={mode} modeMenuOpen={modeMenuOpen} onModeMenu={() => { setMenuOpen(false); setModeMenuOpen(open => !open); }}
+            modeMenu={modeMenuOpen ? <ModeMenu selected={mode} onSelect={next => void chooseMode(next)} onClose={() => setModeMenuOpen(false)} /> : null}
             modelMenu={menuOpen ? <ModelMenu models={models} selected={modelId} effort={effort} efforts={efforts} onModel={id => void choose({ modelId: id })} onEffort={value => void choose({ effort: value })} onClose={() => setMenuOpen(false)} /> : null}
             onInput={setInput} onAttach={files => void attach(files)} onDetach={id => setAttached(list => list.filter(a => a.id !== id))}
             onSend={() => void send()} onStopAndSend={() => void send(undefined, true)} onStop={() => { if (draft) void api.stop(draft.runId); }} onApproveOnce={approveOnce} onSlash={runSlash}

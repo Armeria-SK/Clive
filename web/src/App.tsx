@@ -25,6 +25,7 @@ import { notificationLink } from './notification-meta.ts';
 import { NotificationsPage } from './NotificationsPage.tsx';
 import { Palette } from './Palette.tsx';
 import { PAGE_META, pickChatModelView } from './pages.ts';
+import { OPEN_MODE_MENU_EVENT } from './ModeMenu.tsx';
 import { OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
 import { chatHash, pageBehind, parseRoute, type Route } from './routes.ts';
 import { Runs } from './Runs.tsx';
@@ -309,8 +310,12 @@ export function App() {
       case 'tool.call':
         setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: e.name, activeInput: e.input } : d));
         break;
+      case 'tool.auto':
+        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, autoChecking: e.state === 'checking' } : d));
+        if (e.state === 'allowed') addNotice(e.conversationId, { runId: e.runId, kind: 'auto', message: t('notice.autoAllowed', e.name, e.reason ?? '') });
+        break;
       case 'tool.result':
-        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined, activeInput: undefined } : d));
+        setDrafts(ds => ds.map(d => d.runId === e.runId ? { ...d, activeTool: undefined, activeInput: undefined, autoChecking: undefined } : d));
         if (e.decision === 'deny') addNotice(e.conversationId, { runId: e.runId, kind: 'warning', message: t('notice.toolDenied', e.name, e.preview.split('\n').slice(1, 3).join(' ')) });
         break;
       case 'approval.requested':
@@ -550,6 +555,8 @@ export function App() {
           modelName={chatModel?.model ?? null} usage={shown.page === 'chat' ? contextUsage : null} unread={unread} notificationsOpen={notifOpen} onReconnect={reconnect} onOpenPanel={openPanel} onOpenRunning={openRunning}
           onOpenApproval={openApproval} onOpenNotifications={toggleNotifications} inert={settingsCovers}
           onOpenModel={shown.page === 'chat' ? () => dispatchEvent(new Event(OPEN_MODEL_MENU_EVENT)) : undefined}
+          mode={shown.page === 'chat' && current ? conversations.find(c => c.id === current)?.permission_mode ?? 'normal' : undefined}
+          onOpenMode={shown.page === 'chat' ? () => dispatchEvent(new Event(OPEN_MODE_MENU_EVENT)) : undefined}
         />
       )}
       <NotificationBubble
