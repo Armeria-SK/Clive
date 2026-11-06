@@ -302,3 +302,52 @@ test('入力の検査: interrupt は true / false だけ。待ちの取り消し
   s.app.conversations.create({ id: CONVERSATION, title: '空' });
   assert.equal((await s.json(`/api/conversations/${CONVERSATION}/pending/none`, 'DELETE')).body.code, 'http.pending_gone');
 });
+
+const sawText = (req: ModelRequest, text: string) => JSON.stringify(req.messages).includes(text);
+
+test('実行中に会話のモデルを替えたら、そのあとに送った発言は今の実行（古いモデル）へ差し込まず、実行が終わってから新しいモデルの実行で読ませる。替える前に送った発言は今までどおり差し込む', async t => {
+  const s = await startApp(t);
+  await withFile(s);
+  const g = gate();
+  s.adapter().scripts = [after(g, call('file_read', { path: 'a.txt' })), say('m1 の返事'), say('m2 の返事')];
+  const first = await post(s, 'a.txt を読んで', { modelId: 'm1' });
+  assert.equal((await post(s, 'EARLIER')).body.queued, true);
+  assert.equal((await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { modelId: 'm2' })).status, 200);
+  const secret = await post(s, 'SECRET');
+  assert.equal(secret.body.queued, true);
+  assert.equal(secret.body.runId, first.body.runId);
+  g.open();
+  await s.app.engine.wait(first.body.runId);
+  const second = s.app.engine.activeRuns().find(r => r.conversationId === CONVERSATION);
+  assert.ok(second && second.runId !== first.body.runId, '古い実行が終わったとき、新しい実行が始まっている');
+  await settled(s.app, second.runId);
+  const calls = s.adapter().calls;
+  assert.deepEqual(calls.map(c => c.model.id), ['m1', 'm1', 'm2']);
+  assert.ok(calls.filter(c => c.model.id === 'm1').every(c => !sawText(c, 'SECRET')), '古いモデルへの呼び出しに、替えたあとの発言が混ざらない');
+  assert.ok(sawText(calls[1]!, 'EARLIER'), '替える前に待たせた発言は、今の実行に差し込む');
+  assert.ok(sawText(calls[2]!, 'SECRET'), '新しいモデルの実行が、待たせていた発言を読む');
+  assert.deepEqual(roles(s), ['user:a.txt を読んで', 'assistant:', 'tool:[file_read] ', 'user:EARLIER', 'assistant:m1 の返事', 'user:SECRET', 'assistant:m2 の返事']);
+  assert.deepEqual(runsOf(s).length, 2);
+  assert.equal(s.app.runs.get(second.runId)!.model_id, 'm2');
+});
+
+test('モデルを替えたあとの発言は、今の実行が失敗しても、新しいモデルの実行で読ませる（保存だけにしない）。送信の modelId で替えたときも同じ', async t => {
+  const s = await startApp(t);
+  const g = gate();
+  const events: RunEvent[] = [];
+  s.app.bus.subscribe(e => events.push(e.event));
+  s.adapter().scripts = [after(g, async function* () { throw new Error('壊れた'); }), say('m2 の返事')];
+  const first = await post(s, '最初', { modelId: 'm1' });
+  const queued = await post(s, 'SECRET', { modelId: 'm2' });
+  assert.equal(queued.status, 202);
+  assert.equal(queued.body.queued, true);
+  g.open();
+  await settled(s.app, first.body.runId);
+  await waitFor(() => runsOf(s).length === 2 && s.app.runs.get(runsOf(s)[1]!.id)?.ended_at != null, '新しい実行の終わり');
+  assert.equal(runsOf(s)[0]!.ok, 0, '1 つ目は失敗した');
+  assert.deepEqual(s.adapter().calls.map(c => c.model.id), ['m1', 'm2']);
+  assert.ok(!sawText(s.adapter().calls[0]!, 'SECRET'));
+  assert.ok(sawText(s.adapter().calls[1]!, 'SECRET'));
+  assert.deepEqual(roles(s), ['user:最初', 'user:SECRET', 'assistant:m2 の返事']);
+  assert.ok(!events.some(e => e.type === 'warning' && e.code === 'queued_saved'), '保存だけにはしない');
+});
