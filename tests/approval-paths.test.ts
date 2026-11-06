@@ -36,7 +36,7 @@ function setup(t: { after: (fn: () => void) => void }) {
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, { registry, approvals, db, emit: e => events.push(e) });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, ctx, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
   // 承認の札が出るまで待ち、拒否して、札の中身を返す
   const asked = async (name: string, args: unknown) => {
     const pending = call(name, args);

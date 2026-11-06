@@ -38,6 +38,8 @@ export interface PipelineDeps {
   lastUserRequest?: (() => string) | undefined;
   // この会話の実行が、外から読んだ内容を一度でも読んだことがあるか（会話ごとの印）。あれば判定役は使わない。渡さない・読めないときも、あるとみなす
   conversationTainted?: (() => boolean) | undefined;
+  // この会話で、自動承認の判定役が許可フォルダの外を読むのを一度でも許したか（会話ごとの印）。あれば、この会話のシェルのコマンドと通信の道具は、ずっと毎回確かめる。渡さない・読めないときも、あるとみなす
+  conversationAutoRead?: (() => boolean) | undefined;
   // 判定役を待つ時間の上限（ミリ秒。試験用。既定 20 秒）
   autoTimeoutMs?: number | undefined;
 }
@@ -78,6 +80,11 @@ export function effectiveMode(ctx: ToolContext, deps: PipelineDeps): PermissionM
 function conversationTainted(deps: PipelineDeps): boolean {
   if (!deps.conversationTainted) return true;
   try { return deps.conversationTainted(); } catch { return true; }
+}
+
+function conversationAutoRead(deps: PipelineDeps): boolean {
+  if (!deps.conversationAutoRead) return true;
+  try { return deps.conversationAutoRead(); } catch { return true; }
 }
 
 export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: PipelineDeps): Promise<ToolCallOutcome> {
@@ -155,9 +162,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       reasons.push(guardText(language, 'pipeline.policy_ask', { name: tool.name }));
     }
   }
-  // 自動承認で許可フォルダの外を読んだ実行では、その残りのあいだ、通信の道具とシェルのコマンドはすべて確かめる（外で読んだ中身を、確かめなしに外へ送らせない。
-  // 許可の一覧にある curl・Invoke-WebRequest も、URL の後ろの文字で外へ送れるので、取得かどうかで分けない）
-  const afterAutoRead = ctx.autoReadOutside === true && (tool.effect === 'network' || tool.effect === 'exec') && decision !== 'deny';
+  // 自動承認で許可フォルダの外を読んだ会話では、その実行の残りも、あとの実行も、通信の道具とシェルのコマンドはすべて毎回確かめる（外で読んだ中身は会話の履歴に残るので、確かめなしに外へ送らせない。
+  // 許可の一覧にある curl・Invoke-WebRequest も、URL の後ろの文字で外へ送れるので、取得かどうかで分けない。モードをふつうに戻しても変わらない）
+  const afterAutoRead = (tool.effect === 'network' || tool.effect === 'exec') && decision !== 'deny' && (ctx.autoReadOutside === true || conversationAutoRead(deps));
   if (afterAutoRead) {
     decision = worst(decision, 'ask');
     askKinds.add('egress');

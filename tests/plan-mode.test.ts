@@ -41,7 +41,7 @@ function pipeline(t: { after: (fn: () => void) => void }, mode: () => Permission
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: new AbortController().signal, config, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, ...(startMode ? { permissionMode: startMode } : {}),
   };
-  const call = (effect: ToolEffect, c: ToolContext = ctx) => runToolCall({ id: `c-${effect}`, name: `stub_${effect}`, arguments: {} }, c, { registry, approvals, db, emit: () => undefined, permissionMode: mode });
+  const call = (effect: ToolEffect, c: ToolContext = ctx) => runToolCall({ id: `c-${effect}`, name: `stub_${effect}`, arguments: {} }, c, { registry, approvals, db, emit: () => undefined, permissionMode: mode, conversationAutoRead: () => false });
   return { call, ran, db, ctx };
 }
 

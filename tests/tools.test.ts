@@ -42,7 +42,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e) });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
   return { paths, ctx, call, approvals, events, db, controller };
 }
 
@@ -285,7 +285,7 @@ test('V8: 道具には、持ち主が「今回だけ」の確かめを許した�
     execute: async (_input, _ctx, info) => { seen.push(info); return { content: 'ok' }; },
   };
   const registry = new ToolRegistry().register(probe);
-  const call = (mode: string) => runToolCall({ id: 'p', name: 'probe', arguments: { mode } }, s.ctx, { registry, approvals: s.approvals, db: s.db, emit: () => undefined });
+  const call = (mode: string) => runToolCall({ id: 'p', name: 'probe', arguments: { mode } }, s.ctx, { registry, approvals: s.approvals, db: s.db, emit: () => undefined, conversationAutoRead: () => false });
 
   await call('allow');
   const plain = call('ask');

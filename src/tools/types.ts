@@ -97,7 +97,7 @@ export interface ToolContext {
   forbiddenTools?: ReadonlySet<string> | undefined;
   // 会話のチャットの実行が始まったときの権限モード（段 8b）。無ければふつう。実行に効くのは、これと会話のいまのモードの厳しい方（pipeline.ts の effectiveMode）
   permissionMode?: PermissionMode | undefined;
-  // 自動承認で「許可フォルダの外を読む」を許した。この実行の残りのあいだ、通信の道具（network）は確かめる（外で読んだ中身を、確かめなしに外へ送らせない）
+  // 自動承認で「許可フォルダの外を読む」を許した。パイプラインが付け、エンジンが読んだ時点で会話の印（conversations.ever_auto_read）に書く。この実行の残りも、あとの実行も、通信の道具（network）とシェルのコマンド（exec）は毎回確かめる（外で読んだ中身を、確かめなしに外へ送らせない）
   autoReadOutside?: boolean | undefined;
 }
 

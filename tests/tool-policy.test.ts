@@ -53,7 +53,7 @@ function setup(t: { after: (fn: () => void) => void }, policies: Record<string, 
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx, live?: () => AppConfig) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), ...(live ? { config: live } : {}) });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false, ...(live ? { config: live } : {}) });
   return { paths, ctx, call, approvals, events, db, ran, parsed, controller };
 }
 

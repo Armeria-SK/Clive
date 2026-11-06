@@ -28,8 +28,6 @@ export interface RunRow {
   flags: string;
   // 1 = この実行は、外から読んだ内容（Web・添付、前の実行から引き継いだ分を含む）を読んだ。終わったかどうかに関わらず、読んだ時点で書く
   tainted: number;
-  // 1 = この実行は、自動承認で許可フォルダの外を読んだ。終わったかどうかに関わらず、読んだ時点で書く（止めた・失敗した実行から、次の実行が引き継ぐ）
-  auto_read_outside: number;
 }
 
 export interface RunFinish {
@@ -77,11 +75,6 @@ export class Runs {
   // 「外から読んだ」印を付ける（一度付いたら外れない）。実行が終わる前に書くので、落ちて途中で終わった実行にも残る
   markTainted(id: string): void {
     this.db.prepare('UPDATE engine_runs SET tainted = 1 WHERE id = ?').run(id);
-  }
-
-  // 「自動承認で許可フォルダの外を読んだ」印を付ける（一度付いたら外れない）
-  markAutoRead(id: string): void {
-    this.db.prepare('UPDATE engine_runs SET auto_read_outside = 1 WHERE id = ?').run(id);
   }
 
   get(id: string): RunRow | undefined {

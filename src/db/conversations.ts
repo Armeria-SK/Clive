@@ -20,10 +20,12 @@ export interface ConversationRow {
   permission_mode: PermissionMode;
   // 1 = この会話のチャットの実行が、外から読んだ内容（Web・添付・シェルの取得）を一度でも読んだ。付いたら外れない
   ever_tainted: number;
+  // 1 = この会話のどこかの実行で、自動承認の判定役が許可フォルダの外を読むのを許した。付いたら外れない
+  ever_auto_read: number;
 }
 
 // 一覧に出す会話。固定の system の全文や要約の全文は載せない（要約は has_summary で有無だけ。全文は summaryOf で読む）
-export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted'> & { has_summary: boolean };
+export type ConversationListItem = Omit<ConversationRow, 'snapshot' | 'snapshot_hash' | 'summary' | 'ever_tainted' | 'ever_auto_read'> & { has_summary: boolean };
 
 export interface StoredMessage {
   id: number;
@@ -127,6 +129,17 @@ export class Conversations {
   everTainted(id: string): boolean {
     const row = this.db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get(id) as { ever_tainted: number } | undefined;
     return row === undefined || row.ever_tainted !== 0;
+  }
+
+  // 会話に「自動承認で許可フォルダの外を読んだことがある」印を付ける（一度付いたら外れない）。この会話のシェルのコマンドと通信の道具は、ずっと毎回確かめる
+  markAutoRead(id: string): void {
+    this.db.prepare('UPDATE conversations SET ever_auto_read = 1 WHERE id = ?').run(id);
+  }
+
+  // 自動承認で外を読んだことがある会話か。会話が読めないときは、ある側に倒す
+  everAutoRead(id: string): boolean {
+    const row = this.db.prepare('SELECT ever_auto_read FROM conversations WHERE id = ?').get(id) as { ever_auto_read: number } | undefined;
+    return row === undefined || row.ever_auto_read !== 0;
   }
 
   // 会話の権限モード。無い会話はふつう

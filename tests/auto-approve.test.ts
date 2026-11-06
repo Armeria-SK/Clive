@@ -167,17 +167,18 @@ async function setup(t: { after: (fn: () => void) => void }, options: { mutate?:
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const prompts: ClassifierPrompt[] = [];
-  const state = { mode: options.mode ?? 'auto' as PermissionMode, classify: options.classify ?? (() => ALLOW), conversationTainted: false as boolean | 'throws' };
+  const state = { mode: options.mode ?? 'auto' as PermissionMode, classify: options.classify ?? (() => ALLOW), conversationTainted: false as boolean | 'throws', conversationAutoRead: false as boolean | 'throws' };
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined, permissionMode: options.startMode ?? 'auto',
   };
-  const call = (name: string, args: unknown, c: ToolContext = ctx, extra: { noClassifier?: boolean; timeoutMs?: number; noConversationFlag?: boolean } = {}) =>
+  const call = (name: string, args: unknown, c: ToolContext = ctx, extra: { noClassifier?: boolean; timeoutMs?: number; noConversationFlag?: boolean; noAutoReadFlag?: boolean } = {}) =>
     runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, {
       registry, approvals, db, emit: e => events.push(e), permissionMode: () => state.mode, lastUserRequest: () => '外のメモを読んで',
       ...(extra.noClassifier ? {} : { autoClassify: async (prompt: ClassifierPrompt, signal: AbortSignal) => { prompts.push(prompt); return state.classify(prompt, signal); } }),
       ...(extra.timeoutMs ? { autoTimeoutMs: extra.timeoutMs } : {}),
       ...(extra.noConversationFlag ? {} : { conversationTainted: () => { if (state.conversationTainted === 'throws') throw new Error('読めない'); return state.conversationTainted; } }),
+      ...(extra.noAutoReadFlag ? {} : { conversationAutoRead: () => { if (state.conversationAutoRead === 'throws') throw new Error('読めない'); return state.conversationAutoRead; } }),
     });
   const readOutside = process.platform === 'win32' ? `Get-Content "${outside}"` : `cat "${outside}"`;
   return { paths, ctx, call, approvals, events, db, parsed, controller, prompts, state, outside, readOutside };
@@ -191,8 +192,8 @@ async function waitPending(s: Setup) {
 }
 
 // 札が出る確かめ: 札を拒否して、種類を返す
-async function askedKinds(s: Setup, name: string, args: unknown, c: ToolContext = s.ctx): Promise<{ kinds: string[]; reasons: string[]; everyTime: boolean }> {
-  const running = s.call(name, args, c);
+async function askedKinds(s: Setup, name: string, args: unknown, c: ToolContext = s.ctx, extra: { noAutoReadFlag?: boolean } = {}): Promise<{ kinds: string[]; reasons: string[]; everyTime: boolean }> {
+  const running = s.call(name, args, c, extra);
   const request = await waitPending(s);
   const seen = { kinds: [...(request.kinds ?? [])].sort(), reasons: request.reasons, everyTime: request.everyTime === true };
   s.approvals.decide(request.id, 'deny');
@@ -273,7 +274,7 @@ test('自動承認: 判定役が無い（モデルを呼べない）、利用者
 
   const s = await setup(t);
   const mute = (c: ToolContext) => runToolCall({ id: 'k', name: 'shell_run', arguments: { command: s.readOutside } }, c, {
-    registry: new ToolRegistry().register(shellRun), approvals: s.approvals, db: s.db, emit: e => s.events.push(e), permissionMode: () => 'auto', lastUserRequest: () => '', conversationTainted: () => false,
+    registry: new ToolRegistry().register(shellRun), approvals: s.approvals, db: s.db, emit: e => s.events.push(e), permissionMode: () => 'auto', lastUserRequest: () => '', conversationTainted: () => false, conversationAutoRead: () => false,
     autoClassify: async p => { s.prompts.push(p); return ALLOW; },
   });
   const pending = mute(s.ctx);
@@ -508,6 +509,29 @@ test('外を読むのを自動承認で許したあと、その実行の残り�
   // 読む道具（file_read）は、今までどおり確かめなし
   writeFileSync(join(s.paths.workspace, 'a.txt'), 'x');
   assert.equal((await s.call('file_read', { path: 'a.txt' })).decision, 'allow');
+});
+
+test('会話で一度でも自動承認で外を読んだ（会話ごとの印）なら、この実行が読んでいなくても、シェルのコマンドと通信の道具は毎回確かめる。ふつうのモードでも。印を読めない・読む口が無いときも同じ', async t => {
+  const base = await setup(t, { mode: 'normal', startMode: 'normal' });
+  assert.equal((await base.call('shell_run', { command: FETCH_COMMANDS[0]! })).decision, 'allow', '比べる基準: 印が無ければ、許可の一覧にある取得は札なしで動く');
+  for (const label of ['印あり', '印を読めない', '読む口が無い'] as const) {
+    const s = await setup(t, { mode: 'normal', startMode: 'normal' });
+    s.state.conversationAutoRead = label === '印あり' ? true : label === '印を読めない' ? 'throws' : false;
+    const extra = label === '読む口が無い' ? { noAutoReadFlag: true } : {};
+    for (const [tool, args] of [['shell_run', { command: FETCH_COMMANDS[0]! }], ['shell_run', { command: 'echo hello' }], ['web_fetch', { url: 'https://example.com/' }]] as const) {
+      const seen = await askedKinds(s, tool, args, s.ctx, extra);
+      assert.deepEqual(seen.kinds, ['egress'], `${label}: ${tool}`);
+      assert.equal(seen.everyTime, true, `${label}: ${tool}: 「この会話では許可」は出さない・覚えない`);
+      assert.ok(seen.reasons.some(r => /この会話/u.test(r)), `${label}: 札の理由は「この会話」と言う`);
+    }
+    assert.equal(s.ctx.autoReadOutside, undefined, `${label}: この実行は外を読んでいない`);
+    assert.equal(s.prompts.length, 0, `${label}: 判定役は呼ばない`);
+  }
+  // 読む道具は今までどおり確かめなし（印があっても）
+  const flagged = await setup(t);
+  flagged.state.conversationAutoRead = true;
+  writeFileSync(join(flagged.paths.workspace, 'a.txt'), 'x');
+  assert.equal((await flagged.call('file_read', { path: 'a.txt' })).decision, 'allow');
 });
 
 test('シェルで外から取得したら、web_fetch と同じに「外から読んだ」印が付く（自動承認でもふつうのモードでも）。失敗した取得にも付く。取得でないコマンド・札で断った取得には付かない', async t => {

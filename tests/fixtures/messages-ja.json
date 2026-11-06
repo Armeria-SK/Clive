@@ -343,7 +343,7 @@
     "pipeline.auto_no_reason": "理由は書かれていません",
     "pipeline.auto_asked": "自動承認の判定役が「確かめる」と判断しました: {reason}",
     "pipeline.auto_failed": "自動承認の判定役が答えられなかったので、確認します",
-    "pipeline.auto_egress": "自動承認で許可フォルダの外を読んだあとなので、この返事のあいだのコマンドの実行と外への送信は毎回確認します",
+    "pipeline.auto_egress": "自動承認で許可フォルダの外を読んだ会話なので、この会話のコマンドの実行と外への送信は毎回確認します（あとの返事でも、モードを戻しても変わりません）",
     "hook.failed": "フック「{name}」が失敗しました（{reason}）",
     "hook.spawn": "起動できません: {detail}",
     "hook.timeout": "{ms}ms でタイムアウト",

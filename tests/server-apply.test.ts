@@ -411,7 +411,7 @@ test('A4: モデルの道具（シェル）からは押せない。この PC の
   for (const command of commands) {
     let finished = false;
     const asked: Array<{ onceOnly: boolean; reasons: string[] }> = [];
-    const calling = runToolCall({ id: 'c', name: 'shell_run', arguments: { command } }, ctx, { registry: s.app.tools, approvals: s.app.approvals, db: s.app.db, emit: () => undefined }).finally(() => { finished = true; });
+    const calling = runToolCall({ id: 'c', name: 'shell_run', arguments: { command } }, ctx, { registry: s.app.tools, approvals: s.app.approvals, db: s.app.db, emit: () => undefined, conversationAutoRead: () => false }).finally(() => { finished = true; });
     while (!finished) {
       const pending = s.app.approvals.pending()[0];
       if (pending) { asked.push({ onceOnly: pending.onceOnly === true, reasons: pending.reasons }); s.app.approvals.decide(pending.id, 'deny'); }

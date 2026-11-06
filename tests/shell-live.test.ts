@@ -45,7 +45,7 @@ function setup(t: { after: (fn: () => void) => void }, shell: 'powershell' | 'ba
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
-  const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, { registry, approvals, db, emit: e => events.push(e) });
+  const call = (command: string) => runToolCall({ id: `call-${Math.random()}`, name: 'shell_run', arguments: { command } }, ctx, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
   const files = (name: string) => join(paths.workspace, name);
   const seed = () => {
     writeFileSync(files('a.txt'), 'line1\nline2\nline3\n');

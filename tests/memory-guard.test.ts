@@ -32,7 +32,7 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
     services: { db, memory, emit: () => undefined },
   };
   const call = (name: string, args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: () => undefined });
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: () => undefined, conversationAutoRead: () => false });
   return { ctx, call, approvals, memory, db, config: parsed };
 }
 

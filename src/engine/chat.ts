@@ -144,8 +144,6 @@ export class ChatEngine {
   // 会話の実行が止めたタスク（会話の実行が終わるとき、会話で進んだ分をこのタスクに引き継ぐ）
   #preemptedTasks = new Map<string, string[]>();
   #initialTaint = new Map<string, string[]>();
-  // 前の実行から「自動承認で許可フォルダの外を読んだ」印を引き継いで始まる実行（taint と同じ決まりで持ち越す）
-  #initialAutoRead = new Set<string>();
   // 会話のチャットの実行が始まったときに選ばれていたモデル（null は自動）。待たせる発言が、そのあとのモデルの変更より後かを見分けるのに使う
   #runModel = new Map<string, string | null>();
   // 会話のチャットの実行が始まったときの権限モード。待たせる発言が、そのあとのモードの変更より後かを見分けるのに使う（モデルと同じ決まり）
@@ -234,7 +232,6 @@ export class ChatEngine {
   // - 最後の返事（道具の呼び出しだけではない assistant の発言）より後のユーザーの発言に添付がある。今送った発言・保存だけになった待ちの発言・やり直す発言のどれでも数え、道具を呼んだ assistant の発言は返事ではないので、またいで見る
   // - 最後の返事を、読み出す発言の数（TAINT_SCAN_LIMIT）の中に見つけられない。添付の有無を確かめきれないので、承認制の側に倒す
   // - 前のチャットの実行が、外から読んだまま、最後まで返事を書かずに終わった（止めた・失敗・取り消し・道具の上限のまとめ）。Web を読んだ分もこれで持ち越す。やり直し・続きは、その実行のやり直し・続きとみなす
-  // 「自動承認で許可フォルダの外を読んだ」印（autoReadOutside）も、同じ決まりで前の実行から持ち越す
   #taintFromHistory(runId: string, conversationId: string): void {
     const language = languageOf(this.#d.config());
     const sources: string[] = [];
@@ -246,20 +243,17 @@ export class ChatEngine {
       if (message.role === 'user') sources.unshift(...(message.attachments ?? []).map(a => engineText(language, 'attachment.taint', { name: a.name })));
     }
     if (!replied && stored.length >= TAINT_SCAN_LIMIT) sources.push(engineText(language, 'taint.unknown'));
-    const left = this.#previousRunLeft(conversationId);
-    if (left.taint) sources.push(engineText(language, 'taint.carried'));
-    if (left.autoRead) this.#initialAutoRead.add(runId);
+    if (this.#previousRunCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.carried'));
     if (sources.length) this.#initialTaint.set(runId, sources);
   }
 
-  // 前のチャットの実行が、外から読んだ印（taint）や、自動承認で外を読んだ印（autoRead）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめではない）の印は持ち越さない
-  #previousRunLeft(conversationId: string): { taint: boolean; autoRead: boolean } {
+  // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめではない）の印は持ち越さない
+  #previousRunCarriesTaint(conversationId: string): boolean {
     const last = this.#d.runs.latestChat(conversationId);
-    if (!last || (last.tainted !== 1 && last.auto_read_outside !== 1)) return { taint: false, autoRead: false };
+    if (!last || last.tainted !== 1) return false;
     let wrappedUp = true;
     try { wrappedUp = (JSON.parse(last.flags) as string[]).includes('max_iterations'); } catch { }
-    const carries = !(last.ok === 1 && !wrappedUp);
-    return { taint: carries && last.tainted === 1, autoRead: carries && last.auto_read_outside === 1 };
+    return !(last.ok === 1 && !wrappedUp);
   }
 
   // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは、実行が道具の呼び出しの中で待っているので、区切りに来ない。承認の答えが先）。
@@ -553,7 +547,6 @@ export class ChatEngine {
       touchedTasks,
       ...(forbid ? { forbiddenTools: forbid } : {}),
       ...(kind === 'chat' ? { permissionMode: this.#runMode.get(runId) ?? 'normal' } : {}),
-      ...(this.#initialAutoRead.delete(runId) ? { autoReadOutside: true } : {}),
     };
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider));
     ctx.localOnly = kind === 'chat' ? isLocalPinned(config, d.conversations.get(conversationId)?.model_id) : task?.task.local_only === 1;
@@ -561,9 +554,9 @@ export class ChatEngine {
     let taintRecorded = false;
     // 会話にも「外から読んだことがある」印を付ける（自動承認の判定役は、この会話ではもう使わない）
     const recordTaint = () => { if (taintRecorded || !ctx.taint.tainted) return; taintRecorded = true; d.runs.markTainted(runId); if (kind === 'chat') d.conversations.markTainted(conversationId); };
-    // 自動承認で許可フォルダの外を読んだ印も、読んだ時点で書く（止めた・失敗した実行の次の実行が引き継げるように）
+    // 自動承認で許可フォルダの外を読んだ印は、会話に書く（この会話のシェルのコマンドと通信の道具は、あとの実行でもずっと毎回確かめる。実行が止まる・落ちても残るよう、読んだ時点で書く）
     let autoReadRecorded = false;
-    const recordAutoRead = () => { if (autoReadRecorded || !ctx.autoReadOutside) return; autoReadRecorded = true; d.runs.markAutoRead(runId); };
+    const recordAutoRead = () => { if (autoReadRecorded || !ctx.autoReadOutside) return; autoReadRecorded = true; d.conversations.markAutoRead(conversationId); };
     const addUsage = (u: Usage) => {
       for (const key of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
         if (typeof u[key] === 'number') usage[key] = (usage[key] ?? 0) + u[key]!;
@@ -621,6 +614,7 @@ export class ChatEngine {
           autoClassify: (prompt, classifierSignal) => this.#autoAsk(lastRoute, ctx, prompt, classifierSignal),
           lastUserRequest: () => this.#lastUserRequest(conversationId),
           conversationTainted: () => d.conversations.everTainted(conversationId),
+          conversationAutoRead: () => d.conversations.everAutoRead(conversationId),
         });
         recordTaint();
         recordAutoRead();

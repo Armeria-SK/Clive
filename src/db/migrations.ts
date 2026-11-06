@@ -318,4 +318,11 @@ export const MIGRATIONS: readonly Migration[] = [
   ALTER TABLE engine_runs ADD COLUMN auto_read_outside INTEGER NOT NULL DEFAULT 0;
   UPDATE conversations SET ever_tainted = 1 WHERE id IN (SELECT conversation_id FROM engine_runs WHERE kind = 'chat' AND tainted = 1 AND conversation_id IS NOT NULL);
   `,
+  // 13: 会話の「自動承認で許可フォルダの外を読んだことがある」印 ever_auto_read（1 = この会話のどこかの実行で、自動承認の判定役が外を読むのを許した。付いたら外れない。
+  // この会話のシェルのコマンドと通信の道具は、ずっと毎回確かめる）。12 で足した実行ごとの印 auto_read_outside は、この印に置き換える（印のある実行の会話に付けてから、列を落とす）
+  `
+  ALTER TABLE conversations ADD COLUMN ever_auto_read INTEGER NOT NULL DEFAULT 0;
+  UPDATE conversations SET ever_auto_read = 1 WHERE id IN (SELECT conversation_id FROM engine_runs WHERE auto_read_outside = 1 AND conversation_id IS NOT NULL);
+  ALTER TABLE engine_runs DROP COLUMN auto_read_outside;
+  `,
 ];
