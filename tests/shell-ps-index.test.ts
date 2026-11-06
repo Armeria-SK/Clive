@@ -24,7 +24,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
 const level = (v: { decision: string; onceOnly: boolean }): string => (v.decision === 'allow' ? 'allow' : v.decision === 'deny' ? 'deny' : v.onceOnly ? 'once' : 'ask');
 const commandLines = (statements: Statement[]): string[] => statements.filter(s => s.kind === 'command').map(s => s.words.map(w => w.text).join(' '));
 const read = (command: string, shell: ShellKind): Statement[] => {
-  const r = lexShell(command, shell, { windows: false });
+  const r = lexShell(command, shell);
   assert.ok(r.ok, `${shell}: ${JSON.stringify(command)} が読めない: ${r.ok ? '' : `${r.fail.code} ${r.fail.detail}`}`);
   return r.statements;
 };
