@@ -36,7 +36,7 @@ export function withWildcard(w: Word): Word {
 // New-Item・mkdir の -Path は、作るパスとして文字どおりに扱われる（* ? はパスに使えない文字のエラー。[ ] は名前になる。本物の PowerShell 5.1 で確かめた）
 const LITERAL_CREATE = new Set(['new-item', 'mkdir']);
 const wildcardParam = (spec: PsCmd, def: FlagDef, key: string): boolean =>
-  (def.type === 'path-r' || def.type === 'path-w') && key !== 'literalpath' && !spec.names.some(n => LITERAL_CREATE.has(n));
+  (def.type === 'path-r' || def.type === 'path-n' || def.type === 'path-w') && key !== 'literalpath' && !spec.names.some(n => LITERAL_CREATE.has(n));
 
 function bind(def: FlagDef, w: Word, acc: Acc, name: string, ctx: MatchCtx): void {
   const t = def.type as string;
@@ -49,14 +49,14 @@ function bind(def: FlagDef, w: Word, acc: Acc, name: string, ctx: MatchCtx): voi
   }
   if (w.kind === 'block') { acc.add('once', 'shape.script_block', {}, true); return; }
   if (w.kind === 'hash' || w.kind === 'splat') { acc.add('once', 'list.form', { cmd: name, detail: w.text }, true); return; }
-  if (t === 'path-r' || t === 'path-w') {
-    const mode = t === 'path-r' ? 'read' : 'write';
+  if (t === 'path-r' || t === 'path-n' || t === 'path-w') {
+    const mode = t === 'path-w' ? 'write' : 'read';
     for (const part of splitList(w)) {
       if (!part.dynamic && PROVIDER.test(part.text)) {
         if (!(mode === 'read' && /^env:/iu.test(part.text))) acc.add('once', 'list.form', { cmd: name, detail: part.text }, true);
         continue;
       }
-      if (mode === 'read') acc.read(part); else acc.write(part);
+      if (t === 'path-n') acc.readNames(part); else if (mode === 'read') acc.read(part); else acc.write(part);
     }
     return;
   }
@@ -115,7 +115,7 @@ export const first = (p: PsParsed, ...keys: string[]): Word[] => keys.flatMap(k 
 export const pathWords = (p: PsParsed): Word[] => first(p, 'path', 'literalpath').flatMap(splitList);
 
 // ── 読む ──
-cmd('get-childitem gci ls dir', 'Path:path-r LiteralPath:path-r Filter:s Include:s Exclude:s Recurse Depth:n File Directory Hidden Force Name', 'path');
+cmd('get-childitem gci ls dir', 'Path:path-n LiteralPath:path-n Filter:s Include:s Exclude:s Recurse Depth:n File Directory Hidden Force Name', 'path');
 cmd('get-item gi', 'Path:path-r LiteralPath:path-r Force', 'path');
 cmd('test-path', 'Path:path-r LiteralPath:path-r Force PathType:Any|Container|Leaf', 'path');
 cmd('resolve-path rvpa', 'Path:path-r LiteralPath:path-r Force Relative', 'path');
@@ -291,7 +291,7 @@ export function runPsSimple(name: string, words: Word[], acc: Acc, ctx: MatchCtx
   if (name === 'tree.com' || name === 'tree') {
     for (const w of args) {
       if (/^\/[FA]$/iu.test(w.text) && literal(w)) continue;
-      checkValue('path-r', w, acc, 'tree', '', ctx);
+      checkValue('path-n', w, acc, 'tree', '', ctx);
     }
     return true;
   }

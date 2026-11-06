@@ -23,7 +23,7 @@ function dynamicOnce(words: readonly Word[], acc: Acc, cmd: string): void {
 }
 
 // ── 読むだけのコマンド ──
-gnu({ names: ['ls'], ro: true, flags: '-a -A -l -h -R -1 -t -r -S -d -F -i -s --color=never', pos: ['path-r…'] });
+gnu({ names: ['ls'], ro: true, flags: '-a -A -l -h -R -1 -t -r -S -d -F -i -s --color=never', pos: ['path-n…'] });
 gnu({ names: ['cat'], ro: true, flags: '-n -b -s -A -E -T -v', pos: ['path-r…'] });
 gnu({ names: ['head'], ro: true, numeric: true, flags: '-n:n -c:n -q -v', pos: ['path-r…'] });
 gnu({ names: ['tail'], ro: true, numeric: true, flags: '-n:n -c:n -q -v', pos: ['path-r…'] });
@@ -56,7 +56,7 @@ gnu({ names: ['file'], flags: '-b -i -L --mime-type --mime-encoding', pos: ['pat
 gnu({ names: ['stat'], ro: true, flags: '-c:s --format:s -L -t', pos: ['path-r…'] });
 gnu({ names: ['du'], ro: true, flags: '-s -h -a -c -k -m -d:n --max-depth:n', pos: ['path-r…'] });
 gnu({ names: ['df'], ro: true, flags: '-h -T -k', pos: ['path-r…'] });
-gnu({ names: ['tree'], flags: '-L:n -a -d -f -i -n -I:pat -P:pat --noreport', pos: ['path-r…'] });
+gnu({ names: ['tree'], flags: '-L:n -a -d -f -i -n -I:pat -P:pat --noreport', pos: ['path-n…'] });
 gnu({ names: ['basename', 'dirname'], ro: true, flags: '', pos: ['s…'] });
 gnu({ names: ['realpath'], ro: true, flags: '-e -m -s --relative-to:path-r', pos: ['path-r…'] });
 gnu({ names: ['readlink'], ro: true, flags: '-f -e -m -n', pos: ['path-r…'] });
@@ -273,7 +273,7 @@ register(['find'], (words, acc, ctx) => {
   let i = 0;
   while (i < args.length && literal(args[i]) && ['-L', '-H', '-P'].includes(args[i]!.text)) i++;
   const startsExpr = (w: Word): boolean => w.kind === 'plain' && !w.dynamic && (w.text.startsWith('-') || w.text === '!' || w.text === '(');
-  while (i < args.length && !startsExpr(args[i]!)) acc.read(args[i++]!, true);
+  while (i < args.length && !startsExpr(args[i]!)) acc.readNames(args[i++]!, true);
   while (i < args.length) {
     const w = args[i++]!;
     if (!literal(w) && !w.glob) { formOnce(acc, 'find', w.text); continue; }

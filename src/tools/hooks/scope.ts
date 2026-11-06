@@ -16,10 +16,13 @@ const SECRET_PATTERNS = [
   /(?:^|\/)\.env(?:\.[^/]*)?$/iu,
   /\.(?:pem|key|p12|pfx|keystore|jks)$/iu,
   /(?:^|\/)id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/iu,
-  /(?:^|\/)secrets?(?:\/|$)/iu,
   /(?:^|\/)\.(?:ssh|aws|gnupg|docker|kube)(?:\/|$)/iu,
   /(?:^|\/)\.(?:netrc|npmrc|pypirc|git-credentials)$/iu,
 ];
+// 名前が secrets・secret のフォルダ（中のファイルも）。名前だけを出すコマンドでは、これだけでは止めない
+const SECRET_FOLDER = /(?:^|\/)secrets?(?:\/|$)/iu;
+// 依存パッケージのフォルダの中。再帰して読む歩きで、ここで見つけた秘密らしい名前は、止めずに今回だけの確かめにする
+const DEPENDENCY_FOLDER = /(?:^|\/)node_modules(?:\/|$)/iu;
 
 const DEVICE_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 
@@ -94,9 +97,17 @@ export function windowsHazard(p: string, language: Language = DEFAULT_LANGUAGE):
   return undefined;
 }
 
-export function isSecretPath(abs: string): boolean {
+// どこまでを秘密のパスとみなすか。all: すべて（既定）。files: secrets・secret のフォルダは除く（名前だけを出すコマンド用）。none: 何も秘密にしない（依存パッケージの中で見つけた分を、別に扱うとき）
+export type SecretScope = 'all' | 'files' | 'none';
+
+export function isSecretPath(abs: string, scope: SecretScope = 'all'): boolean {
+  if (scope === 'none') return false;
   const normalized = abs.replace(/\\/gu, '/');
-  return SECRET_PATTERNS.some(re => re.test(normalized));
+  return (scope === 'all' && SECRET_FOLDER.test(normalized)) || SECRET_PATTERNS.some(re => re.test(normalized));
+}
+
+export function inDependencies(abs: string): boolean {
+  return DEPENDENCY_FOLDER.test(abs.replace(/\\/gu, '/'));
 }
 
 export interface ScopePolicy {
@@ -131,12 +142,12 @@ export type Placement =
   | { kind: 'inside'; mode: RootMode; root: string }
   | { kind: 'outside' };
 
-export function placePath(abs: string, policy: ScopePolicy): Placement {
+export function placePath(abs: string, policy: ScopePolicy, secrets: SecretScope = 'all'): Placement {
   const language = policy.language ?? DEFAULT_LANGUAGE;
   const hazard = windowsHazard(abs, language);
   if (hazard) return { kind: 'deny', reason: hazard };
   const real = realish(abs);
-  if (isSecretPath(real) || isSecretPath(abs)) return { kind: 'deny', reason: guardText(language, 'scope.secret', { path: abs }) };
+  if (isSecretPath(real, secrets) || isSecretPath(abs, secrets)) return { kind: 'deny', reason: guardText(language, 'scope.secret', { path: abs }) };
   for (const d of policy.deny) {
     if (isInside(d, real) || isInside(d, abs)) return { kind: 'deny', reason: guardText(language, 'scope.deny_list', { path: d }) };
   }

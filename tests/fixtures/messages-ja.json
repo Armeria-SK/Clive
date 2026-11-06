@@ -213,6 +213,7 @@
     "list.pipe_read": "パイプで流れてくるファイルを読みますが、どのファイルか分かりません",
     "list.write_dynamic": "書き込み先が分かりません（変数や展開: {input}）",
     "list.write_ancestor": "守る場所（人格・スキル・.git）を含むフォルダに、まとめて書きます（{path}）",
+    "list.secret_in_deps": "依存パッケージ（node_modules）の中に、秘密らしい名前のパスが {count} 件あります。この形はそれらの中身も読む・写す・まとめます（{paths}）",
     "list.protected_write": "守る場所に、書き込み・削除・名前の変更をします（{path}）",
     "list.expand": "展開は、中の名前が守る場所になりえます（{cmd}）",
     "list.lan": "LAN の宛先につなぎます（{host}）",

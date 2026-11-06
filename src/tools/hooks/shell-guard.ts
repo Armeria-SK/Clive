@@ -11,7 +11,7 @@ import { inspectRepo } from './git-repo.ts';
 import { segments, splitCommand } from './parse-cmd.ts';
 import { containsGitDir, exists, expandGlob, isDirectory, listTree, protectedInside, wildcardMatches } from './path-expand.ts';
 import { containsToolConfig, curlConfigFile, isToolConfigPath, wgetConfigFile, type Env } from './tool-config.ts';
-import { expandPath, isInside, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy } from './scope.ts';
+import { expandPath, inDependencies, isInside, isSecretPath, placePath, realish, writeApprovalKind, type Expanded, type Placement, type ProtectedKind, type ScopePolicy, type SecretScope } from './scope.ts';
 import { isPowerShell, type LexFail, type ShellKind, type Word } from './shell-lex.ts';
 
 export type Decision = 'allow' | 'ask' | 'deny';
@@ -260,8 +260,9 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
 
   // 1 つの絶対パスを、書く・読む・消すものとして調べる
   // intentWrite: 確かめの種類を決めるためだけの「書くための参照か」。ワイルドカードの手前のフォルダは write = false で調べるが、書く参照なら外の確かめは outside_write にする
-  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write): void => {
-    const placement = placePath(abs, opts.policy);
+  // secrets: 名前だけを出すコマンドは 'files'（secrets・secret のフォルダだけでは止めない）、依存パッケージの中で見つけた分は 'none'（別に今回だけの確かめにする）
+  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write, secrets: SecretScope = 'all'): void => {
+    const placement = placePath(abs, opts.policy, secrets);
     if (primary) paths.push({ input, path: abs, placement, write });
     if (placement.kind === 'deny') { add('deny', placement.reason); return; }
     if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', text('guard.irreversible', { path: abs })); return; }
@@ -306,16 +307,17 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       }
       const globbing = ref.word.glob && !ref.word.dynamic;
       // ワイルドカードの手前のフォルダは、書く・消す対象ではない（当たるものだけが対象）。外・禁止のパスかどうかだけ見る
-      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary, write);
+      const scope: SecretScope = ref.names ? 'files' : 'all';
+      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary, write, scope);
       if (globbing) {
         // ワイルドカード: 今あるもののうち当たるものを全部調べる。列挙しきれないときは、手前のフォルダを調べて確かめる
-        const globbed = expandGlob(patternOf(ref.word, base, windows), dotfiles);
+        const globbed = expandGlob(patternOf(ref.word, base, windows), dotfiles, scope);
         // 列挙しきれないときも、列挙した分と、上限を超えた分から探した秘密のパスは調べる（秘密があれば止める）
         for (const match of globbed.matches) {
-          evalAbs(match, match, write, deletes, false);
+          evalAbs(match, match, write, deletes, false, write, scope);
           if (write && (ref.recursive || deletes) && isDirectory(match)) rangeCheck(match);
         }
-        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false);
+        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false, write, scope);
         if (!globbed.complete) {
           if (write) rangeCheck(globbed.prefix);
           else add('ask', text('list.wild_many', { input }), 'opaque');
@@ -330,13 +332,23 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const list = ref.list!;
     const heads = globbing ? expandGlob(patternOf(ref.word, base, windows), dotfiles) : { matches: [root], complete: true };
     let complete = heads.complete;
+    // 依存パッケージ（node_modules）の中で見つけた、秘密らしい名前のパス。止めずに、当たったパスを見せて今回だけの確かめにする
+    const inDeps = new Set<string>();
     const wanted = (name: string): boolean => (list.include.length === 0 || list.include.some(p => wildcardMatches(name, p))) && !list.exclude.some(p => wildcardMatches(name, p));
     for (const head of heads.matches) {
       if (list.items || !isDirectory(head)) { evalAbs(head, head, false, false, false); continue; }
       const tree = listTree(head, list.deep, undefined, list.skipHidden);
       complete = complete && tree.complete;
-      for (const entry of tree.entries) if (wanted(basename(entry)) || isDirectory(entry)) evalAbs(entry, entry, false, false, false);
+      for (const entry of tree.entries) {
+        if (!(wanted(basename(entry)) || isDirectory(entry))) continue;
+        if (inDependencies(entry) && isSecretPath(entry)) { inDeps.add(entry); evalAbs(entry, entry, false, false, false, false, 'none'); } else evalAbs(entry, entry, false, false, false);
+      }
       if (tree.secret && wanted(basename(tree.secret))) evalAbs(tree.secret, tree.secret, false, false, false);
+      for (const found of tree.depSecrets ?? []) if (wanted(basename(found))) inDeps.add(found);
+    }
+    if (inDeps.size) {
+      const shown = [...inDeps].slice(0, 5);
+      addCode(text('list.secret_in_deps', { count: inDeps.size, paths: shown.join(', ') + (inDeps.size > shown.length ? ', …' : '') }));
     }
     if (!complete) add('ask', text('list.wild_many', { input: ref.word.text }), 'opaque');
   };
