@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { lexShell, type ShellKind } from '../src/tools/hooks/shell-lex.ts';
@@ -16,6 +16,13 @@ const BASH_ROWS = [
   "sed -n '1,20p' f", 'sed -i "s/a/b/g" f', 'curl -sS "https://example.com/a?b=c&d=e"', 'curl -o page.html https://example.com/x', 'mkdir -p out', 'cp a.txt b.txt', 'mv a b', 'rm -rf build', 'tar -czf out.tgz dir',
   'echo "a;b|c&d"', "echo 'a;b|c&d'", 'echo "#notacomment"', 'echo x#y', 'echo "tab\there"', 'echo ""', "echo ''", 'echo a"b"c\'d\'e', 'ls -- *.md', 'echo [abc] ?x', 'echo "*" \'?\'', 'node --version', 'npm view left-pad version --json',
   'echo "日本語 の 引用"', 'grep -r 日本語 .', 'echo 100%', 'echo @home ^x', 'echo a,b', 'echo =x', 'echo a:b', 'cat < in.txt', 'echo hi > out.txt', 'echo hi >> out.txt 2>&1',
+];
+
+// "…" の中の \ は、$ ` " \ 改行の前でだけ特別。ほかは文字のまま（§11.15）
+const BASH_DQ_ROWS = [
+  'grep "\\.ts$" src', 'echo "a\\nb"', 'grep "a\\|b" f', 'echo "\\$HOME"', 'echo "\\`x\\`"', 'echo "say \\"hi\\""', 'echo "a\\\\b"', 'echo "a\\\\"', 'echo "a\\\nb"', 'echo "\\$(rm x)"', 'echo "\\\\\\$HOME"',
+  'echo "\\d\\w\\s"', 'echo "\\(\\)\\[\\]\\*\\?\\.\\-\\/"', "echo \"a\\'b\"", 'ls "C:\\Users\\x"', 'echo "a\\tb"', 'echo "\\\\"', 'echo "\\$"', 'echo "\\`"', 'echo "\\""', 'rg "a\\|b\\.c" .', 'echo "a\\\n\\\nb"',
+  'echo "a\\\\\\"b"', 'echo "\\\\\\\\"', 'echo "\\\\$"', 'printf "%s\\n" "x"', 'echo "\\\\\\\n"',
 ];
 
 const PS_ROWS = [
@@ -73,6 +80,75 @@ test('bash: 本物の bash が展開で語を増やす・変える書き方は�
     const real = spawnSync(bashPath!, ['--noprofile', '--norc', '-c', `printf '<%s>\\n'${row.slice(4)}`], { cwd: dir, encoding: 'utf8' });
     assert.notDeepEqual(real.stdout.replace(/\n$/u, '').split('\n').map(l => l.replace(/^<|>$/gu, '')), [word!.text], `${row}: 本物は展開しない（印が不要）`);
   }
+});
+
+// Windows の Git Bash に -c で渡すと、連続する \\ が 1 つに減る（msys が引数を読み直す。\ 1 つは減らない）ので、本物の bash の読み方はスクリプトのファイルで渡して見る。
+// 実際の実行（bash -c）で何が起きるかは、下の「Windows」の試験で別に確かめる
+function viaFile(dir: string, script: string): { stdout: string; status: number | null; stderr: string } {
+  const file = join(dir, 'script.sh');
+  writeFileSync(file, script);
+  return spawnSync(bashPath!, ['--noprofile', '--norc', file], { cwd: join(dir, 'cwd'), encoding: 'utf8' });
+}
+const scratch = (t: { after: (fn: () => void) => void }): string => { const dir = tempDir(t); mkdirSync(join(dir, 'cwd')); return dir; };
+
+test('bash: "…" の中の \\ の読み方（\\. \\n \\| \\$ \\` \\" \\\\ 改行の前・行末）が、本物の bash が printf に渡す語と同じ', { skip: !bashPath && 'bash が無い' }, t => {
+  const dir = scratch(t);
+  const wrong: string[] = [];
+  for (const row of BASH_DQ_ROWS) {
+    const lexed = lexShell(row, 'bash', { windows: false });
+    if (!lexed.ok) { wrong.push(`${row}: 読めない (${lexed.fail.code})`); continue; }
+    const st = lexed.statements[0]!;
+    const name = st.words[0]!.text;
+    const real = viaFile(dir, `printf '<%s>\\n'${row.slice(row.indexOf(name) + name.length)}`);
+    if (real.status !== 0) { wrong.push(`${row}: 本物の bash が失敗 ${real.stderr.trim()}`); continue; }
+    const realWords = real.stdout.replace(/\n$/u, '').split('\n').map(line => line.replace(/^<|>$/gu, ''));
+    const mine = st.words.slice(1).map(w => w.text);
+    if (JSON.stringify(mine) !== JSON.stringify(realWords)) wrong.push(`${row}: 字句 ${JSON.stringify(mine)} / 本物 ${JSON.stringify(realWords)}`);
+  }
+  assert.deepEqual(wrong, []);
+  assert.equal(lexShell('echo "a\\', 'bash', { windows: false }).ok, false, '行末の \\ は引用符が閉じず、読めない');
+});
+
+test('bash: echo "\\$(rm x)" は本物の bash でも文字を出すだけで何も動かさない。\\\\ のあとの $( は本物の置換として動く（字句の読み取りの読み方と同じ）', { skip: !bashPath && 'bash が無い' }, t => {
+  const dir = scratch(t);
+  writeFileSync(join(dir, 'cwd', 'x'), '');
+  const literal = viaFile(dir, 'echo "\\$(rm x)"');
+  assert.equal(literal.stdout, '$(rm x)\n');
+  assert.equal(existsSync(join(dir, 'cwd', 'x')), true, '\\$ は置換にならず、x は消えない');
+  const lexed = lexShell('echo "\\$(rm x)"', 'bash', { windows: false });
+  assert.ok(lexed.ok && lexed.statements.length === 1 && lexed.statements[0]!.words[1]!.text === '$(rm x)' && !lexed.statements[0]!.words[1]!.dynamic, '字句の読み取りも、置換のない 1 つの文として読む');
+  const real = viaFile(dir, 'echo "\\\\$(touch made)"');
+  assert.equal(real.stdout, '\\\n', '\\\\ は \\ 1 つになり、そのあとの $( は本物の置換（touch の出力は空）');
+  assert.equal(existsSync(join(dir, 'cwd', 'made')), true, '本物の置換は動く');
+  const lexedReal = lexShell('echo "\\\\$(touch made)"', 'bash', { windows: false });
+  assert.ok(lexedReal.ok && lexedReal.statements.map(s => s.words[0]!.text).join() === 'touch,echo', '字句の読み取りも、置換の中の touch を文として読む');
+});
+
+// Windows の Git Bash に bash -c で渡すと、"…" の中の連続する \\ は 1 つに減る。ガードが「\\$ は文字」と読む "\\\\\\$(…)" を、本物は置換として動かしてしまう。Windows では \\ の連続を止める
+test('bash（Windows）: bash -c は連続する \\\\ を 1 つに減らして渡す。\\\\ を含む形は、Windows の読み取りが止め、含まない形は -c でもファイルでも同じに動く', { skip: (process.platform !== 'win32' || !bashPath) && 'Windows の Git Bash が無い' }, t => {
+  const dir = scratch(t);
+  const viaC = (script: string) => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', script], { cwd: join(dir, 'cwd'), encoding: 'utf8' });
+  const dangerous = 'echo "\\\\\\$(touch made3)"';
+  assert.equal(viaFile(dir, dangerous).stdout, '\\$(touch made3)\n', '前提: ファイルで渡せば、置換にならず文字を出すだけ');
+  assert.equal(existsSync(join(dir, 'cwd', 'made3')), false);
+  assert.equal(viaC(dangerous).stdout, '\\\n', '前提: -c で渡すと \\\\ が減って、$( が本物の置換になる');
+  assert.equal(existsSync(join(dir, 'cwd', 'made3')), true, '前提: -c では置換の touch が動く');
+  const differ: string[] = [];
+  for (const row of BASH_DQ_ROWS) {
+    const script = `printf '<%s>\\n'${row.slice(row.indexOf(' '))}`;
+    const c = viaC(script);
+    const f = viaFile(dir, script);
+    const windows = lexShell(row, 'bash', { windows: true });
+    if (c.stdout !== f.stdout) {
+      differ.push(row);
+      assert.equal(windows.ok, false, `${row}: -c とファイルで結果が違うのに、Windows の読み取りが通した`);
+    } else if (windows.ok) {
+      const mine = windows.statements[0]!.words.slice(1).map(w => w.text);
+      assert.deepEqual(c.stdout.replace(/\n$/u, '').split('\n').map(l => l.replace(/^<|>$/gu, '')), mine, `${row}: Windows の読み取りが通した形は、-c でも読み取りどおりに動く`);
+    }
+  }
+  assert.ok(differ.length > 0, '前提: \\\\ を含む行は -c で結果が変わる');
+  assert.ok(differ.every(row => row.includes('\\\\')), `\\\\ を含まない行が -c で変わった: ${differ.filter(row => !row.includes('\\\\')).join(' / ')}`);
 });
 
 function psHost(): string | undefined {

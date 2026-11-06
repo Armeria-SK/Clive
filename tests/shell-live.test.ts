@@ -319,6 +319,48 @@ test('実機（bash）: 一覧に当たるコマンドは承認なしで動き�
   assert.equal(existsSync(s.files('tmp/SOUL.md')), true);
 });
 
+// "…" の中の \ は、$ ` " \ 改行の前でだけ特別（§11.15）。読むだけの形は承認なしで本当に動き、\$( は文字のままで何も動かさない
+test('実機（bash）: "…" の中の \\ を含む読むだけのコマンドは承認なしで本当に動き、echo "\\$(rm x)" は文字を出すだけで何も消さない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  writeFileSync(s.files('lines.txt'), 'main.ts\nnotes.md\nfoo|bar\nline1\nline3\n');
+  writeFileSync(s.files('x'), 'keep');
+  const rows: Array<[string, string]> = [
+    ['grep "\\.ts$" lines.txt', 'main.ts'],
+    ['grep "line1\\|line3" lines.txt', 'line1\nline3'],
+    ['grep "foo\\|nothing" lines.txt', 'foo|bar'],
+    ['echo "a\\nb"', 'a\\nb'],
+    ['echo "\\$HOME"', '$HOME'],
+    ['echo "say \\"hi\\""', 'say "hi"'],
+    ['echo "\\$(rm x)"', '$(rm x)'],
+    ['echo "tab\\there" | wc -c', '10'],
+  ];
+  for (const [command, expected] of rows) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.output.content.split('\n\n').slice(2).join('\n\n').trim(), expected, command);
+  }
+  assert.equal(readFileSync(s.files('x'), 'utf8'), 'keep', 'echo "\\$(rm x)" で x が消えた');
+});
+
+// Windows の Git Bash に bash -c で渡すと、連続する \\ が 1 つに減る。ガードが「\\\$ は文字」と読む形を、本物は置換として動かしてしまうので、Windows では止める
+test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の bash -c では減って置換が動くが、Clive のシェルでは動かす前に止まる', { skip: (process.platform !== 'win32' || !bashAvailable) && 'Windows の Git Bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  const dangerous = 'echo "\\\\\\$(touch made)"';
+  const raw = spawnSync(bashPath!, ['--noprofile', '--norc', '-c', dangerous], { cwd: s.paths.workspace, encoding: 'utf8' });
+  assert.equal(raw.stdout, '\\\n', '前提: 素の bash -c では、\\\\\\$ が \\\\$ に減って、$( が置換になる');
+  assert.equal(existsSync(s.files('made')), true, '前提: 置換の touch が動く');
+  rmSync(s.files('made'));
+  for (const command of [dangerous, 'echo "a\\\\b"', 'echo "\\\\$(touch made)"', 'grep "a\\\\.b" a.txt']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, /書き方を判定できません/u, command);
+    assert.match(outcome.output.content, /Git Bash/u, command);
+  }
+  assert.equal(existsSync(s.files('made')), false, 'Clive のシェルで置換の touch が動いた');
+});
+
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
 // 8 回目の審査（致命）: curl は URL の { } [ ] を展開し、-o の #1 に差し込み、-O は展開した名前で保存する。

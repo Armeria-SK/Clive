@@ -57,7 +57,7 @@ test('字句 11.2.2: PowerShell は、バッククォート・--%・<# #>・@" "
 
 test('字句 11.2.3: bash は、\\・バッククォート・$\'…\'・${x:-y}・$(( )) の中の置換・fd のつなぎ替え・/dev/tcp・~名前・引用符なしの $ を含むヒアドキュメントを止める', () => {
   const cases: Array<[string, LexCode]> = [
-    ['n\\ode x', 'backslash'], ['echo "a\\nb"', 'backslash'], ['ls \\\n -la', 'backslash'], ['echo `date`', 'backtick'], ['echo "a`date`"', 'backtick'],
+    ['n\\ode x', 'backslash'], ['echo a\\nb', 'backslash'], ['ls \\\n -la', 'backslash'], ['echo `date`', 'backtick'], ['echo "a`date`"', 'backtick'],
     ["echo $'a'", 'ansi_c'], ['echo $"a"', 'ansi_c'], ['echo ${x:-y}', 'dollar_form'], ['echo ${!x}', 'dollar_form'], ['echo ${x/a/b}', 'dollar_form'],
     ['echo $(( $(ls) ))', 'dollar_form'], ['echo $((1; ls))', 'dollar_form'],
     ['echo hi >&3', 'fd'], ['exec 3<>/dev/tcp/127.0.0.1/4777', 'fd'], ['echo a 3>x', 'fd'], ['cat 3<x', 'fd'], ['echo a <> f', 'fd'],

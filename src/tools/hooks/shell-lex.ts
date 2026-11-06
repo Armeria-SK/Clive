@@ -50,7 +50,7 @@ export interface Statement {
 }
 
 export type LexCode =
-  | 'curly_quote' | 'dash' | 'space' | 'fullwidth' | 'control' | 'depth' | 'unclosed' | 'backtick' | 'backslash' | 'parse_token' | 'block_comment'
+  | 'curly_quote' | 'dash' | 'space' | 'fullwidth' | 'control' | 'depth' | 'unclosed' | 'backtick' | 'backslash' | 'win_backslash' | 'parse_token' | 'block_comment'
   | 'provider_var' | 'dollar_form' | 'fd' | 'dev_net' | 'here_expand' | 'tilde_user' | 'ps_expand' | 'here_string' | 'ansi_c' | 'unexpected' | 'chain_op';
 export interface LexFail { code: LexCode; detail: string }
 export type LexResult = { ok: true; statements: Statement[] } | { ok: false; fail: LexFail };
@@ -72,11 +72,14 @@ const blank = (): Statement => ({ kind: 'command', words: [], redirects: [], ass
 const plain = (text: string, over: Partial<Word> = {}): Word => ({ text, dynamic: false, glob: false, quoted: false, home: false, kind: 'plain', ...over });
 
 // ASCII の引用符（' と "）の中を空白に置き換えた文字列
-function outsideQuotes(src: string): string {
+function outsideQuotes(src: string, shell: ShellKind): string {
   let out = '';
   let quote: string | null = null;
-  for (const ch of src) {
+  const bash = !isPowerShell(shell);
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i]!;
     if (quote) {
+      if (bash && quote === '"' && ch === '\\' && i + 1 < src.length) { out += '  '; i++; continue; }
       if (ch === quote) quote = null;
       out += ' ';
     } else if (ch === '"' || ch === "'") { quote = ch; out += ' '; } else out += ch;
@@ -84,7 +87,7 @@ function outsideQuotes(src: string): string {
   return out;
 }
 
-function precheck(src: string): LexFail | null {
+function precheck(src: string, shell: ShellKind): LexFail | null {
   const curly = CURLY.exec(src);
   if (curly) return fail('curly_quote', curly[0]);
   const dash = DASHES.exec(src);
@@ -98,17 +101,20 @@ function precheck(src: string): LexFail | null {
   // PowerShell は CR 1 つ（LF が続かないもの）を文の区切りに読む。CRLF だけは LF と同じ 1 つの改行として読む
   const lone = /\r(?!\n)/u.exec(src);
   if (lone) return fail('control', hex('\r'));
-  const wide = FULLWIDTH.exec(outsideQuotes(src));
+  const wide = FULLWIDTH.exec(outsideQuotes(src, shell));
   if (wide) return fail('fullwidth', wide[0]);
   return null;
 }
 
-export function lexShell(command: string, shell: ShellKind): LexResult {
-  const early = precheck(command);
+export interface LexOptions { windows?: boolean }
+interface BashEnv { crlf: boolean; windows: boolean }
+
+export function lexShell(command: string, shell: ShellKind, opts: LexOptions = {}): LexResult {
+  const early = precheck(command, shell);
   if (early) return { ok: false, fail: early };
   const normalized = command.replace(/\r\n/gu, '\n');
   const sink: Statement[] = [];
-  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink);
+  const failure = isPowerShell(shell) ? lexPowerShell(normalized, shell, sink) : lexBash(normalized, 0, sink, { crlf: command.includes('\r\n'), windows: opts.windows ?? true });
   return failure ? { ok: false, fail: failure } : { ok: true, statements: sink };
 }
 
@@ -136,7 +142,7 @@ function closeParen(src: string, start: number): number {
   return -1;
 }
 
-function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null {
+function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): LexFail | null {
   if (depth > MAX_DEPTH) return fail('depth');
   const n = src.length;
   let i = 0;
@@ -165,7 +171,7 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
   const readSubstitution = (at: number): { end: number; fail?: LexFail } => {
     const close = closeParen(src, at);
     if (close < 0) return { end: n, fail: fail('unclosed', '$(') };
-    const inner = lexBash(src.slice(at + 1, close), depth + 1, sink);
+    const inner = lexBash(src.slice(at + 1, close), depth + 1, sink, env);
     return inner ? { end: close, fail: inner } : { end: close };
   };
 
@@ -218,7 +224,14 @@ function lexBash(src: string, depth: number, sink: Statement[]): LexFail | null 
           if (i >= n) return fail('unclosed', '"');
           const c = src[i]!;
           if (c === '"') { i++; break; }
-          if (c === '\\') return fail('backslash');
+          if (c === '\\') {
+            const esc = src[i + 1];
+            if (esc === '\n') { if (env.crlf) return fail('backslash'); i += 2; continue; }
+            if (esc === '\\' && env.windows) return fail('win_backslash');
+            if (esc === '$' || esc === '`' || esc === '"' || esc === '\\') { w.text += esc; i += 2; continue; }
+            w.text += c; i++;
+            continue;
+          }
           if (c === '`') return fail('backtick');
           if (c === '$') {
             const r = readDollar(true);

@@ -133,7 +133,7 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
 // ── 文をまとめた判定（テストと shell-guard から）──
 export interface Classified { level: Level; lex?: LexFail; results: StatementResult[]; statements: Statement[] }
 export function classifyStatements(command: string, ctx: MatchCtx): Classified {
-  const lexed = lexShell(command, ctx.shell);
+  const lexed = lexShell(command, ctx.shell, { windows: ctx.windows });
   if (!lexed.ok) return { level: 'deny', lex: lexed.fail, results: [], statements: [] };
   const results = lexed.statements.map(st => {
     const result = matchStatement(st, ctx);
