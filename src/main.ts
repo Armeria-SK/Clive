@@ -26,9 +26,9 @@ async function start(): Promise<void> {
   else log('[INFO] モデルのコンテキスト長を確認しています…');
   const results = await app.status.probeAll(config);
   for (const r of results) log(`[${r.status === 'ok' ? 'INFO' : 'WARN'}] ${r.modelId}: ${r.status} — ${r.message}`);
-  app.settleStaleNotifications();
   const web = createWebServer(app);
   await web.listen();
+  app.settleStaleNotifications(); // 待ち受けが取れてから（同じデータで 2 つ目を起こしたとき、動いている方の知らせを触らない）
   log(`[INFO] Clive が起動しました: http://${boot.host}:${boot.port}/`);
   log('[INFO] ログインはありません。この URL を開ける人（この PC のほかのプログラムを含む）は誰でも Clive を操作できます');
   app.worker.start();
