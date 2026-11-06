@@ -212,7 +212,7 @@ export function createWebServer(app: App): WebServer {
     if (body.interrupt !== undefined && typeof body.interrupt !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'interrupt', params: { field: 'interrupt' } });
     const interrupt = body.interrupt === true;
     const existing = app.conversations.get(id);
-    const { choice } = readChoice(app, body, existing);
+    const { choice, effortReset } = readChoice(app, body, existing);
     const images: ImageRef[] = [];
     const blocks: string[] = [];
     for (const upload of uploads) {
@@ -235,7 +235,9 @@ export function createWebServer(app: App): WebServer {
     const outcome = app.engine.send(id, content, images, attachments, choice, { interrupt });
     if (!outcome.ok) { const { ok: _ok, httpStatus, ...error } = outcome; sendJson(res, httpStatus, { error: error.errorKind, ...error }); return; }
     // 実行中だったときは待たせた（queued）。今の実行が次の区切りで読む。取り消すときは pendingId
-    sendJson(res, 202, outcome.queued ? { runId: outcome.runId, queued: true, pendingId: outcome.pendingId } : { runId: outcome.runId, messageId: outcome.messageId });
+    // 考える深さを新しいモデルに無いので戻したときは、effortReset で知らせる（PATCH と同じ）
+    const reset = effortReset ? { effortReset: true } : {};
+    sendJson(res, 202, outcome.queued ? { runId: outcome.runId, queued: true, pendingId: outcome.pendingId, ...reset } : { runId: outcome.runId, messageId: outcome.messageId, ...reset });
   });
   // 待っている発言を、差し込まれる前に取り消す
   router.add('DELETE', '/api/conversations/:id/pending/:pid', ({ res, params }) => {

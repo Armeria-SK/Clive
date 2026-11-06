@@ -124,7 +124,7 @@ test('待っている発言は、差し込まれる前なら取り消せる。�
   assert.equal(runsOf(s).length, 1, '新しい実行は始まらない');
 });
 
-test('承認の札が出ているあいだは差し込まない（承認の答えが先）。承認のあとの区切りで入る', async t => {
+test('承認を待っているあいだは、実行が道具の呼び出しの中にいるので、発言は履歴に入らず、モデルも呼ばれない（承認の答えが先）。承認のあとの区切りで入る', async t => {
   const s = await startApp(t);
   const seen: ModelRequest[] = [];
   s.adapter().scripts = [call('shell_run', { command: 'git push origin main' }), spy(say('見ました'), seen)];
@@ -475,4 +475,25 @@ test('止めたあとに何も送らなければ、止める前に待たせた�
   assert.deepEqual(roles(s), ['user:長い作業', 'user:止める前に待たせた発言']);
   assert.equal(runsOf(s).length, 1);
   assert.equal(s.app.engine.activeRuns().length, 0);
+});
+
+test('保存だけにした理由でお知らせが分かれる: 使えるモデルが無くて返事を始められなかったとき（queued_not_started）は、返事が止まったとき（queued_saved）と別の文', async t => {
+  const s = await startApp(t, { models: [fakeModel('m1')] });
+  const g = gate();
+  const events: RunEvent[] = [];
+  s.app.bus.subscribe(e => events.push(e.event));
+  // 返事は成功で終わるが、その直前にモデルが使えなくなる（引き取りで新しい実行を始められない）
+  s.adapter().scripts = [after(g, async function* () { s.app.status.disable('m1', '落ちました'); yield { type: 'text', delta: 'おわり' }; yield { type: 'done', stop: 'end_turn' as StopReason }; })];
+  const first = await post(s, '最初');
+  await post(s, '待たせた発言');
+  g.open();
+  await settled(s.app, first.body.runId);
+  await waitFor(() => roles(s).length === 3, '保存');
+  const warnings = events.filter(e => e.type === 'warning' && e.code.startsWith('queued_')) as Array<Extract<RunEvent, { type: 'warning' }>>;
+  assert.deepEqual(warnings.map(w => w.code), ['queued_not_started']);
+  assert.match(warnings[0]!.message, /使えるモデルが無/u, '「返事が止まった」ではなく、始められなかった理由を言う');
+  assert.doesNotMatch(warnings[0]!.message, /返事が止まった/u);
+  assert.deepEqual(warnings[0]!.params, { count: 1 });
+  assert.deepEqual(roles(s), ['user:最初', 'assistant:おわり', 'user:待たせた発言']);
+  assert.equal(runsOf(s).length, 1);
 });

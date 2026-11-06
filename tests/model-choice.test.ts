@@ -182,6 +182,30 @@ test('エフォート: モデルを変えて今の値が新しいモデルに無
   assert.ok(!kept.body.effortReset);
 });
 
+test('エフォート: 送信でモデルを替えて今の値が新しいモデルに無いときも、送信の応答で effortReset を知らせる（実行中に待たせたときも同じ）', async t => {
+  const s = await startApp(t, { models: [fakeModel('m1', { efforts }), fakeModel('m2', { efforts: ['low'] })] });
+  const post = (body: Record<string, unknown>) => s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', body);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  s.adapter().scripts = [reply('はじめ'), async function* () { await gate; yield { type: 'text', delta: 'ゆっくり' }; yield { type: 'done', stop: 'end_turn' }; }, reply('おわり')];
+  const first = await post({ text: 'はじめ', modelId: 'm1', effort: 'xhigh' });
+  assert.equal(first.status, 202);
+  assert.ok(!first.body.effortReset);
+  await settled(s.app, first.body.runId);
+  const changed = await post({ text: 'ゆっくり', modelId: 'm2' });
+  assert.equal(changed.status, 202);
+  assert.equal(changed.body.effortReset, true, 'xhigh は m2 に無いので、null に戻したことを知らせる');
+  assert.equal(s.app.conversations.get(CONVERSATION)!.effort, null);
+  // 実行中に、モデルを替える送信（待たせる）でも同じ
+  await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { modelId: 'm1', effort: 'xhigh' });
+  const queued = await post({ text: '待たせる', modelId: 'm2' });
+  assert.equal(queued.status, 202);
+  assert.equal(queued.body.queued, true);
+  assert.equal(queued.body.effortReset, true);
+  release();
+  await settled(s.app, changed.body.runId);
+});
+
 test('エフォート: 設定の efforts は openai_compatible だけ。確認した結果（supported_reasoning_efforts）も使うが、設定が先', async t => {
   const s = await startApp(t, {
     models: [fakeModel('m1'), fakeModel('m2', { efforts: ['low'] }), fakeModel('o', { provider: 'ollama-like', efforts })],

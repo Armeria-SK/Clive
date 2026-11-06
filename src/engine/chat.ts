@@ -229,14 +229,13 @@ export class ChatEngine {
     if (names.length) this.#initialTaint.set(runId, names.map(name => engineText(languageOf(this.#d.config()), 'attachment.taint', { name })));
   }
 
-  // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは入れない。承認の答えが先）。
+  // 実行の区切りで、待っている発言を履歴に入れる（承認の札を待っているあいだは、実行が道具の呼び出しの中で待っているので、区切りに来ない。承認の答えが先）。
   // 添付つきの発言は外から来た文なので、この実行の残りも「外から読んだ」扱いにする。
   // 実行が始まったあとにモデルを替えて送られた発言（held）は入れない（古いモデルへ渡さない）。実行が終わってから新しい実行で読ませる
   #injectPending(runId: string, conversationId: string, ctx: ToolContext): void {
     const d = this.#d;
     const queue = this.#pending.get(conversationId);
     if (!queue?.length) return;
-    if (d.tools?.approvals.pending().some(a => a.runId === runId)) return;
     const injectable = queue.filter(p => !p.held);
     if (!injectable.length) return;
     const held = queue.filter(p => p.held);
@@ -266,20 +265,22 @@ export class ChatEngine {
     const wantsRun = (p: PendingMessage) => p.held || p.afterStop;
     const starters = startAll ? queue : queue.filter(wantsRun);
     const saveOnly = startAll ? [] : queue.filter(p => !wantsRun(p));
-    if (saveOnly.length) this.#saveQueued(conversationId, saveOnly, endedRunId);
-    if (starters.length && !this.#beginChat(conversationId, starters, {}).ok) this.#saveQueued(conversationId, starters, endedRunId);
+    if (saveOnly.length) this.#saveQueued(conversationId, saveOnly, endedRunId, 'stopped');
+    if (starters.length && !this.#beginChat(conversationId, starters, {}).ok) this.#saveQueued(conversationId, starters, endedRunId, 'not_started');
     d.bus.publish({ type: 'pending.changed', conversationId });
   }
 
-  // 待っていた発言を、ふつうのユーザーの発言として保存だけする（新しい実行は始めない）。保存したことを警告で知らせる
-  #saveQueued(conversationId: string, messages: PendingMessage[], runId: string): void {
+  // 待っていた発言を、ふつうのユーザーの発言として保存だけする（新しい実行は始めない）。保存したことを警告で知らせる。
+  // 理由: stopped = 返事が止まった（失敗・取り消し・終了）、not_started = 返事を始められなかった（使えるモデルが無い）
+  #saveQueued(conversationId: string, messages: PendingMessage[], runId: string, reason: 'stopped' | 'not_started'): void {
     const d = this.#d;
     for (const { content, images, attachments } of messages) {
       const saved = d.conversations.append(conversationId, { role: 'user', content, ...(images.length ? { images } : {}), ...(attachments.length ? { attachments } : {}) });
       d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     }
     const language = languageOf(d.config());
-    d.bus.publish({ type: 'warning', runId, conversationId, code: 'queued_saved', message: engineText(language, 'warn.queued_saved', { count: messages.length }), params: { count: messages.length } });
+    const [code, key] = reason === 'stopped' ? ['queued_saved', 'warn.queued_saved'] as const : ['queued_not_started', 'warn.queued_not_started'] as const;
+    d.bus.publish({ type: 'warning', runId, conversationId, code, message: engineText(language, key, { count: messages.length }), params: { count: messages.length } });
   }
 
   // 終了するとき（DB を閉じる前に呼ぶ）、待たせている発言を全部、保存だけして残す。待ちはメモリの中だけなので、これをしないと再起動で消える
@@ -287,7 +288,7 @@ export class ChatEngine {
     let count = 0;
     for (const [conversationId, queue] of [...this.#pending]) {
       this.#pending.delete(conversationId);
-      this.#saveQueued(conversationId, queue, this.#byConversation.get(conversationId) ?? '');
+      this.#saveQueued(conversationId, queue, this.#byConversation.get(conversationId) ?? '', 'stopped');
       this.#d.bus.publish({ type: 'pending.changed', conversationId });
       count += queue.length;
     }
