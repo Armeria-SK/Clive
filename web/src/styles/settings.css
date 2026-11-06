@@ -29,6 +29,7 @@
 .set-restart-icon { display: inline-flex; flex: none; color: var(--color-accent); }
 .set-restart-do { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 .shell[data-mode="narrow"] .set-restart { flex-wrap: wrap; }
+.set-moved-url { display: block; padding: 8px 10px; border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text); font-family: var(--font-mono); font-size: 13px; user-select: all; overflow-wrap: anywhere; }
 
 .set-stack { display: flex; flex-direction: column; gap: 24px; }
 .set-rows { display: flex; flex-direction: column; }

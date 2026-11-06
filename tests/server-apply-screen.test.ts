@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { afterEach, test } from 'node:test';
 import { ApiError, type ServerApplyResult } from '../web/src/api.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -13,11 +14,18 @@ afterEach(() => setLanguagePreference('auto'));
 
 const result = (over: Partial<ServerApplyResult>): ServerApplyResult => ({ applied: { listen: false, auth: true }, server: { host: '127.0.0.1', port: 4777 }, url: null, restartRequired: false, ...over });
 
-test('applyStep: ポートが変わった（url がある）ときは、新しいアドレスへ移り、いま開いている画面の場所（#/settings など）も持っていく。それ以外はその場で済む', () => {
-  assert.deepEqual(applyStep(result({ applied: { listen: true, auth: false }, url: 'http://127.0.0.1:4800/' }), '#/settings'), { kind: 'move', to: 'http://127.0.0.1:4800/#/settings' });
-  assert.deepEqual(applyStep(result({ url: 'http://127.0.0.1:4800' }), ''), { kind: 'move', to: 'http://127.0.0.1:4800/' }, '末尾の / があっても無くても同じ');
+test('applyStep: ポートが変わった（url がある）ときは、移らず、新しいアドレスを見せる（いま開いている画面の場所 #/settings なども付ける）。それ以外はその場で済む', () => {
+  assert.deepEqual(applyStep(result({ applied: { listen: true, auth: false }, url: 'http://127.0.0.1:4800/' }), '#/settings'), { kind: 'moved', url: 'http://127.0.0.1:4800/#/settings', restartRequired: false });
+  assert.deepEqual(applyStep(result({ url: 'http://127.0.0.1:4800' }), ''), { kind: 'moved', url: 'http://127.0.0.1:4800/', restartRequired: false }, '末尾の / があっても無くても同じ');
+  assert.deepEqual(applyStep(result({ url: 'http://127.0.0.1:4800/', restartRequired: true }), ''), { kind: 'moved', url: 'http://127.0.0.1:4800/', restartRequired: true }, '移ったあとも、設定がまた変わっていれば帯は残る');
   assert.deepEqual(applyStep(result({}), '#/settings'), { kind: 'stay', restartRequired: false });
   assert.deepEqual(applyStep(result({ restartRequired: true }), ''), { kind: 'stay', restartRequired: true }, '反映したあとに設定がまた変わっていれば、帯は残る');
+});
+
+test('画面は、反映したあとに自分で移らない（location.assign / replace / href への代入を使わない）。移動はアドレス欄への入力・貼り付けだけ', () => {
+  const source = readFileSync(new URL('../web/src/Settings.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /location\.(assign|replace)\s*\(|location\.href\s*=|window\.open\s*\(/u);
+  assert.doesNotMatch(source, /<a\s[^>]*href=\{[^}]*(movedTo|moved\.url)/u, '新しい URL をクリックできるリンクにしない（押すと同じサイトの別のポートからの移動になり、断られる）');
 });
 
 test('applyFailure: 締め出しの確かめ（409 would_lock_out）は理由つきの確かめ、nothing_to_apply は「もう反映済み」、ほかは失敗', () => {
@@ -33,7 +41,7 @@ test('applyFailure: 締め出しの確かめ（409 would_lock_out）は理由つ
 });
 
 test('辞書: 再起動の文は ja と en にあり、サーバーの理由（締め出し・待ち受けの失敗など）のコードは、画面の言語に訳せる', () => {
-  for (const key of ['settings.restart.button', 'settings.restart.busy', 'settings.restart.done', 'settings.restart.already', 'settings.restart.failed', 'settings.restart.lockoutTitle', 'settings.restart.lockoutNote', 'settings.restart.lockoutCancel', 'settings.restart.lockoutDo'] as const) {
+  for (const key of ['settings.restart.button', 'settings.restart.busy', 'settings.restart.done', 'settings.restart.already', 'settings.restart.failed', 'settings.restart.lockoutTitle', 'settings.restart.lockoutNote', 'settings.restart.lockoutCancel', 'settings.restart.lockoutDo', 'settings.restart.movedTitle', 'settings.restart.movedBody', 'settings.restart.movedCopy', 'settings.restart.movedClose'] as const) {
     assert.equal(typeof ja[key], 'string', key);
     assert.equal(typeof en[key], 'string', key);
   }

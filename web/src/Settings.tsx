@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type ModelView, type Profile, type SettingsView } from './api.ts';
 import { ChatDialog } from './ChatDialog.tsx';
+import { copyText } from './clipboard.ts';
 import { useEscapeLayer, useSaveShortcut } from './hooks.ts';
 import { Icon } from './icons.tsx';
 import { applyServerSettings, formatDateTimeSmart, getLanguagePreference, useT } from './i18n/index.ts';
@@ -49,6 +50,7 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
   const [askDiscard, setAskDiscard] = useState(false);
   const [applying, setApplying] = useState(false);
   const [lockOut, setLockOut] = useState<string | null>(null);
+  const [movedTo, setMovedTo] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pendingField = useRef<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
@@ -148,19 +150,24 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
   async function applyServer(force = false) {
     if (applying) return;
     setApplying(true); setLockOut(null);
-    let moving = false;
     try {
       const step = applyStep(await api.applyServer(force), location.hash);
-      if (step.kind === 'move') { moving = true; location.assign(step.to); return; }
       setRestartRequired(step.restartRequired);
-      toast({ kind: 'done', icon: 'check', title: t('settings.restart.done') });
+      // ポートが変わったときは、自分では移らず、新しいアドレスを見せる（持ち主がアドレス欄に入力・貼り付けて開く）
+      if (step.kind === 'moved') setMovedTo(step.url);
+      else toast({ kind: 'done', icon: 'check', title: t('settings.restart.done') });
     } catch (error) {
       const failure = applyFailure(error);
       if (failure.kind === 'lockout') setLockOut(failure.message);
       else if (failure.kind === 'nothing') { setRestartRequired(false); toast({ kind: 'info', icon: 'info', title: t('settings.restart.already') }); }
       else toast({ icon: 'alert', title: t('settings.restart.failed'), ...(failure.message ? { body: failure.message } : {}) });
-    } finally { if (!moving) setApplying(false); }
+    } finally { setApplying(false); }
   }
+  const copyAddress = (address: string) => {
+    void copyText(address).then(ok => toast(ok
+      ? { kind: 'done', icon: 'copy', title: t('settings.keys.copied') }
+      : { icon: 'alert', title: t('settings.keys.copyFailed'), body: t('settings.keys.copyFailedBody') }));
+  };
   useSaveShortcut(() => { if (!confirm) void save(); });
   useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
   // × ・Esc・背景で閉じるとき、保存していない変更があれば、捨てる前に確かめる
@@ -213,6 +220,20 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
         >
           <p className="chat-dialog-text">{lockOut}</p>
           <p className="chat-dialog-text">{t('settings.restart.lockoutNote')}</p>
+        </ChatDialog>
+      )}
+      {movedTo !== null && (
+        <ChatDialog
+          title={t('settings.restart.movedTitle')} onClose={() => setMovedTo(null)}
+          actions={(
+            <>
+              <button type="button" className="btn btn-ghost chat-plain" onClick={() => setMovedTo(null)}>{t('settings.restart.movedClose')}</button>
+              <button type="button" className="btn btn-primary" onClick={() => copyAddress(movedTo)}>{t('settings.restart.movedCopy')}</button>
+            </>
+          )}
+        >
+          <p className="chat-dialog-text">{t('settings.restart.movedBody')}</p>
+          <p className="chat-dialog-text"><code className="set-moved-url">{movedTo}</code></p>
         </ChatDialog>
       )}
       {askDiscard && (
