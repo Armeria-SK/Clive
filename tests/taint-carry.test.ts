@@ -223,3 +223,43 @@ test('実行の記録の印は、実行が終わらなくても残る（Runs.mar
   assert.equal(runs.latestChat('none'), undefined);
   db.close();
 });
+
+test('実行の途中で落ちて、起動し直したあとのやり直しも「外から読んだ」扱いのまま（同じデータベースを新しい App で開く）', async t => {
+  const dir = tempDir(t);
+  const paths = resolvePaths(dir);
+  mkdirSync(paths.data, { recursive: true });
+  const config = testConfig();
+  config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', maxParallel: 1, timeoutMs: 10_000 }];
+  config.models = [{ id: 'm', provider: 'fake', model: 'x', contextLength: 65536, minContext: 4096, maxOutputTokens: 1024, toolMode: 'native', vision: false }];
+  config.routing = { chat: ['m'], background: [], retriesPerModel: 0 };
+  config.memory.review = false;
+  writeFileSync(paths.config, JSON.stringify(config));
+  const databasePath = join(dir, 'clive.db');
+  let adapter!: FakeAdapter;
+  const open = () => new App({ paths, databasePath, log: () => undefined, workerTimers: false, webNetwork: network, adapterOverride: p => (adapter = new FakeAdapter(p)) });
+  const first = open();
+  await first.status.probeAll(first.config());
+  adapter.scripts = [call('web_fetch', FETCH), untilStopped];
+  const sent = first.engine.send(C, 'このページを読んで');
+  assert.ok(sent.ok);
+  await waitFor(() => adapter.calls.length >= 2, '道具のあとの 2 回目の呼び出し');
+  assert.equal((first.db.prepare('SELECT ok, tainted FROM engine_runs').get() as { ok: number | null; tainted: number }).tainted, 1, '終わる前から印が書いてある');
+  first.engine.wait(sent.runId)?.catch(() => undefined);
+  first.close();
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  // 一時フォルダを消す前に DB を閉じる（Windows では開いたままだと消せない）
+  const second = open();
+  try {
+    await second.status.probeAll(second.config());
+    assert.deepEqual({ ...(second.db.prepare('SELECT ok, error_kind AS kind, tainted FROM engine_runs').get() as object) }, { ok: 0, kind: 'cancelled', tainted: 1 }, '落ちた実行は中断扱いになっても、印は残る');
+    adapter.scripts = [call('file_write', WRITE), reply('おわり')];
+    const retried = second.engine.retry(C);
+    assert.ok(retried.ok);
+    await waitFor(() => second.approvals.pending().length === 1, '再起動後のやり直しの確かめ');
+    assert.match(second.approvals.pending()[0]!.reasons.join(' '), /前の実行/u);
+    second.approvals.decide(second.approvals.pending()[0]!.id, 'deny');
+    await settled(second, retried.runId);
+    await second.engine.wait(retried.runId);
+  } finally { second.close(); await new Promise(resolve => setTimeout(resolve, 50)); }
+});
