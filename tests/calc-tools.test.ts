@@ -64,6 +64,14 @@ test('calculate: 空の式は引数の誤りとして実行しない', async t =
   assert.equal(out.invalidArguments, true);
 });
 
+test('calculate: 位置の分からないエラーでは「?」を出す', async t => {
+  const s = setup(t);
+  const out = await s.call('calculate', { expression: '2 +' });
+  assert.equal(out.output.isError, true);
+  assert.doesNotMatch(out.output.content, /（ 文字目/u);
+  assert.match(out.output.content, /\?/u);
+});
+
 test('date_calc: 月末に月を足すとその月の末日になる', async t => {
   const s = setup(t);
   const out = await s.call('date_calc', { op: 'add', date: '2026-01-31', months: 1 });
@@ -80,6 +88,21 @@ test('date_calc: タイムゾーンを変換する', async t => {
   const s = setup(t);
   const out = await s.call('date_calc', { op: 'convert', datetime: '2026-07-01T09:00', timezone: 'Asia/Tokyo', to_timezone: 'America/New_York' });
   assert.match(out.output.content, /2026-06-30T20:00/u);
+});
+
+test('date_calc: convert でソースのタイムゾーンが読めなければ timezone を指す', async t => {
+  const s = setup(t);
+  const out = await s.call('date_calc', { op: 'convert', datetime: '2026-07-01T09:00', timezone: 'Mars/Base', to_timezone: 'America/New_York' });
+  assert.equal(out.output.isError, true);
+  assert.doesNotMatch(out.output.content, /to_timezone/u);
+  assert.match(out.output.content, /timezone/u);
+});
+
+test('date_calc: diff で date が正しく to が読めなければ to を指す', async t => {
+  const s = setup(t);
+  const out = await s.call('date_calc', { op: 'diff', date: '2026-01-01', to: 'not-a-date' });
+  assert.equal(out.output.isError, true);
+  assert.match(out.output.content, /: to$/u);
 });
 
 test('date_calc: add に date が無いと失敗', async t => {

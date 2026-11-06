@@ -5,7 +5,7 @@ import type { ToolPolicy } from '../../src/tools/tool-policy.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
-// 組み込みの道具 24 個の絵と説明の辞書キー。名前・効果・使える場面・今の方針は、サーバー（GET /api/tools）から読む。
+// 組み込みの道具 27 個の絵と説明の辞書キー。名前・効果・使える場面・今の方針は、サーバー（GET /api/tools）から読む。
 // 名前の食い違いは tests/skills.test.ts が、サーバーの一覧と突き合わせて落とす。知らない道具（あとから増えたもの）は、絵だけ汎用で説明は出さない。
 export interface ToolLook { icon: IconName; desc: PlainKey | null }
 export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {

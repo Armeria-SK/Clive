@@ -9,6 +9,10 @@ import { addToDate, convertZone, diffDates, nowIn, weekdayOf, type DateErrorCode
 const WEEKDAY_KEYS = ['date.weekday.0', 'date.weekday.1', 'date.weekday.2', 'date.weekday.3', 'date.weekday.4', 'date.weekday.5', 'date.weekday.6'] as const;
 const weekdayName = (weekday: number, language: Language): string => toolText(language, WEEKDAY_KEYS[weekday]!);
 
+const validZone = (zone: string): boolean => {
+  try { new Intl.DateTimeFormat('en', { timeZone: zone }); return true; } catch { return false; }
+};
+
 const fail = (error: unknown, ctx: ToolContext): ToolOutput => {
   const language = languageOf(ctx.config);
   return { content: error instanceof Error ? toolText(language, 'failed', { detail: error.message }) : toolText(language, 'failed', { detail: String(error) }), isError: true };
@@ -26,7 +30,7 @@ export const calculate: ToolDef<{ expression: string }> = {
     try {
       const language = languageOf(ctx.config);
       const result = evaluate(input.expression);
-      if (!result.ok) return { content: toolText(language, `calc.error.${result.code as CalcErrorCode}`, { at: result.at ?? '' }), isError: true };
+      if (!result.ok) return { content: toolText(language, `calc.error.${result.code as CalcErrorCode}`, { at: result.at ?? '?' }), isError: true };
       return { content: toolText(language, 'calc.result', { expression: input.expression, value: formatNumber(result.value) }) };
     } catch (error) { return fail(error, ctx); }
   },
@@ -84,7 +88,7 @@ export const dateCalc: ToolDef<{
           if (!input.date) return missing('date');
           if (!input.to) return missing('to');
           const result = diffDates(input.date, input.to);
-          if (!result.ok) return dateError(result.code, 'date');
+          if (!result.ok) return dateError(result.code, weekdayOf(input.date).ok ? 'to' : 'date');
           return { content: toolText(language, 'date.diff', { from: input.date, to: input.to, days: result.value.days, weekdays: result.value.weekdays }) };
         }
         case 'weekday': {
@@ -97,7 +101,10 @@ export const dateCalc: ToolDef<{
           if (!input.datetime) return missing('datetime');
           if (!input.to_timezone) return missing('to_timezone');
           const result = convertZone(input.datetime, tz, input.to_timezone);
-          if (!result.ok) return dateError(result.code, result.code === 'bad_timezone' ? 'to_timezone' : 'datetime');
+          if (!result.ok) {
+            const field = result.code === 'bad_timezone' ? (validZone(tz) ? 'to_timezone' : 'timezone') : 'datetime';
+            return dateError(result.code, field);
+          }
           return { content: toolText(language, 'date.convert', { datetime: result.value.datetime, timezone: input.to_timezone, offset: result.value.offset }) };
         }
       }
