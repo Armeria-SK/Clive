@@ -68,8 +68,11 @@ export type ShellChoice = 'auto' | 'pwsh' | 'powershell' | 'bash' | 'sh';
 // stdin: シェルに標準入力で渡す中身（PowerShell は引数で渡すので無い）
 export interface ShellSpec { name: string; file: string; args: (command: string) => string[]; stdin?: (command: string) => string }
 
-// スクリプトは引数でなく標準入力で渡す（Windows の Git Bash は -c の引数の連続する \\ を減らす）。-s にしないのは、cat や read が続きを食べるため。固定の 1 行が標準入力を読み切って eval する
-const POSIX_BOOT = 'eval "$(cat)"';
+// スクリプトは引数でなく標準入力で渡す（Windows の Git Bash は -c の引数の連続する \\ を減らす）。-s にしないのは、cat や read が続きを食べるため。固定の 1 行が標準入力を読み切って eval する。
+// 外部の cat には頼らない（cat が使えないと $(cat) が空になり、eval "" が 0 で終わってスクリプトが黙って動かない）。読めなかった（空）ときは 127 で止める。
+// bash の read -d '' は、入力の終わりで 1 を返す（読めていても）ので、終了コードは見ず、中身が空かどうかで決める。sh は -d が無いので、1 行ずつ読む
+const BASH_BOOT = "IFS= read -r -d '' s; [ -n \"$s\" ] || exit 127; eval \"$s\"";
+const SH_BOOT = 's=; n=$(printf "\\nx"); n=${n%x}; while IFS= read -r l || [ -n "$l" ]; do s="$s$l$n"; l=; done; [ -n "$s" ] || exit 127; eval "$s"';
 
 const PS_UTF8 = '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;';
 // 文字コードの設定のあと、制限モードにする。.NET の直接呼び出し（[IO.File]::...）・New-Object・Add-Type が止まり、元のモードへ戻すのも止まる
@@ -77,7 +80,7 @@ const PS_CONSTRAINED = "$ExecutionContext.SessionState.LanguageMode='Constrained
 
 export function resolveShell(choice: ShellChoice): ShellSpec {
   const ps = (file: string, name: string): ShellSpec => ({ name, file, args: c => ['-NoProfile', '-NonInteractive', '-Command', `${PS_UTF8}${PS_CONSTRAINED}${c}`] });
-  const posix = (file: string, name: string): ShellSpec => ({ name, file, args: () => (name === 'bash' ? ['--noprofile', '--norc', '-c', POSIX_BOOT] : ['-c', POSIX_BOOT]), stdin: c => c });
+  const posix = (file: string, name: string): ShellSpec => ({ name, file, args: () => (name === 'bash' ? ['--noprofile', '--norc', '-c', BASH_BOOT] : ['-c', SH_BOOT]), stdin: c => c });
   if (choice === 'pwsh' || (choice === 'auto' && WINDOWS && which('pwsh'))) return ps(which('pwsh') ?? 'pwsh', 'pwsh');
   if (choice === 'powershell' || (choice === 'auto' && WINDOWS)) return ps(which('powershell') ?? 'powershell.exe', 'powershell');
   if (choice === 'bash' || (choice === 'auto' && which('bash'))) return posix(which('bash') ?? 'bash', 'bash');

@@ -130,3 +130,35 @@ test('bash: echo "\\\\\\$(touch made) は、Clive のシェルで置換になら
     assert.equal(existsSync(join(dir, 'made')), true, '前提: 素の bash -c では置換の touch が動く');
   }
 });
+
+// 最終審査: 前の起動 eval "$(cat)" は、外部の cat が使えない（PATH に無い・壊れている）と、$(cat) が空になって eval "" が 0 で終わり、スクリプトが黙って動かなかった。
+// 標準入力を読むのを組み込みの read にして、読めなかったら 127 で止める。cat は関数で潰して（bash は PATH を作り直すので、PATH からは外せない）確かめる
+const SHADOW_CAT = 'cat() { return 127; }; ';
+const shPath = which('sh');
+const shAvailable = shPath !== undefined && spawnSync(shPath, ['-c', 'echo ok'], { encoding: 'utf8' }).stdout.trim() === 'ok';
+
+for (const choice of ['bash', 'sh'] as const) {
+  test(`${choice} の起動: 外部の cat が使えなくてもスクリプトは動き、標準入力が空なら黙って 0 で終わらず 127 で止まる。標準入力の続きを食べない`, { skip: choice === 'bash' ? skip : !shAvailable && 'sh が無い' }, async t => {
+    const dir = tempDir(t);
+    const spec = resolveShell(choice);
+    const args = spec.args('x');
+    const boot = args.at(-1)!;
+    const run = (script: string, prefix = '') => runProcess(spec.file, [...args.slice(0, -1), `${prefix}${boot}`], { cwd: dir, env: scrubEnv(), timeoutMs: 30_000, signal: new AbortController().signal, maxBytes: 100_000, input: script });
+    const before = await runProcess(spec.file, [...args.slice(0, -1), `${SHADOW_CAT}eval "$(cat)"`], { cwd: dir, env: scrubEnv(), timeoutMs: 30_000, signal: new AbortController().signal, maxBytes: 100_000, input: 'echo ran\n' });
+    assert.deepEqual([before.exitCode, before.stdout], [0, ''], '前提: 前の起動は、cat が使えないとスクリプトを動かさず、0 で終わった');
+    for (const [script, stdout, exitCode] of [
+      ['echo ran\n', 'ran\n', 0], ['echo a\necho b', 'a\nb\n', 0], ['exit 7', '', 7], ['  echo   spaced\n\techo tabbed\n', 'spaced\ntabbed\n', 0], ['cat\necho after\n', 'after\n', 0],
+      ['echo 日本語 "あ い"\n', '日本語 あ い\n', 0], ['while read l; do echo "[$l]"; done <<EOF\nline1\nline2\nEOF\n', '[line1]\n[line2]\n', 0], ["printf '%s' 'a\\b'\n", 'a\\b', 0], ['\n\n', '', 0],
+    ] as const) {
+      const result = await run(script, SHADOW_CAT);
+      assert.deepEqual([result.exitCode, result.stdout], [exitCode, stdout], `${JSON.stringify(script)}: cat が使えないとき`);
+      const plain = await run(script);
+      assert.deepEqual([plain.exitCode, plain.stdout], [exitCode, stdout], `${JSON.stringify(script)}: 普通のとき`);
+    }
+    const empty = await run('');
+    assert.equal(empty.exitCode, 127, '標準入力が空だと、何も動かさず 127 で止まる');
+    assert.equal((await run('', SHADOW_CAT)).exitCode, 127);
+    const eaten = await run('read -n 3 x; echo "x=[$x]"\nXXXecho notresumed\n');
+    assert.equal(eaten.stdout, 'x=[]\n', 'read がスクリプトの続きを食べた');
+  });
+}
