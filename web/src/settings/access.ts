@@ -35,6 +35,8 @@ export type Access =
   | { kind: 'host-exposed'; host: string }
   | { kind: 'provider-url'; id: string; url: string }
   | { kind: 'provider-key'; id: string; env: string }
+  // 画面で入れる鍵を、この PC の外のアドレスへ送る
+  | { kind: 'provider-key-send'; id: string; url: string }
   | { kind: 'searxng-url'; url: string }
   // 道具ごとの方針を緩める（止める → 承認を求める / 承認なし、承認を求める → 承認なし）
   | { kind: 'tool-policy-loosened'; tool: string; from: ToolPolicy; to: ToolPolicy };
@@ -73,6 +75,14 @@ function providerChanges(before: Config, after: Config): Access[] {
     if (env !== undefined && env !== (same ? keyEnvOf(same) : undefined)) out.push({ kind: 'provider-key', id, env });
   }
   return out;
+}
+
+// プロバイダに API キーを入れる（設定の保存とは別の操作）ときの確かめ。鍵はそのプロバイダの送り先（baseUrl）へ送られるので、この PC の外のアドレスなら並べて確かめる。
+// baseUrl を書いていない Anthropic の既定の宛先は、鍵を入れる目的そのものなので確かめない。読めないアドレスは外として扱う
+export function keyEntryAccess(provider: Record<string, any>): Access[] {
+  const host = hostOf(provider.baseUrl);
+  if (host === null || isLoopbackHost(host)) return [];
+  return [{ kind: 'provider-key-send', id: String(provider.id ?? ''), url: String(provider.baseUrl) }];
 }
 
 // フックは id が無いので、同じ中身のものは変わっていないとみなし、残りを前から順に組にして「編集」、余りを「追加」「削除」とする。

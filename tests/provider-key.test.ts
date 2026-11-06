@@ -71,6 +71,7 @@ test('キーを入れる: .env に 1 行、設定に apiKeyEnv（ID から作っ
   assert.equal(s.env.CLIVE_MY_LLM_API_KEY, KEY, '起動し直さなくても効く');
   assert.equal(s.app.config().providers.find(p => p.id === 'my-llm')!.apiKeyEnv, 'CLIVE_MY_LLM_API_KEY');
   assert.deepEqual((await s.get('my-llm')).body, { set: true, last4: KEY.slice(-4) });
+  assert.equal((await s.json('/api/settings', 'GET')).body.apiKeys.CLIVE_MY_LLM_API_KEY, true, '設定の「API キー」の節にも、入っていると出る');
   assert.deepEqual(Object.keys((await s.get('my-llm')).body).sort(), ['last4', 'set']);
 });
 

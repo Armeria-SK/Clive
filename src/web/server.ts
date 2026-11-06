@@ -56,7 +56,7 @@ function applyProblem(failure: ApplyFailure): HttpProblem {
 
 function settingsView(app: App) {
   const config = app.config();
-  const env = process.env;
+  const env = app.env;
   const keys = [...new Set(config.providers.map(p => p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)).filter((k): k is string => Boolean(k)))];
   return {
     config,

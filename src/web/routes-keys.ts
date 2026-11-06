@@ -2,7 +2,7 @@ import type { App } from '../app.ts';
 import type { ProviderConfig } from '../config/schema.ts';
 import { ConfigError, parseConfig } from '../config/store.ts';
 import { EnvFileError, removeEnvValue, setEnvValue } from '../env-file.ts';
-import { isSecretEnvName, keyEnvName, keyProblem, MAX_KEY_CHARS } from '../shared/provider-key.ts';
+import { isSecretEnvName, keyEnvName, keyProblem, MAX_KEY_CHARS, takenKeyEnvs } from '../shared/provider-key.ts';
 import { configProblem, problem, readJson, requireObject, type Router, sendJson } from './http.ts';
 
 // API キーを画面から入れる（段 9f）。鍵は .env にだけ書き、応答・ログ・DB・SSE のどこにも出さない。GET が返すのは「入っているか」と末尾 4 文字だけ。
@@ -26,9 +26,6 @@ export function registerKeyRoutes(router: Router, app: App): void {
     if (!provider) throw problem(404, 'not_found', 'provider_missing', { params: { id } });
     return { config, provider };
   };
-  // ほかのプロバイダがすでに使っている鍵の名前（作る名前を重ねない）
-  const takenBy = (config: ReturnType<App['config']>, id: string): Set<string> =>
-    new Set(config.providers.filter(p => p.id !== id).map(p => p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)).filter((n): n is string => Boolean(n)));
   const stateOf = (name: string): KeyState => {
     const value = app.env[name]?.trim();
     return value ? { set: true, last4: value.slice(-4) } : NOT_SET;
@@ -52,7 +49,7 @@ export function registerKeyRoutes(router: Router, app: App): void {
     }
     // ここから書き終えるまで await を挟まない（二つの要求が、古い設定を読んだまま上書きし合わないように）
     const { config, provider } = providerOf(params[0]!);
-    const name = keyEnvName(provider, takenBy(config, provider.id));
+    const name = keyEnvName(provider, takenKeyEnvs(config.providers, provider.id));
     if (!isSecretEnvName(name)) throw problem(409, 'conflict', 'key_env_unsafe', { params: { env: name } });
     const next = provider.apiKeyEnv === undefined && provider.kind !== 'anthropic'
       ? { ...config, providers: config.providers.map(p => (p.id === provider.id ? { ...p, apiKeyEnv: name } : p)) }

@@ -33,6 +33,7 @@ export function accessText(t: Translate, a: Access): ReactNode {
     case 'host-exposed': return t('access.host', a.host);
     case 'provider-url': return t('access.providerUrl', a.id, a.url);
     case 'provider-key': return t('access.providerKey', a.id, a.env);
+    case 'provider-key-send': return t('access.providerKeySend', a.id, a.url);
     case 'searxng-url': return t('access.searxng', a.url);
     case 'tool-policy-loosened': return t('access.toolPolicy', a.tool, t(POLICY_LABEL[a.from]), t(POLICY_LABEL[a.to]));
   }
@@ -41,17 +42,17 @@ export function accessText(t: Translate, a: Access): ReactNode {
 const itemKey = (a: Access, i: number): string => `${a.kind}:${'path' in a ? a.path : ''}:${i}`;
 
 // 範囲を広げる保存の確認。広がるものをそのまま並べて、「広げて保存する」を押したときだけ書く。
-export function AccessConfirm({ items, busy, onCancel, onConfirm }: { items: readonly Access[]; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+export function AccessConfirm({ items, busy, onCancel, onConfirm, title, ok }: { items: readonly Access[]; busy: boolean; onCancel: () => void; onConfirm: () => void; title?: string; ok?: string }) {
   const t = useT();
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => { cancel.current?.focus(); }, []);
   return (
-    <div className="set-widen" role="alertdialog" aria-label={t('folders.confirm.title')}>
-      <strong>{t('folders.confirm.title')}</strong>
+    <div className="set-widen" role="alertdialog" aria-label={title ?? t('folders.confirm.title')}>
+      <strong>{title ?? t('folders.confirm.title')}</strong>
       <ul>{items.map((a, i) => <li key={itemKey(a, i)}>{accessText(t, a)}</li>)}</ul>
       <div className="set-widen-actions">
         <button ref={cancel} className="btn btn-ghost" onClick={onCancel}>{t('folders.confirm.cancel')}</button>
-        <button className="btn btn-primary" onClick={onConfirm} disabled={busy}>{t('folders.confirm.ok')}</button>
+        <button className="btn btn-primary" onClick={onConfirm} disabled={busy}>{ok ?? t('folders.confirm.ok')}</button>
       </div>
     </div>
   );

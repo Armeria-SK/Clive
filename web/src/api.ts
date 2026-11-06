@@ -123,6 +123,8 @@ export interface TemplatesView { language: string; rules: string; files: Array<{
 export interface OnboardingView { done: boolean; steps: { language: boolean; user: boolean; identity: boolean; persona: boolean; model: boolean } }
 export interface PersonaWrite { userName?: string; callMe?: string; botName?: string; style?: 'calm' | 'friendly' | 'direct' | 'none'; styleNote?: string }
 export interface PersonaView { soul: string; user: string; tokens: { soul: number; user: number }; budget: number | null; max: number }
+// API キーの状態（GET /api/providers/:id/key）。鍵そのものは返らない
+export interface ProviderKeyState { set: boolean; last4: string | null }
 export interface EnvReloadView { loaded: boolean; apiKeys: Record<string, boolean>; notApplied: string[] }
 
 export class ApiError extends Error {
@@ -217,6 +219,9 @@ export const api = {
   onboarding: () => call<OnboardingView>('/api/onboarding'),
   onboardingDone: () => call<OnboardingView>('/api/onboarding/done', { method: 'POST', body: '{}' }),
   onboardingPersona: (input: PersonaWrite) => call<OnboardingView & { profile: Profile }>('/api/onboarding/persona', { method: 'POST', body: JSON.stringify(input) }),
+  providerKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`),
+  setProviderKey: (id: string, key: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'PUT', body: JSON.stringify({ key }) }),
+  deleteProviderKey: (id: string) => call<ProviderKeyState>(`/api/providers/${encodeURIComponent(id)}/key`, { method: 'DELETE' }),
   reloadEnv: (env: string[] = []) => call<EnvReloadView>('/api/onboarding/reload-env', { method: 'POST', body: JSON.stringify({ env }) }),
   persona: () => call<PersonaView>('/api/workspace/persona'),
   savePersona: (patch: { soul?: string; user?: string }) => call<PersonaView>('/api/workspace/persona', { method: 'PUT', body: JSON.stringify(patch) }),

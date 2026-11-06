@@ -166,6 +166,16 @@
 .set-reload { align-self: flex-start; margin-top: 6px; }
 .set-widen { display: flex; flex: none; flex-direction: column; gap: 8px; margin: 0 28px 14px; padding: 12px 14px; border: 1px solid var(--color-accent); border-radius: var(--radius-md); background: var(--color-surface); }
 .set-widen ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.set-keyfield { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; min-width: 0; max-width: 100%; }
+.set-keyrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.set-keyrow .set-text { flex: 1 1 220px; }
+.shell[data-mode="mid"] .set-keyfield, .shell[data-mode="narrow"] .set-keyfield { align-items: flex-start; }
+.shell[data-mode="mid"] .set-keyrow, .shell[data-mode="narrow"] .set-keyrow { justify-content: flex-start; }
+.set-widen-inline { align-self: stretch; }
+.set-widen-inline .set-widen { margin: 0; }
+.set-adv { padding: 4px 0; }
+.set-adv > summary { cursor: pointer; padding: 10px 0; font-size: 13px; color: var(--color-text-muted); }
+.set-adv > summary:hover { color: var(--color-text); }
 .set-widen-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .shell[data-mode="narrow"] .set-widen { margin: 0 14px 12px; }
 

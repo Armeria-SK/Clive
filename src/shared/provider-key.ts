@@ -25,6 +25,11 @@ export function keyEnvName(provider: { id: string; kind: string; apiKeyEnv?: str
   return name;
 }
 
+// ほかのプロバイダ（exceptId 以外）がすでに使っている鍵の環境変数の名前（書かれている名前と、Anthropic の既定の名前）。作る名前を重ねないために使う
+export function takenKeyEnvs(providers: ReadonlyArray<{ id: string; kind: string; apiKeyEnv?: string | undefined }>, exceptId: string): Set<string> {
+  return new Set(providers.filter(p => p.id !== exceptId).map(p => p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)).filter((n): n is string => Boolean(n)));
+}
+
 // 鍵を持つ名前（KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL を含む）だけ、鍵の API が書く。PATH や NODE_OPTIONS のような、動き方を変える環境変数に、鍵として書き込めないようにする
 // （シェルの子プロセスへ環境を渡すときに伏せる名前と同じ決まり。src/tools/shell/runner.ts の scrubEnv）
 export function isSecretEnvName(name: string): boolean {

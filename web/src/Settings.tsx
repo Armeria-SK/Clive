@@ -163,6 +163,8 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
       else toast({ icon: 'alert', title: t('settings.restart.failed'), ...(failure.message ? { body: failure.message } : {}) });
     } finally { setApplying(false); }
   }
+  // 鍵を入れた・消したあと、サーバー側で変わった設定（apiKeyEnv）とモデルの確認を読み直す。保存していない編集は戻す
+  const keyChanged = () => { keptToast.current = true; void load(true); };
   const copyAddress = (address: string) => {
     void copyText(address).then(ok => toast(ok
       ? { kind: 'done', icon: 'copy', title: t('settings.keys.copied') }
@@ -325,7 +327,7 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
               models={models} probing={probing} onProbe={() => void probe()}
               selectedModel={selectedModel} onSelectModel={setSelectedModel} selectedProvider={selectedProvider} onSelectProvider={setSelectedProvider}
               apiKeys={view.apiKeys} configPath={view.configPath} hasConfigError={Boolean(view.configError)} lastSavedAt={lastSavedAt}
-              onNameSaved={renamed} onRerunSetup={onRerunSetup}
+              onNameSaved={renamed} onRerunSetup={onRerunSetup} onKeyChanged={keyChanged}
             />
           </div>
         </div>
