@@ -58,7 +58,7 @@ async function start(t: { after: (fn: () => void | Promise<void>) => void }, mut
   const app = new App({ paths, databasePath: ':memory:', log: line => logs.push(line), adapterOverride: p => { adapter = new FakeAdapter(p, adapter?.scripts ?? options.scripts ?? []); return adapter; } });
   await app.status.probeAll(app.config());
   const web = createWebServer(app);
-  await web.listen(app.bootServer.host, app.bootServer.port);
+  await web.listen();
   t.after(() => { web.close(); app.close(); });
   const local = (p: number) => ({ Origin: `http://127.0.0.1:${p}` });
   // いまの待ち受け（入れ替えたあとは新しいほう）の手元から押す
@@ -267,13 +267,28 @@ test('A4: 同時に反映できるのは 1 つだけ（実行中に押された�
   assert.deepEqual(again.ok === false && again.failure.code, 'nothing_to_apply');
 });
 
+test('A4: 待ち受けの場所は、いま動いているものとして覚えている設定（running）から決める（認証・「違いがあるか」の比べ先と食い違わない）。場所を渡せるのは試験用', async t => {
+  const running: Server4 = { host: '127.0.0.1', port: await freePort(), origins: [], tailscaleLogins: [] };
+  const make = () => new ServerHost({ running, create: () => createServer(), closeStreams: () => undefined, accept: () => undefined, log: () => undefined });
+  const byDefault = make();
+  t.after(() => byDefault.close());
+  await byDefault.listen();
+  assert.equal((byDefault.server.address() as AddressInfo).port, running.port, '何も渡さなければ running の port');
+  assert.equal((byDefault.server.address() as AddressInfo).address, running.host);
+  const overridden = make();
+  t.after(() => overridden.close());
+  await overridden.listen({ host: '127.0.0.1', port: 0 });
+  const other = (overridden.server.address() as AddressInfo).port;
+  assert.ok(other > 0 && other !== running.port, '試験用に渡せば、その場所（空いているポート）で始める');
+});
+
 test('A4: 流れを閉じるのは入れ替えた瞬間の 1 回だけ。古い待ち受けが閉じ終わっても、新しい待ち受けの流れは閉じない（流れを待ち受けの閉じる動きに結び付けない）', async t => {
   const running: Server4 = { host: '127.0.0.1', port: await freePort(), origins: [], tailscaleLogins: [] };
   const servers: Server[] = [];
   let closedStreams = 0;
   const host = new ServerHost({ running, create: () => { const s = createServer(); servers.push(s); return s; }, closeStreams: () => { closedStreams++; }, accept: () => undefined, log: () => undefined });
   t.after(() => host.close());
-  await host.listen(running.host, running.port);
+  await host.listen();
   const next: Server4 = { ...running, port: await freePort() };
   const outcome = await host.apply({ headers: { host: `127.0.0.1:${running.port}`, origin: `http://127.0.0.1:${running.port}` } }, next, false);
   assert.equal(outcome.ok, true);

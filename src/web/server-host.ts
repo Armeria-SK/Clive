@@ -103,7 +103,9 @@ export class ServerHost {
   // 試験用: 待ち受けの場所は変えず、許す origin だけを入れ替える
   setOrigins(origins: readonly string[]): void { this.#auth = new WebAuth(origins, this.#running.tailscaleLogins); }
 
-  async listen(host: string, port: number): Promise<void> {
+  // 待ち受けを始める。場所は、いま動いているものとして覚えている設定（#running）から決める（認証と「違いがあるか」の比べ先と食い違わないように）。override は試験用（空いているポートで始めるなど）
+  async listen(override?: { host: string; port: number }): Promise<void> {
+    const { host, port } = override ?? this.#running;
     await listenOn(this.#server, host, port);
     this.#server.on('error', error => this.#deps.log(`[ERROR] 待ち受けのエラー: ${error.message}`));
   }

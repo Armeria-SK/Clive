@@ -31,8 +31,8 @@ export interface WebServer {
   handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   // 試験用: 待ち受けの場所は変えず、許す origin だけを入れ替える
   setOrigins: (origins: readonly string[]) => void;
-  // 待ち受けを始める（起動で使う。始められなければ reject）
-  listen: (host: string, port: number) => Promise<void>;
+  // 待ち受けを始める（起動で使う。場所は起動したときの server の設定。始められなければ reject）。override は試験用
+  listen: (override?: { host: string; port: number }) => Promise<void>;
   // 終了: いまの待ち受けと開いている流れを閉じる
   close: () => void;
 }
@@ -338,7 +338,7 @@ export function createWebServer(app: App): WebServer {
     get server() { return host.server; },
     streams, handle,
     setOrigins: origins => host.setOrigins(origins),
-    listen: (listenHost, port) => host.listen(listenHost, port),
+    listen: override => host.listen(override),
     close: () => host.close(),
   };
 }

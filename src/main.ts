@@ -27,7 +27,7 @@ async function start(): Promise<void> {
   const results = await app.status.probeAll(config);
   for (const r of results) log(`[${r.status === 'ok' ? 'INFO' : 'WARN'}] ${r.modelId}: ${r.status} — ${r.message}`);
   const web = createWebServer(app);
-  await web.listen(boot.host, boot.port);
+  await web.listen();
   log(`[INFO] Clive が起動しました: http://${boot.host}:${boot.port}/`);
   log('[INFO] ログインはありません。この URL を開ける人（この PC のほかのプログラムを含む）は誰でも Clive を操作できます');
   app.worker.start();
