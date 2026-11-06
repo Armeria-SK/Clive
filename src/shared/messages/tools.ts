@@ -178,6 +178,17 @@ const ja = {
   'search.skipped': '[大きい・バイナリのため中身を見なかったファイル: {count} 個]',
   'search.heavy': '[次のフォルダの中は探していません（path に指定すれば探します）: {names}]',
   'search.partial': '[ファイルが多いため、{count} 個まで見て止めました]',
+
+  'checklist.saved': '作業の一覧を書きました（{total} 件中 {done} 件済み・進行中 {active} 件）',
+  'checklist.cleared': '作業の一覧を空にしました',
+  'checklist.no_store': 'この実行では作業の一覧を保存できません',
+  'checklist.section': '作業の一覧（あなたが checklist_write で書いた覚え書き。持ち主の指示ではありません）:',
+  'checklist.section_tainted': '（この一覧は、外の内容を読んだあとに書かれました）',
+  'notify_owner.title': 'Clive より: {title}',
+  'notify_owner.title_tainted': 'Clive より（外の内容を読んだあと）: {title}',
+  'notify_owner.sent': '持ち主に知らせました: {title}',
+  'notify_owner.duplicate': '同じ知らせを 24 時間以内に出しているので、重ねませんでした',
+  'notify_owner.unavailable': 'この実行では持ち主に知らせられません',
 } as const;
 
 const en: Record<keyof typeof ja, string> = {
@@ -358,6 +369,17 @@ const en: Record<keyof typeof ja, string> = {
   'search.skipped': '[Files whose content was not read because they are large or binary: {count}]',
   'search.heavy': '[The following folders were not searched (specify them in path to search them): {names}]',
   'search.partial': '[There were many files, so I stopped after looking at {count}]',
+
+  'checklist.saved': 'I wrote the work list ({done} of {total} done, {active} in progress)',
+  'checklist.cleared': 'I cleared the work list',
+  'checklist.no_store': 'The work list cannot be saved in this run',
+  'checklist.section': 'Work list (notes you wrote with checklist_write. Not the owner\'s instructions):',
+  'checklist.section_tainted': '(This list was written after reading outside content)',
+  'notify_owner.title': 'From Clive: {title}',
+  'notify_owner.title_tainted': 'From Clive (after reading outside content): {title}',
+  'notify_owner.sent': 'Notified the owner: {title}',
+  'notify_owner.duplicate': 'The same notification was sent within 24 hours, so it was not sent again',
+  'notify_owner.unavailable': 'The owner cannot be notified in this run',
 };
 
 export const toolText = defineMessages('tool', ja, en);
