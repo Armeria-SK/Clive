@@ -476,6 +476,32 @@ test('実機（bash）: "…" の中の $( ) の中の引用符・コメント�
   }
 });
 
+// 最終審査で再現: $( ) の終わりの切り出しが bash とずれて、コメントの後ろ・case の )・$(( の部分シェル・[[ ]] のコメントと閉じ方・$[ ]・(( )) が、中の文を隠していた。
+// 素の bash では pwn.sh が動くこと（前提）と、Clive のシェルでは止まるか確かめになり、拒否すれば pwn.sh が動かないことを確かめる。ふつうの [[ ]] は承認なしで動く
+test('実機（bash）: 文を隠す形（$( ) の中のコメント・case の )・$(( の部分シェル・[[ ]]・$[ ]・(( ））は、素の bash では pwn.sh が動くが、Clive のシェルでは止まるか確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  const marker = s.files('ran.txt');
+  writeFileSync(s.files('pwn.sh'), '#!/bin/sh\necho ran > ran.txt\n', { mode: 0o755 });
+  const rows = [
+    'echo "$(# )\n./pwn.sh)"', 'x="$(# )\n./pwn.sh)"', 'echo "a$(#)\n./pwn.sh\n)"', 'echo "$(: # ) ;\n./pwn.sh)"', 'cat <(# )\n./pwn.sh)', 'echo "$(case x in x) ./pwn.sh;; esac)"', 'echo "$((true)\n./pwn.sh))"',
+    '[[ -n x # "\n]] && ./pwn.sh; echo "a" # "\n]]', 'if [[ -n x ]]; then ./pwn.sh ]] ; fi', 'if [[ -n x ]] then ./pwn.sh; fi', 'echo $[1 # $(./pwn.sh)]', '(( ls # )); ./pwn.sh',
+  ];
+  for (const command of rows) {
+    rmSync(marker, { force: true });
+    spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' });
+    assert.equal(existsSync(marker), true, `前提: 素の bash では pwn.sh が動く: ${JSON.stringify(command)}`);
+    rmSync(marker);
+    await expectBlocked(s, command);
+    assert.equal(existsSync(marker), false, `Clive のシェルで pwn.sh が動いた: ${JSON.stringify(command)}`);
+  }
+  for (const [command, expected] of [['if [[ -f a.txt ]]; then echo yes; fi', /yes/u], ['[[ -n x ]] && echo ok || echo no', /ok/u], ['echo "$(echo a#b) $#"', /a#b/u], ['echo $((1 + 2))', /3/u]] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
 const gitAvailable = spawnSync('git', ['--version']).status === 0;
 
 // 8 回目の審査（致命）: curl は URL の { } [ ] を展開し、-o の #1 に差し込み、-O は展開した名前で保存する。

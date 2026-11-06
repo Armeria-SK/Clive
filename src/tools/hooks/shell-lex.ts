@@ -51,7 +51,7 @@ export interface Statement {
 
 export type LexCode =
   | 'curly_quote' | 'dash' | 'space' | 'fullwidth' | 'control' | 'depth' | 'unclosed' | 'backtick' | 'backslash' | 'parse_token' | 'block_comment'
-  | 'provider_var' | 'dollar_form' | 'fd' | 'dev_net' | 'here_expand' | 'tilde_user' | 'ps_expand' | 'here_string' | 'ansi_c' | 'unexpected' | 'chain_op';
+  | 'provider_var' | 'dollar_form' | 'fd' | 'dev_net' | 'here_expand' | 'tilde_user' | 'ps_expand' | 'here_string' | 'ansi_c' | 'unexpected' | 'chain_op' | 'bash_sub';
 export interface LexFail { code: LexCode; detail: string }
 export type LexResult = { ok: true; statements: Statement[] } | { ok: false; fail: LexFail };
 
@@ -227,8 +227,28 @@ export function lexShell(command: string, shell: ShellKind): LexResult {
 const BASH_KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'for', 'case', 'esac', 'select', 'function', 'coproc', 'time', '!', '{', '}', 'trap']);
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
-// src[start] の ( に対応する ) の位置（引用符の中は数えない）。無ければ -1
+// src[start] の ( に対応する ) の位置（引用符の中は数えない）。無ければ -1。
+// bash は $( … ) の中をふつうの文として読むので、終わりの決め方は文法しだい（コメントの中の ) は閉じない、case の ) は閉じない）。
+// 次の形は、ガードの切り出した終わりが本物の bash とずれうるので、読めないとして SUB_AMBIGUOUS を返す:
+// 語の頭の # のコメント、引用符を数えた終わりと、引用符を無視して ( ) だけを数えた終わりが違う形（引用符の中に括弧がある）
+const SUB_AMBIGUOUS = -2;
 function closeParen(src: string, start: number): number {
+  const end = closeParenQuoted(src, start);
+  if (end < 0) return end;
+  return plainClose(src, start) === end ? end : SUB_AMBIGUOUS;
+}
+
+// src[open] の ( に対応する ) の位置（引用符は考えない）。無ければ -1
+function plainClose(src: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '(') depth++;
+    else if (src[i] === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function closeParenQuoted(src: string, start: number): number {
   let depth = 0;
   for (let i = start; i < src.length; i++) {
     const ch = src[i]!;
@@ -236,10 +256,11 @@ function closeParen(src: string, start: number): number {
     if (ch === '"') {
       for (i++; i < src.length && src[i] !== '"'; i++) {
         if (src[i] === '\\') i++;
-        else if (src[i] === '$' && src[i + 1] === '(') { const e = closeParen(src, i + 1); if (e < 0) return -1; i = e; }
+        else if (src[i] === '$' && src[i + 1] === '(') { const e = closeParen(src, i + 1); if (e < 0) return e; i = e; }
       }
       continue;
     }
+    if (ch === '#' && /[\s;&|()<>]/u.test(src[i - 1] ?? ' ')) return SUB_AMBIGUOUS;
     if (ch === '(') depth++;
     else if (ch === ')' && --depth === 0) return i;
   }
@@ -253,6 +274,8 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
   let cur = blank();
   let pipePrev = false;
   let dbl = false;
+  // [[ … ]] を閉じた直後。bash は ]] の次の語を、then・do などの言葉として読める新しい文の頭と見る（if [[ -n x ]] then pwn; fi）
+  let afterCond = false;
   const stack: string[] = [];
   const pending: Array<{ delim: string; quoted: boolean; strip: boolean }> = [];
 
@@ -270,10 +293,12 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     }
     pipePrev = pipeOut;
     cur = blank();
+    afterCond = false;
   };
 
   const readSubstitution = (at: number): { end: number; fail?: LexFail } => {
     const close = closeParen(src, at);
+    if (close === SUB_AMBIGUOUS) return { end: n, fail: fail('bash_sub') };
     if (close < 0) return { end: n, fail: fail('unclosed', '$(') };
     const inner = lexBash(src.slice(at + 1, close), depth + 1, sink, env);
     return inner ? { end: close, fail: inner } : { end: close };
@@ -283,14 +308,18 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
   const readDollar = (inQuote: boolean): { text: string; dynamic: boolean } | LexFail => {
     const next = src[i + 1];
     if (next === "'" || (next === '"' && !inQuote)) return fail('ansi_c');
+    // $[ … ] は古い算術展開。中は式として読まれ（# はコメントでない）、$( … ) も展開される
+    if (next === '[') return fail('dollar_form', '$[…]');
     if (next === '(') {
       if (src[i + 2] === '(') {
-        const e = src.indexOf('))', i + 3);
-        if (e < 0) return fail('unclosed', '$((');
-        if (!/^[0-9A-Za-z_\s+\-*/%()]*$/u.test(src.slice(i + 3, e).replace(/\$[A-Za-z_][A-Za-z0-9_]*/gu, ''))) return fail('dollar_form', '$((…))');
-        const text = src.slice(i, e + 2);
-        i = e + 2;
-        return { text, dynamic: true };
+        // 算術になるのは、2 つ目の ( に対応する ) のすぐ次がまた ) のときだけ。そうでなければ bash は $( の中の ( … ) の部分シェルとして読み、中の文を動かす（$((true)<改行>/path/cmd))）
+        const e = plainClose(src, i + 2);
+        if (e >= 0 && src[e + 1] === ')') {
+          if (!/^[0-9A-Za-z_\s+\-*/%()]*$/u.test(src.slice(i + 3, e).replace(/\$[A-Za-z_][A-Za-z0-9_]*/gu, ''))) return fail('dollar_form', '$((…))');
+          const text = src.slice(i, e + 2);
+          i = e + 2;
+          return { text, dynamic: true };
+        }
       }
       const r = readSubstitution(i + 1);
       if (r.fail) return r.fail;
@@ -313,7 +342,8 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
   const readWord = (): Word | LexFail => {
     const w = plain('');
     const stops = dbl ? ' \t\n' : ' \t\n;&|()<>';
-    while (i < n && !stops.includes(src[i]!)) {
+    // [[ … ]] の中の語は空白でだけ切るが、]] のすぐあとの ; & | ( ) < > では、bash も ]] を閉じる
+    while (i < n && !stops.includes(src[i]!) && !(dbl && w.text === ']]' && !w.quoted && ';&|()<>'.includes(src[i]!))) {
       const ch = src[i]!;
       if (ch === "'") {
         const e = src.indexOf("'", i + 1);
@@ -393,6 +423,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       case 'do': if (!['for', 'while'].includes(stack.at(-1) ?? '')) return fail('unexpected', 'do'); return true;
       case 'done': { const top = stack.pop(); if (top !== 'for' && top !== 'while') return fail('unexpected', 'done'); end(false); return true; }
       case 'for': cur.header = 'for'; stack.push('for'); return true;
+      case 'case': if (depth > 0) return fail('bash_sub'); cur.shapes.push('control'); return false;
       case '{': case '}': return true;
       default: cur.shapes.push('control'); return false;
     }
@@ -407,7 +438,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       if (pending.length) { const f = readHeredocs(); if (f) return f; }
       continue;
     }
-    if (ch === '#' && !dbl) { while (i < n && src[i] !== '\n') i++; continue; }
+    if (ch === '#') { while (i < n && src[i] !== '\n') i++; continue; }
     if (!dbl) {
       if (ch === ';') { i += src[i + 1] === ';' ? 2 : 1; end(false); continue; }
       if (ch === '&' && src[i + 1] === '&') { i += 2; end(false); continue; }
@@ -421,7 +452,8 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       if (ch === '&' && src[i + 1] !== '>') { i++; cur.background = true; end(false); continue; }
       if (ch === '(' || ch === ')') {
         if (ch === '(' && cur.words.length > 0 && !/\s/u.test(src[i - 1] ?? ' ')) cur.shapes.push('function');
-        if (ch === '(' && src[i + 1] === '(') cur.shapes.push('control');
+        // (( … )) は算術のコマンド。中は式として読まれ、# はコメントでない（(( ls # )); pwn は pwn も動かす）
+        if (ch === '(' && src[i + 1] === '(') return fail('unexpected', '((');
         i++;
         end(false);
         continue;
@@ -504,6 +536,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     const w = readWord();
     if (isFail(w)) return w;
     if (i === before) return fail('unexpected', src[i] ?? '');
+    if (afterCond) end(false);
     const atCommand = cur.words.length === 0 && cur.header === undefined && cur.assigns.length === 0;
     if (atCommand && !dbl && !w.quoted && !w.dynamic && !w.glob && BASH_KEYWORDS.has(w.text)) {
       const r = keyword(w.text);
@@ -512,7 +545,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     }
     cur.words.push(w);
     if (cur.words.length === 1 && !w.quoted && w.text === '[[') dbl = true;
-    else if (dbl && w.text === ']]') dbl = false;
+    else if (dbl && w.text === ']]') { dbl = false; afterCond = true; }
   }
   if (pending.length) return fail('unclosed', '<<');
   if (dbl) return fail('unclosed', '[[');

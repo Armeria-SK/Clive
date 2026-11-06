@@ -154,6 +154,43 @@ test('bash（Windows）: 素の bash -c は連続する \\\\ を 1 つに減ら�
   assert.ok(differ.every(row => row.includes('\\\\')), `\\\\ を含まない行が -c で変わった: ${differ.filter(row => !row.includes('\\\\')).join(' / ')}`);
 });
 
+// 最終審査で再現: $( … ) の終わりの切り出しが本物の bash とずれて、中の文を引用符の中の文字に見せかけていた形。コメントの中の ) では閉じない、case の ) では閉じない、
+// $(( は 2 つ目の ( に対応する ) の次が ) でなければ算術でなく部分シェル、[[ ]] の中でも # はコメント、[[ ]]; で閉じて then は言葉、$[ ] と (( )) の中は式（# はコメントでない）。
+// 本物の bash では pwn が動く（前提）。字句の読み取りは、止めるか pwn を文として読む（隠さない）
+const BASH_HIDING_ROWS = [
+  'echo "$(# )\npwn)"', 'echo "$(echo a # )\npwn)"', 'x="$(# )\npwn)"', 'echo "a$(#)\npwn\n)"', 'echo "$(: # ) ;\npwn)"', 'echo $(# )\npwn)', 'cat <(# )\npwn)', 'echo "$(echo "$(# )\npwn)")"',
+  'echo "$(case x in x) pwn;; esac)"', 'echo $(case x in x) pwn;; esac)',
+  'echo "$((true)\npwn))"', 'x=$((true)\npwn)', 'echo "$((true) \npwn )"',
+  '[[ -n x # "\n]] && pwn; echo "a" # "\n]]', "[[ -n x # '\n]] && pwn; echo '' # '\n]]",
+  'if [[ -n x ]]; then pwn ]] ; fi', 'if [[ -n x ]] then pwn; fi', 'echo $[1 # $(pwn)]', 'echo "$[1 # $(pwn)]"', '(( ls # )); pwn',
+];
+
+test('bash: 文を隠せた形（$( ) の中のコメント・case の )・$(( の部分シェル・[[ ]] のコメントと閉じ方・$[ ]・(( ））は、本物の bash では pwn が動く。字句の読み取りは止めるか、pwn を文として読む', { skip: !bashPath && 'bash が無い' }, t => {
+  const dir = scratch(t);
+  const ran = join(dir, 'cwd', 'ran.txt');
+  const notRun: string[] = [];
+  const hidden: string[] = [];
+  for (const row of BASH_HIDING_ROWS) {
+    rmSync(ran, { force: true });
+    viaFile(dir, `pwn() { echo ran >> ran.txt; }\n${row}`);
+    if (!existsSync(ran)) notRun.push(row);
+    const lexed = lexShell(row, 'bash');
+    if (lexed.ok && !lexed.statements.some(s => s.words[0]?.text === 'pwn')) hidden.push(row);
+  }
+  assert.deepEqual(notRun, [], '前提: 本物の bash では pwn が動く');
+  assert.deepEqual(hidden, [], '字句の読み取りが pwn を文として見ないまま、読めたことにした');
+});
+
+test('bash: 止めない形（語の途中の #・$#・引用符の中の #・算術）は、本物の bash でも普通に動き、字句の読み取りも読める', { skip: !bashPath && 'bash が無い' }, t => {
+  const dir = scratch(t);
+  const rows = ['echo "$(echo a#b)"', 'echo "$(echo $#)"', 'echo "$(echo "#")"', 'echo $(printf "%s" "a # b")', 'echo $((1 + 2))', 'echo "$((n * 2))"', 'echo "$(date +%s | wc -c)"', 'echo hi # (comment ) here', 'if [[ -n x ]]; then echo hi; fi', '[[ -n x ]] && echo y || echo n', '[[ a =~ (a|b) ]]; echo $?', 'for f in a b; do [[ -n "$f" ]] && echo "$f"; done'];
+  for (const row of rows) {
+    const real = viaFile(dir, `n=3\n${row}`);
+    assert.equal(real.status, 0, `${row}: 本物の bash が失敗 ${real.stderr.trim()}`);
+    assert.equal(lexShell(row, 'bash').ok, true, `${row}: 読めない`);
+  }
+});
+
 function psHost(): string | undefined {
   if (process.platform !== 'win32') return undefined;
   const probe = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'echo ok'], { encoding: 'utf8' });

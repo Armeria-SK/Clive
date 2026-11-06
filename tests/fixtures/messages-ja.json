@@ -247,6 +247,7 @@
     "lex.ansi_c": "$'…' / $\"…\"",
     "lex.unexpected": "読み取れない形（{detail}）",
     "lex.chain_op": "この PowerShell は {detail} を知りません（5.1）",
+    "lex.bash_sub": "$( … ) の中の # のコメント・引用符の中の括弧・case（bash が $( … ) の終わりを決める読み方と、ガードの読み方がずれるため）",
     "shape.call": "呼び出し演算子 &（呼ぶ先が分からない）",
     "shape.dot_source": "ドットソース（. ファイル）",
     "shape.splat": "@変数（どの引数が渡るか見えない splatting）",
