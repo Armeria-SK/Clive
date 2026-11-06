@@ -102,7 +102,11 @@ export const docRead: ToolDef<{ path: string; offset?: number; limit?: number }>
   input: Type.Object({ path: PathArg, offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task'],
-  preCheck: (input, ctx) => checkFilePath(input.path, 'read', ctx).check,
+  // 文書は外部のデータなので、読んだ実行に「外から読んだ」印を付ける（Web の読み取りと同じ）。断られた読み取りは印を付けない
+  preCheck: (input, ctx) => {
+    const check = checkFilePath(input.path, 'read', ctx).check;
+    return check.decision === 'deny' ? check : { ...check, fetched: true };
+  },
   async execute(input, ctx) {
     const { abs, check } = checkFilePath(input.path, 'read', ctx);
     const language = languageOf(ctx.config);
