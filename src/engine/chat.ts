@@ -202,6 +202,8 @@ export class ChatEngine {
     if (!chain.usable.length) return this.#noUsableModel(chain.problems);
     const preempted = this.#preemptFor(chain.usable);
     this.lastUserActivity = this.#d.now?.().getTime() ?? Date.now();
+    // ユーザーが同じ id へ新しく送ったときは、消したばかりの会話の覚えを外す（動いていた実行の遅れた書き込みだけを見送るため）
+    this.#d.conversations.reopen(conversationId);
     if (choice.modelId !== undefined || choice.effort !== undefined) this.#d.conversations.setChoice(conversationId, choice);
     const runId = randomUUID();
     if (preempted.length) this.#preemptedTasks.set(runId, preempted);

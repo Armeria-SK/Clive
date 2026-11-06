@@ -36,10 +36,33 @@ export function messageText(message: ChatMessage): string {
   return message.content;
 }
 
+// 消した会話の id を覚えておく時間
+const DELETED_TTL_MS = 10 * 60_000;
+
 export class Conversations {
   readonly db: DatabaseSync;
   readonly now: () => number;
-  constructor(db: DatabaseSync, now: () => number = Date.now) { this.db = db; this.now = now; }
+  readonly #log: ((line: string) => void) | undefined;
+  // 消した会話の id と、覚えておく期限。消したあとに、動いていた実行の遅れた書き込みが、会話を作り直さないようにする
+  readonly #deleted = new Map<string, number>();
+  constructor(db: DatabaseSync, now: () => number = Date.now, log?: (line: string) => void) { this.db = db; this.now = now; this.#log = log; }
+
+  // 消した会話の id を、しばらくのあいだ覚える（その間、その id への ensure / append / setChoice は、会話を作らずに見送る）
+  markDeleted(ids: readonly string[]): void {
+    const now = this.now();
+    for (const [id, until] of this.#deleted) if (until <= now) this.#deleted.delete(id);
+    for (const id of ids) this.#deleted.set(id, now + DELETED_TTL_MS);
+  }
+
+  // 消した id への新しい発言（持ち主が、同じ id へ送り直した）のとき、覚えを外す。呼ぶのは、ユーザーの発言を受け付ける入口だけ
+  reopen(id: string): void { this.#deleted.delete(id); }
+
+  #isDeleted(id: string): boolean {
+    const until = this.#deleted.get(id);
+    if (until === undefined) return false;
+    if (until <= this.now()) { this.#deleted.delete(id); return false; }
+    return true;
+  }
 
   create(input: { title?: string; kind?: 'chat' | 'task'; id?: string } = {}): ConversationRow {
     const now = this.now();
@@ -74,16 +97,18 @@ export class Conversations {
     return { summary: row?.summary?.trim() ? row.summary : null, upto: row?.summary?.trim() ? upto : null, summarizedMessages: row?.summary?.trim() ? count : 0 };
   }
 
-  // 無ければ空の会話を作る（最初の発言の前に、選んだモデルを覚えるため）
-  ensure(id: string): void {
-    if (this.get(id)) return;
+  // 無ければ空の会話を作る（最初の発言の前に、選んだモデルを覚えるため）。消したばかりの会話は作り直さず、false を返す（見送ったことを記録する）
+  ensure(id: string): boolean {
+    if (this.get(id)) return true;
+    if (this.#isDeleted(id)) { this.#log?.(`[WARN] 消した会話 ${id} への書き込みを見送りました（会話を作り直しません）`); return false; }
     const now = this.now();
     this.db.prepare(`INSERT INTO conversations (id, kind, created_at, last_message_at) VALUES (?, 'chat', ?, ?)`).run(id, now, now);
+    return true;
   }
 
   // 会話で選んだモデルと考える深さ。渡さなかった方は変えない（null は自動・モデルの既定に戻す）
   setChoice(id: string, choice: { modelId?: string | null | undefined; effort?: string | null | undefined }): void {
-    this.ensure(id);
+    if (!this.ensure(id)) return;
     if (choice.modelId !== undefined) this.db.prepare('UPDATE conversations SET model_id = ? WHERE id = ?').run(choice.modelId, id);
     if (choice.effort !== undefined) this.db.prepare('UPDATE conversations SET effort = ? WHERE id = ?').run(choice.effort, id);
   }
@@ -109,8 +134,9 @@ export class Conversations {
   append(conversationId: string, message: ChatMessage, runId?: string): StoredMessage {
     return transaction(this.db, () => {
       const now = this.now();
-      this.ensure(conversationId);
       const text = messageText(message);
+      // 消したばかりの会話への遅れた書き込みは、保存しない（id 0 を返す）
+      if (!this.ensure(conversationId)) return { id: 0, conversation_id: conversationId, run_id: runId ?? null, role: message.role, text, message, created_at: now };
       const result = this.db.prepare(`INSERT INTO messages (conversation_id, run_id, role, text, parts, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(conversationId, runId ?? null, message.role, text, JSON.stringify(message), now);
       this.db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(now, conversationId);

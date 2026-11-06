@@ -25,6 +25,8 @@ import { LiveStreams } from './sse.ts';
 import { serveStatic } from './static.ts';
 
 const MAX_MESSAGE_CHARS = 100_000;
+// 会話を消すとき、動いている振り返りを止めて待つのを繰り返す回数の上限（超えたら 409 で消さない）
+const MAX_REVIEW_STOP_ROUNDS = 10;
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export interface WebServer {
@@ -153,13 +155,20 @@ export function createWebServer(app: App): WebServer {
     if (conversation.kind !== 'chat') throw problem(409, 'conflict', 'conversation_not_deletable');
     const running = () => app.engine.activeRuns().some(r => r.conversationId === id);
     if (running()) throw problem(409, 'conflict', 'conversation_running');
-    const reviewConversations = new Set(app.reviews.runningFor(id).map(j => j.review_conversation_id));
-    const reviewRuns = app.engine.activeRuns().filter(r => r.kind === 'review' && reviewConversations.has(r.conversationId));
-    for (const run of reviewRuns) app.engine.stop(run.runId);
-    await Promise.all(reviewRuns.map(run => app.engine.wait(run.runId)));
+    // 振り返りを止めて待つあいだに、次の振り返りが始まらないよう、毎回、待っている振り返りを先に外してから、動いているものを止める。動いているものが無くなるまで繰り返す。
+    // 最後の確かめと消すところのあいだには await が無いので、そのあいだに振り返りは始まらない
+    for (let round = 0; ; round++) {
+      app.reviews.dropPendingFor(id);
+      const reviewConversations = new Set(app.reviews.runningFor(id).map(j => j.review_conversation_id));
+      const reviewRuns = app.engine.activeRuns().filter(r => r.kind === 'review' && reviewConversations.has(r.conversationId));
+      if (!reviewRuns.length) break;
+      if (round >= MAX_REVIEW_STOP_ROUNDS) throw problem(409, 'conflict', 'conversation_running');
+      for (const run of reviewRuns) app.engine.stop(run.runId);
+      await Promise.all(reviewRuns.map(run => app.engine.wait(run.runId)));
+    }
     if (!app.conversations.get(id)) throw problem(404, 'not_found', 'conversation_missing');
     if (running()) throw problem(409, 'conflict', 'conversation_running');
-    const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs') }, id);
+    const erased = eraseConversation({ db: app.db, uploadsDir: app.paths.uploads, toolOutputsDir: join(app.paths.data, 'tool_outputs'), markDeleted: ids => app.conversations.markDeleted(ids) }, id);
     app.approvals.forgetConversation(id);
     if (erased.files.failed.length) app.log(`[WARN] 会話を消したあと、消せなかったファイルがあります: ${erased.files.failed.join(', ')}`);
     app.bus.publish({ type: 'conversation.changed', conversationId: id, change: 'deleted' });

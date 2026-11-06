@@ -8,6 +8,8 @@ export interface EraseDeps {
   uploadsDir: string;
   // 長いシェル出力の全文を置くフォルダ（道具の記録の full_ref はこの下のものだけ消す）
   toolOutputsDir: string;
+  // 消した会話（と、いっしょに消した振り返りの会話）の id を渡す。動いていた実行の遅れた書き込みが、消した会話を作り直さないようにするための覚え
+  markDeleted?: ((ids: string[]) => void) | undefined;
 }
 
 export interface EraseResult {
@@ -29,13 +31,15 @@ const inside = (dir: string, path: string): boolean => { const base = resolve(di
 export function eraseConversation(deps: EraseDeps, id: string): EraseResult {
   const { db } = deps;
   const files: string[] = [];
+  let reviewIds: string[] = [];
   const result = transaction(db, (): Omit<EraseResult, 'files'> => {
-    const reviewIds = (db.prepare(`SELECT DISTINCT j.review_conversation_id AS id FROM memory_jobs j JOIN conversations c ON c.id = j.review_conversation_id
+    reviewIds = (db.prepare(`SELECT DISTINCT j.review_conversation_id AS id FROM memory_jobs j JOIN conversations c ON c.id = j.review_conversation_id
       WHERE j.conversation_id = ? AND c.kind = 'task'`).all(id) as Array<{ id: string }>).map(r => r.id);
     for (const reviewId of reviewIds) eraseOne(deps, reviewId, files);
     db.prepare('UPDATE memory_jobs SET review_conversation_id = NULL, note = NULL WHERE conversation_id = ?').run(id);
     return { ...eraseOne(deps, id, files), reviews: reviewIds.length };
   });
+  deps.markDeleted?.([id, ...reviewIds]);
   // ファイルは、記録を消したあとで消す。消せなかったものは数えて返す（記録はもう無いので、残った分は孤児のファイル）
   const failed: string[] = [];
   let removed = 0;

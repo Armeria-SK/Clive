@@ -100,7 +100,7 @@ export class App {
     this.bootServer = structuredClone(config.server);
     this.db = openDatabase(options.databasePath ?? this.paths.database, MIGRATIONS, { backupDir: this.paths.backups });
     const now = options.now ?? Date.now;
-    this.conversations = new Conversations(this.db, now);
+    this.conversations = new Conversations(this.db, now, this.log);
     this.runs = new Runs(this.db, now);
     this.kv = new KV(this.db, now);
     const dangling = this.runs.closeDangling(engineText(languageOf(config), 'run.restart_interrupted'));

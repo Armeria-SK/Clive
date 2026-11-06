@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { builtinTools } from '../src/app.ts';
 import type { RunEvent } from '../src/engine/types.ts';
+import { Conversations } from '../src/db/conversations.ts';
+import { openDatabase } from '../src/db/database.ts';
+import { MIGRATIONS } from '../src/db/migrations.ts';
 import { searchHistory } from '../src/memory/history.ts';
 import { inputHash } from '../src/tools/approvals.ts';
 import { replyLanguageKey, snapshotLanguageKey } from '../src/engine/prompts.ts';
@@ -235,4 +238,86 @@ test('削除: この会話の振り返りが動いている最中なら、止め
       }
     }
   } finally { app.engine.stopAll(); await tick; }
+});
+
+// ── 競合: 消している最中に、次の振り返りが始まらない・消した会話が作り直されない ──
+test('削除: 動いている振り返りを止めて待っているあいだに、その会話の待っている振り返りは先に外す（待っているあいだに次の振り返りが始まらない）', async t => {
+  const s = await startApp(t);
+  const { app } = s;
+  app.conversations.create({ id: TARGET, title: '会話' });
+  app.conversations.append(TARGET, { role: 'user', content: 'はなした' });
+  app.conversations.append(TARGET, { role: 'assistant', content: 'はい' });
+  let release!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let aborted = false;
+  // 止められても、合図があるまで終わらない（止めた実行の終わりを待っている最中を作る）
+  s.adapter().scripts = [async function* (req) {
+    yield { type: 'text', delta: '途中まで' };
+    await new Promise<void>(resolve => req.signal.addEventListener('abort', () => { aborted = true; resolve(); }, { once: true }));
+    await released;
+    throw req.signal.reason;
+  }];
+  app.reviews.enqueue('manual', `manual:${TARGET}`, { conversationId: TARGET });
+  const queued = app.reviews.enqueue('idle', `idle:${TARGET}:9`, { conversationId: TARGET })!;
+  const tick = app.worker.tick();
+  try {
+    await waitFor(() => app.engine.activeRuns().some(r => r.kind === 'review'), '振り返りの実行');
+    const deleting = s.json(`/api/conversations/${TARGET}`, 'DELETE');
+    await waitFor(() => aborted, '振り返りを止めた');
+    assert.equal(app.reviews.get(queued.id), undefined, '待っている振り返りは、止めた実行の終わりを待つより前に外してある');
+    assert.equal(app.reviews.next(), undefined, 'ワーカーが選べる振り返りは残っていない');
+    // 待っているあいだに積まれた振り返りも、消す前に外す
+    const late = app.reviews.enqueue('manual', `manual:late:${TARGET}`, { conversationId: TARGET })!;
+    release();
+    const res = await deleting;
+    assert.equal(res.status, 200);
+    await tick;
+    assert.equal(app.reviews.get(late.id), undefined, '待っているあいだに積まれた振り返りも、始まらずに外れている');
+    assert.equal((app.db.prepare("SELECT COUNT(*) AS n FROM engine_runs WHERE kind = 'review'").get() as { n: number }).n, 1, '振り返りの実行は 1 回だけ');
+    assert.equal(app.conversations.get(TARGET), undefined);
+    assert.equal((app.db.prepare("SELECT COUNT(*) AS n FROM conversations").get() as { n: number }).n, 0, '会話が作り直されていない（振り返りの会話も含めて 0）');
+  } finally { release(); app.engine.stopAll(); await tick; }
+});
+
+test('削除: 消した会話の id への遅れた書き込み（動いていた実行の終わりの処理）は、会話を作り直さない。短いあいだだけで、同じ id への新しい発言は今までどおり会話を作る', async () => {
+  let now = 1_000_000;
+  const logs: string[] = [];
+  const db = openDatabase(':memory:', MIGRATIONS);
+  const conversations = new Conversations(db, () => now, line => logs.push(line));
+  conversations.create({ id: 'c1' });
+  conversations.append('c1', { role: 'user', content: 'はなした' });
+  conversations.markDeleted(['c1']);
+  db.prepare('DELETE FROM conversations WHERE id = ?').run('c1');
+  const late = conversations.append('c1', { role: 'assistant', content: '遅れて届いた返事' });
+  assert.equal(late.id, 0, '保存しなかった印');
+  conversations.ensure('c1');
+  conversations.setChoice('c1', { modelId: 'm1' });
+  assert.equal(conversations.get('c1'), undefined, '会話を作り直さない');
+  assert.deepEqual(conversations.messages('c1'), []);
+  assert.ok(logs.length >= 2 && logs.every(line => line.includes('c1')), `書き込みを見送ったことを記録する: ${logs.join(' / ')}`);
+  conversations.reopen('c1');
+  assert.ok(conversations.append('c1', { role: 'user', content: '同じ id への新しい発言' }).id > 0, '新しい発言は、会話を作る');
+  assert.equal(conversations.get('c1')!.kind, 'chat');
+  conversations.markDeleted(['c2']);
+  now += 11 * 60_000;
+  assert.ok(conversations.append('c2', { role: 'user', content: '時間が経ったあと' }).id > 0, '短いあいだだけの印で、あとは今までどおり');
+  db.close();
+});
+
+test('削除: 消した会話（と、その振り返りの会話）への遅れた書き込みは、API で消したあとも会話を作り直さない。同じ id へ新しく送れば、新しい会話ができる', async t => {
+  const s = await startApp(t);
+  const { app } = s;
+  const p = await populate(s);
+  assert.equal((await s.json(`/api/conversations/${TARGET}`, 'DELETE')).status, 200);
+  app.conversations.append(TARGET, { role: 'assistant', content: '遅れて届いた返事' }, 'run-late');
+  app.conversations.append(p.reviewId, { role: 'assistant', content: '遅れて届いた振り返りの返事' }, 'run-late');
+  assert.equal(app.conversations.get(TARGET), undefined, '消した会話を作り直さない');
+  assert.equal(app.conversations.get(p.reviewId), undefined, '消した振り返りの会話を、チャットの会話として作り直さない');
+  assert.deepEqual(app.conversations.messages(TARGET), []);
+  s.adapter().scripts = [reply('新しい返事')];
+  const again = await s.json(`/api/conversations/${TARGET}/messages`, 'POST', { text: '同じ id への新しい発言' });
+  assert.equal(again.status, 202);
+  await waitFor(() => app.runs.get(again.body.runId)?.ended_at != null);
+  assert.equal(app.conversations.get(TARGET)!.kind, 'chat');
+  assert.deepEqual(app.conversations.messages(TARGET).map(m => m.text), ['同じ id への新しい発言', '新しい返事']);
 });
