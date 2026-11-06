@@ -17,7 +17,7 @@ function snippet(text: string, terms: readonly string[], width = 160): string {
   return `${start > 0 ? '…' : ''}${text.slice(start, start + width).replace(/\s+/gu, ' ').trim()}${start + width < text.length ? '…' : ''}`;
 }
 
-// visibleModelIds: 渡したとき、会話で選んだモデル（conversations.model_id）がこの一覧に無い会話の発言は出さない（選んでいない会話は出す）。
+// visibleModelIds: 渡したとき、会話で選んだモデル（conversations.model_id）がこの一覧に無い会話と、手元のモデルだけで動かすタスク（tasks.local_only）の会話の発言は出さない（選んでいない会話は出す）。
 // 手元のモデルで話した会話を、外のモデルの実行に見せないため、外と分かっているモデルの一覧を渡す（設定から消えたモデルを選んだ会話も出ない）。画面の検索は渡さない
 export function searchHistory(db: DatabaseSync, query: string, options: { days?: number | undefined; limit?: number; now?: number; excludeConversationId?: string; visibleModelIds?: readonly string[] | undefined } = {}): HistoryHit[] {
   const terms = searchTerms(query);
@@ -26,7 +26,7 @@ export function searchHistory(db: DatabaseSync, query: string, options: { days?:
   const since = options.days ? (options.now ?? Date.now()) - options.days * 86_400_000 : 0;
   const exclude = options.excludeConversationId ?? '';
   const visible = options.visibleModelIds;
-  const hiddenClause = visible ? ` AND (c.model_id IS NULL${visible.length ? ` OR c.model_id IN (${visible.map(() => '?').join(', ')})` : ''})` : '';
+  const hiddenClause = visible ? ` AND (c.model_id IS NULL${visible.length ? ` OR c.model_id IN (${visible.map(() => '?').join(', ')})` : ''}) AND NOT EXISTS (SELECT 1 FROM tasks lt WHERE lt.conversation_id = c.id AND lt.local_only = 1)` : '';
   const rows = terms.every(t => [...t].length >= 3)
     ? db.prepare(`
         SELECT m.id, m.conversation_id, m.role, m.text, m.created_at, c.title FROM messages_fts f
@@ -42,11 +42,12 @@ export function searchHistory(db: DatabaseSync, query: string, options: { days?:
   }));
 }
 
-// visibleModelIds: searchHistory と同じ。この会話が選んだモデルがこの一覧に無ければ、無いときと同じ（空）を返す
+// visibleModelIds: searchHistory と同じ。この会話が選んだモデルがこの一覧に無い、または手元のモデルだけで動かすタスクの会話なら、無いときと同じ（空）を返す
 export function readHistory(db: DatabaseSync, conversationId: string, options: { aroundMessageId?: number | undefined; limit?: number; visibleModelIds?: readonly string[] | undefined } = {}): Array<{ id: number; role: string; text: string; createdAt: number }> {
   if (options.visibleModelIds) {
     const chosen = (db.prepare('SELECT model_id FROM conversations WHERE id = ?').get(conversationId) as { model_id: string | null } | undefined)?.model_id;
     if (chosen != null && !options.visibleModelIds.includes(chosen)) return [];
+    if (db.prepare('SELECT 1 FROM tasks WHERE conversation_id = ? AND local_only = 1').get(conversationId)) return [];
   }
   const limit = Math.min(options.limit ?? 20, 60);
   const rows = options.aroundMessageId === undefined

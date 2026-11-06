@@ -98,7 +98,7 @@ export const memorySearch: ToolDef<{ query: string; limit?: number }> = {
   },
 };
 
-// この実行のモデルが手元だけでなければ（外のモデルが入っていれば）、選んだモデルが外と分かっている会話だけを見せる（手元のモデルを選んだ会話と、選んだモデルが設定から消えた会話は見せない）
+// この実行のモデルが手元だけでなければ（外のモデルが入っていれば）、選んだモデルが外と分かっている会話だけを見せる（手元のモデルを選んだ会話と、選んだモデルが設定から消えた会話と、手元のモデルだけで動かすタスクの会話は見せない）
 const visibleModels = (ctx: ToolContext): string[] | undefined => ctx.modelsLocal === true ? undefined : externalModelIds(ctx.config);
 
 const fmtDate = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');

@@ -255,7 +255,53 @@ test('履歴の検索・読み出しの visibleModelIds: 空の一覧を渡す�
   assert.equal(readHistory(s.app.db, uuid(13), {}).length, 1);
 });
 
-// ── 3: 手元のモデルを選んだ会話から作ったタスクは、手元のモデルだけで動かす ──
+function taskConversation(s: Started, id: string, localOnly: boolean, text: string) {
+  const task = s.app.tasks.create({ title: `タスク ${id.slice(-2)}`, origin: 'user', actor: 'user', localOnly });
+  s.app.conversations.create({ id, kind: 'task', title: `タスクの会話 ${id.slice(-2)}` });
+  s.app.conversations.append(id, { role: 'user', content: text });
+  assert.ok(s.app.tasks.claim(task.id, 60_000, id), '前提: タスクの会話として結び付いた');
+  return task;
+}
+
+test('履歴の検索・読み出し: 手元のモデルだけで動かすタスク（local_only）の会話も、外のモデルが入る実行には出さない。手元だけの実行・画面の検索には出る', async t => {
+  const s = await startApp(t, twoProviders([]));
+  historyFixtures(s);
+  taskConversation(s, uuid(31), true, `手元だけのタスクの内容 ${WORD}`);
+  taskConversation(s, uuid(32), false, `ふつうのタスクの内容 ${WORD}`);
+
+  const external = await searchFrom(s, uuid(20), 'ext1', call('history_search', { query: WORD }), 'ext');
+  assert.match(external, /ふつうのタスクの内容/u, '手元でないタスクの会話は出る');
+  assert.doesNotMatch(external, /手元だけのタスクの内容/u, '手元のタスクの会話は、外のモデルに渡さない');
+  const auto = await searchFrom(s, uuid(21), null, call('history_search', { query: WORD }), 'fake');
+  assert.doesNotMatch(auto, /手元だけのタスクの内容/u, '自動の会話の鎖に外のモデルが含まれるときも出さない');
+
+  const denied = await searchFrom(s, uuid(22), 'ext1', call('history_read', { conversation_id: uuid(31) }), 'ext');
+  assert.doesNotMatch(denied, /手元だけのタスクの内容/u);
+  assert.equal(denied, await searchFrom(s, uuid(23), 'ext1', call('history_read', { conversation_id: uuid(99) }), 'ext'), '存在しない会話と同じ文');
+  assert.match(await searchFrom(s, uuid(24), 'ext1', call('history_read', { conversation_id: uuid(32) }), 'ext'), /ふつうのタスクの内容/u);
+
+  const local = await searchFrom(s, uuid(25), 'loc', call('history_search', { query: WORD }), 'fake');
+  assert.match(local, /手元だけのタスクの内容/u, '手元のモデルだけの実行には出る');
+  assert.match(await searchFrom(s, uuid(26), 'loc', call('history_read', { conversation_id: uuid(31) }), 'fake'), /手元だけのタスクの内容/u);
+  const screen = await s.json(`/api/history?q=${WORD}`, 'GET');
+  assert.ok(screen.body.hits.some((h: { conversationId: string }) => h.conversationId === uuid(31)), '画面の検索は今までどおり全部');
+});
+
+test('履歴の検索・読み出しの visibleModelIds: タスクがあとから local_only になれば、その会話も見えなくなる。会話に結び付かないタスクは何も隠さない', async t => {
+  const s = await startApp(t, twoProviders([]));
+  const task = taskConversation(s, uuid(32), false, `ふつうのタスクの内容 ${WORD}`);
+  s.app.tasks.create({ title: '会話がまだ無いタスク', origin: 'user', actor: 'user', localOnly: true });
+  const ids = (options: { visibleModelIds?: string[] }) => searchHistory(s.app.db, WORD, options).map(h => h.conversationId);
+  assert.deepEqual(ids({ visibleModelIds: ['ext2'] }), [uuid(32)]);
+  assert.equal(readHistory(s.app.db, uuid(32), { visibleModelIds: ['ext2'] }).length, 1);
+  s.app.tasks.markLocalOnly(task.id);
+  assert.deepEqual(ids({ visibleModelIds: ['ext2'] }), []);
+  assert.deepEqual(ids({}), [uuid(32)], '一覧を渡さなければ（画面の検索）全部');
+  assert.equal(readHistory(s.app.db, uuid(32), { visibleModelIds: ['ext2'] }).length, 0);
+  assert.equal(readHistory(s.app.db, uuid(32), {}).length, 1);
+});
+
+// ── 3:手元のモデルを選んだ会話から作ったタスクは、手元のモデルだけで動かす ──
 const taskRows = (s: Started) => s.app.tasks.list({ statuses: ['inbox', 'ready', 'running', 'waiting', 'scheduled', 'done', 'failed', 'cancelled'] });
 
 async function runIn(s: Started, id: string, modelId: string | null, scripts: Script[], adapterId: 'fake' | 'ext' = 'fake'): Promise<void> {
