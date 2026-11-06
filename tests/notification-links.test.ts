@@ -110,4 +110,22 @@ for (const language of ['ja', 'en'] as const) {
     assert.ok(!links.some(link => /#\/(review|today|curiosity|notifications)/u.test(link ?? '')));
     assert.deepEqual([...new Set(links.map(link => link!.replace(/[0-9a-f-]{36}/u, '<id>').replace(/skills\/draft\/.*/u, 'skills/draft/<name>')))].sort(), ['#/settings', '#/skills/draft/<name>', '#/tasks', '#/tasks/<id>']);
   });
+
+  test(`持ち主への知らせはタスクを指し、同じ題は重ねない（${language}）`, async t => {
+    const s = await setup(t, c => { c.language = language; c.worker.maxRunsPerHour = 100; });
+    const task = s.app.tasks.create({ title: 'Notify', origin: 'user', actor: 'user' });
+    s.adapter().scripts.push(toolCall('notify_owner', { title: '途中の知らせ' }));
+    assert.equal(await s.app.worker.tick(), 'ran');
+    const prefix = language === 'ja' ? 'Clive より: ' : 'From Clive: ';
+    const first = s.app.notifications.list().find(n => n.kind === 'info');
+    assert.equal(first?.link, `#/tasks/${task.id}`);
+    assert.ok(first?.title.startsWith(prefix), first?.title);
+
+    // 同じタスクで同じ題をもう一度出させても、行は増えない（24 時間に 1 回だけ）。タスクは進み方を決めずに終わったので 15 分後まで休む
+    const before = s.app.notifications.list().filter(n => n.kind === 'info').length;
+    s.clock.now += 16 * MIN;
+    s.adapter().scripts.push(toolCall('notify_owner', { title: '途中の知らせ' }));
+    assert.equal(await s.app.worker.tick(), 'ran');
+    assert.equal(s.app.notifications.list().filter(n => n.kind === 'info').length, before);
+  });
 }
