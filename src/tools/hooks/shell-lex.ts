@@ -326,7 +326,10 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
         // 算術になるのは、2 つ目の ( に対応する ) のすぐ次がまた ) のときだけ。そうでなければ bash は $( の中の ( … ) の部分シェルとして読み、中の文を動かす（$((true)<改行>/path/cmd))）
         const e = plainClose(src, i + 2);
         if (e >= 0 && src[e + 1] === ')') {
-          if (!/^[0-9A-Za-z_\s+\-*/%()]*$/u.test(src.slice(i + 3, e).replace(/\$[A-Za-z_][A-Za-z0-9_]*/gu, ''))) return fail('dollar_form', '$((…))');
+          const body = src.slice(i + 3, e);
+          if (!/^[0-9A-Za-z_\s+\-*/%()]*$/u.test(body.replace(/\$[A-Za-z_][A-Za-z0-9_]*/gu, ''))) return fail('dollar_form', '$((…))');
+          // 名前や $変数が入ると、値が式として評価される（値に a[$(コマンド)] があればコマンドが動く）。整数の定数だけでなければ今回だけ
+          if (!/^[\s0-9+\-*/%()]*$/u.test(body)) cur.shapes.push(`arith:${body.trim().slice(0, 40)}`);
           const text = src.slice(i, e + 2);
           i = e + 2;
           return { text, dynamic: true };

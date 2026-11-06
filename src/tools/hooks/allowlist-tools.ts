@@ -108,11 +108,38 @@ register(['printf'], (words, acc, ctx) => {
   }
 }, true);
 const FILE_TESTS = new Set(['-e', '-f', '-d', '-r', '-w', '-x', '-s', '-L', '-h', '-p', '-S', '-b', '-c', '-O', '-G', '-N', '-k', '-u', '-g', '-t']);
+// 値を式や配列の添字として評価する形は、値が整数の定数だけでなければ今回だけ（持ち主の許可でも外せない）。値に a[$(コマンド)] が入っていると、そのコマンドが動くため
+const INT_LITERAL = /^[+-]?[0-9]+$/u;
+const PLAIN_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const NUM_OPS = new Set(['-eq', '-ne', '-lt', '-le', '-gt', '-ge']);
+const arithOnce = (acc: Acc, cmd: string, detail: string): void => acc.add('once', 'list.arith', { cmd, detail: detail.slice(0, 60) }, false);
 register(['test', '[', '[['], (words, acc) => {
+  const cmd = words[0]!.text;
   const args = words.slice(1);
   args.forEach((w, i) => {
     if (literal(w) && FILE_TESTS.has(w.text) && args[i + 1]) acc.read(args[i + 1]!);
+    if (!literal(w)) return;
+    // [[ は -eq などの両側を式として評価する。[ と test は整数でなければ失敗するだけ（本物の bash 5.3 で確かめた）。-v -R は、どれも名前の添字を評価する
+    if (cmd === '[[' && NUM_OPS.has(w.text)) {
+      const bad = [args[i - 1], args[i + 1]].find(x => x !== undefined && !(literal(x) && INT_LITERAL.test(x.text)));
+      if (bad) arithOnce(acc, cmd, `${w.text} ${bad.text}`);
+    }
+    if ((w.text === '-v' || w.text === '-R') && args[i + 1] && !(literal(args[i + 1]!) && PLAIN_NAME.test(args[i + 1]!.text))) arithOnce(acc, cmd, `${w.text} ${args[i + 1]!.text}`);
   });
+}, true);
+// let は引数を式として、declare・typeset・local は -i の値と NAME[…] の添字を評価する。普通の名前と、-i でなければ決まった文字の値、-i なら整数の値だけを安全とする（それ以外は評価されうる）
+register(['let', 'declare', 'typeset', 'local'], (words, acc) => {
+  const cmd = words[0]!.text;
+  const args = words.slice(1);
+  const integer = cmd !== 'let' && args.some(w => literal(w) && /^-[A-Za-z]*i[A-Za-z]*$/u.test(w.text));
+  const safe = args.every(w => {
+    if (!literal(w)) return false;
+    if (cmd === 'let') return /^[\s0-9+\-*/%()]+$/u.test(w.text);
+    if (/^-[A-Za-z]+$/u.test(w.text)) return true;
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:=([\s\S]*))?$/u.exec(w.text);
+    return m !== null && (m[2] === undefined || (integer ? INT_LITERAL.test(m[2]) : /^[A-Za-z0-9_./:-]*$/u.test(m[2])));
+  });
+  if (safe) acc.add('once', 'list.command', { cmd }, true); else arithOnce(acc, cmd, args.map(w => w.text).join(' '));
 }, true);
 register(['env'], (words, acc) => { if (words.length > 1) formOnce(acc, 'env', words.slice(1).map(w => w.text).join(' ')); });
 register(['command'], (words, acc) => {

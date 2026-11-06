@@ -490,6 +490,32 @@ test('実機（Windows PowerShell 5.1・制限モード）: Get-Content ".env$1"
   }
 });
 
+// 最終審査の指摘: 値を式として評価する bash の構文・組み込みは、変数の値や引用符で囲んだ文字列の中の a[$(コマンド)]（配列の添字）で、コマンドを動かす。
+// 素の bash では動くこと（前提）と、Clive のシェルでは今回だけの確かめになり、拒否すれば動かないことを確かめる。整数の定数だけの式・普通の [ ] の比較は承認なしで動く
+test('実機（bash）: 値を式として評価する形（[[ x -eq 0 ]]・$((x))・test -v・let・declare -i）は、素の bash では添字の $( ) が動くが、Clive のシェルでは今回だけの確かめになり、拒否すれば動かない', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  const marker = s.files('ran.txt');
+  writeFileSync(s.files('pwn.sh'), '#!/bin/sh\necho ran > ran.txt\n', { mode: 0o755 });
+  const rows = [
+    "x='a[$(./pwn.sh)]'; [[ x -eq 0 ]]", "x='a[$(./pwn.sh)]'; echo $((x))", "x='a[$(./pwn.sh)]'; echo $((1 + $x))", "test -v 'a[$(./pwn.sh)]'", "[ -v 'a[$(./pwn.sh)]' ]", "[[ -v 'a[$(./pwn.sh)]' ]]",
+    "[[ 'a[$(./pwn.sh)]' -eq 0 ]]", "let 'a[$(./pwn.sh)]=1'", "declare -i n='a[$(./pwn.sh)]'", "typeset -i n='a[$(./pwn.sh)]'", "printf -v 'a[$(./pwn.sh)]' x", "declare 'a[$(./pwn.sh)]=1'",
+  ];
+  for (const command of rows) {
+    rmSync(marker, { force: true });
+    spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' });
+    assert.equal(existsSync(marker), true, `前提: 素の bash では ./pwn.sh が動く: ${command}`);
+    rmSync(marker);
+    await expectBlocked(s, command);
+    assert.equal(existsSync(marker), false, `Clive のシェルで ./pwn.sh が動いた: ${command}`);
+  }
+  for (const [command, expected] of [['echo $((6*7))', /42/u], ['[[ 5 -gt 3 ]] && echo yes', /yes/u], ['[ "$HOME" ] && [ 1 -eq 1 ] && echo ok', /ok/u], ['[[ -v HOME ]] && echo set', /set/u]] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
 test('実機（bash）: cat .env$@ や cat ".env$1" は素の bash では .env を読むが、Clive のシェルでは確かめなしに読まない。"$1" $@ をただ出すだけは承認なしで動く', { skip: !bashAvailable && 'bash が無い' }, async t => {
   const s = setup(t, 'bash');
   writeFileSync(s.files('.env'), 'SECRET=1\n');

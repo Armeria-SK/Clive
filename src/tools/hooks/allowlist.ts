@@ -35,6 +35,7 @@ function shapes(st: Statement, acc: Acc): void {
     else if (head === 'cast') acc.add('once', 'shape.cast', { name: detail }, false);
     else if (head === 'method') acc.add('once', 'shape.method', { name: detail }, false);
     else if (head === 'expr') acc.add('once', 'shape.expr', { name: detail }, false);
+    else if (head === 'arith') acc.add('once', 'list.arith', { cmd: '$(( ))', detail }, false);
     else acc.add('once', 'list.shape', { detail: shape }, false);
   }
   if (st.background) acc.add('once', 'shape.background', {}, false);
