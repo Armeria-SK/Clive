@@ -134,3 +134,69 @@ test('ファイル検索: シンボリックリンクの先（外のフォルダ
   assert.equal(out.decision, 'allow');
   assert.doesNotMatch(out.output.content, /secret-fruit/u);
 });
+
+test('ファイル検索: 名前ワイルドカードは指数回帰しない（*?*?… は 100ms 以内で false）', async t => {
+  const s = setup(t);
+  writeFileSync(join(s.paths.workspace, 'a'.repeat(44)), 'x');
+  const start = Date.now();
+  const out = await s.call('file_search', { name: '*?*?*?*?*?*?*?*?*?*?Z' });
+  const ms = Date.now() - start;
+  assert.equal(out.decision, 'allow');
+  assert.ok(ms < 100, `ワイルドカードの照合が ${ms}ms かかった`);
+  assert.match(out.output.content, /見つかりませんでした/u);
+});
+
+test('ファイル検索: 名前ワイルドカードは大文字小文字を区別できる', async t => {
+  const s = setup(t);
+  writeFileSync(join(s.paths.workspace, 'a.MD'), 'x');
+  const insensitive = await s.call('file_search', { name: '*.md' });
+  assert.match(insensitive.output.content, /a\.MD/u);
+  const sensitive = await s.call('file_search', { name: '*.md', case_sensitive: true });
+  assert.match(sensitive.output.content, /見つかりませんでした/u);
+});
+
+test('ファイル検索: [ ] は正規表現ではなくそのままの文字', async t => {
+  const s = setup(t);
+  writeFileSync(join(s.paths.workspace, '[z-a].txt'), 'x');
+  const out = await s.call('file_search', { name: '[z-a].txt' });
+  assert.equal(out.decision, 'allow');
+  assert.match(out.output.content, /\[z-a\]\.txt/u);
+});
+
+test('ファイル検索: 中止済みのシグナルなら素早く止まり、例外を投げない', async t => {
+  const s = setup(t);
+  for (let i = 1; i <= 300; i++) writeFileSync(join(s.paths.workspace, `f${String(i).padStart(3, '0')}.txt`), 'x');
+  s.controller.abort();
+  const out = await s.call('file_search', { name: '*.txt' });
+  assert.equal(out.decision, 'allow');
+  assert.match(out.output.content, /見つかりませんでした/u);
+});
+
+test('ファイル検索: 上限を超えたら全体で止まる（内側のループだけではない）', async t => {
+  const s = setup(t);
+  const ws = s.paths.workspace;
+  writeFileSync(join(ws, 'a.txt'), 'x');
+  mkdirSync(join(ws, 'sub'), { recursive: true });
+  writeFileSync(join(ws, 'sub', 'b.txt'), 'x');
+  for (let i = 1; i <= 20_000; i++) writeFileSync(join(ws, `z${String(i).padStart(5, '0')}.dat`), 'x');
+  const out = await s.call('file_search', { name: '*.txt' });
+  assert.equal(out.decision, 'allow');
+  assert.match(out.output.content, /20001 個まで見て止めました/u);
+  assert.doesNotMatch(out.output.content, /20002 個まで/u);
+  assert.doesNotMatch(out.output.content, /sub\/b\.txt/u);
+});
+
+test('ファイル検索: 名前の検索でも秘密・禁止リストは出さない', async t => {
+  const s = setup(t, c => { c.tools.deny = ['workspace/locked']; });
+  makeFixtures(s);
+  const ws = s.paths.workspace;
+  mkdirSync(join(ws, 'locked'), { recursive: true });
+  writeFileSync(join(ws, 'locked', 'secret.txt'), 'x');
+  const star = await s.call('file_search', { name: '*' });
+  assert.equal(star.decision, 'allow');
+  assert.doesNotMatch(star.output.content, /\.env/u);
+  assert.doesNotMatch(star.output.content, /secrets\/key\.txt/u);
+  assert.doesNotMatch(star.output.content, /locked\/secret\.txt/u);
+  const env = await s.call('file_search', { name: '*.env' });
+  assert.doesNotMatch(env.output.content, /\.env/u);
+});

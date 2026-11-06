@@ -4,14 +4,29 @@ import { Type } from '@sinclair/typebox';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { placePath } from '../hooks/scope.ts';
-import { wildcardMatches } from '../hooks/path-expand.ts';
 import { checkFilePath, HEAVY_DIRS } from './files.ts';
 import type { ToolContext, ToolDef } from '../types.ts';
 
 const MAX_SCAN = 20_000;
 const MAX_FILE_BYTES = 1024 * 1024;
+const MAX_READ_BYTES_TOTAL = 64 * 1024 * 1024;
 const HEAD_BYTES = 8192;
 const MAX_LINE_CHARS = 200;
+const YIELD_EVERY = 200;
+
+// ワイルドカード: * は任意の長さ（空を含む）、? は 1 文字。それ以外の文字（[ ] など）はそのままの文字。
+// 正規表現にしない（*?*?… のようなパターンで指数回帰する）。最後の * に戻る 2 ポインタで、最悪 O(n・m)
+function wildcard(name: string, pattern: string): boolean {
+  let p = 0, n = 0, star = -1, starName = 0;
+  while (n < name.length) {
+    if (p < pattern.length && (pattern[p] === '?' || pattern[p] === name[n])) { p++; n++; }
+    else if (p < pattern.length && pattern[p] === '*') { star = p++; starName = n; }
+    else if (star !== -1) { p = star + 1; n = ++starName; }
+    else return false;
+  }
+  while (p < pattern.length && pattern[p] === '*') p++;
+  return p === pattern.length;
+}
 
 const shown = (abs: string, ctx: ToolContext) => {
   const rel = relative(ctx.workspace, abs);
@@ -45,9 +60,10 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
     const heavy = new Set<string>();
     let skippedFiles = 0;
     let scanned = 0;
+    let bytesRead = 0;
     let partial = false;
     const queue = [abs];
-    while (queue.length) {
+    outer: while (queue.length) {
       if (nameMatches.length + textMatches.length >= maxResults) break;
       const dir = queue.shift()!;
       if (ctx.signal.aborted) break;
@@ -61,7 +77,11 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
         const full = resolve(dir, entry.name);
         if (placePath(full, ctx.policy).kind === 'deny') continue;
         scanned++;
-        if (scanned > MAX_SCAN) { partial = true; break; }
+        if (scanned > MAX_SCAN) { partial = true; break outer; }
+        if (scanned % YIELD_EVERY === 0) {
+          await new Promise(r => setImmediate(r));
+          if (ctx.signal.aborted) break outer;
+        }
         if (entry.isDirectory()) {
           if (HEAVY_DIRS.has(entry.name)) { heavy.add(entry.name); continue; }
           queue.push(full);
@@ -71,7 +91,7 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
         if (input.name) {
           const n = caseFold ? entry.name.toLowerCase() : entry.name;
           const p = caseFold ? input.name.toLowerCase() : input.name;
-          if (!wildcardMatches(n, p)) continue;
+          if (!wildcard(n, p)) continue;
         }
         const rel = shown(full, ctx);
         if (!input.text) {
@@ -82,7 +102,9 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
         try {
           const stat = statSync(full, { throwIfNoEntry: false });
           if (!stat || stat.size > MAX_FILE_BYTES) { skippedFiles++; continue; }
+          if (bytesRead + stat.size > MAX_READ_BYTES_TOTAL) { partial = true; break outer; }
           buf = readFileSync(full);
+          bytesRead += stat.size;
         } catch { skippedFiles++; continue; }
         if (buf.subarray(0, HEAD_BYTES).includes(0)) { skippedFiles++; continue; }
         const lines = buf.toString('utf8').split(/\r?\n/u);
