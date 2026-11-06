@@ -90,3 +90,36 @@ test('マイグレーション 13: conversations に ever_auto_read が足され
     assert.throws(() => db.prepare('UPDATE conversations SET ever_auto_read = NULL WHERE id = ?').run('clean'), /NOT NULL|constraint/iu);
   } finally { db.close(); }
 });
+
+// 実行の記録の「外から読んだ」印（engine_runs.tainted）は移し替え 10 で足された列なので、main の段階（8）からの更新では、前からある実行の記録は全部 0。
+// 12 の付け方（記録から付ける）では 1 つも付かないため、14 が、更新の時点で既にあるすべての会話に付ける
+test('マイグレーション 14: main の段階（8）の DB から更新すると、そのとき既にあるすべての会話に ever_tainted が付く（外から読んでいないと確かめられないので）。更新のあとに作る会話は 0', t => {
+  const path = join(tempDir(t), 'clive.db');
+  const main = openDatabase(path, MIGRATIONS.slice(0, 8));
+  const conversations = new Conversations(main);
+  for (const [id, kind] of [['old-chat', 'chat'], ['old-chat-with-run', 'chat'], ['old-task', 'task']] as const) conversations.create({ id, kind, title: id });
+  new Runs(main).start('r-old', 'chat', 'old-chat-with-run');
+  main.close();
+  const db = openDatabase(path, MIGRATIONS);
+  try {
+    assert.ok(MIGRATIONS.length >= 14);
+    const flag = (id: string) => (db.prepare('SELECT ever_tainted FROM conversations WHERE id = ?').get(id) as { ever_tainted: number }).ever_tainted;
+    assert.deepEqual(['old-chat', 'old-chat-with-run', 'old-task'].map(flag), [1, 1, 1], '前の記録に「外から読んだ」実行が無くても、確かめられないので付ける');
+    const created = new Conversations(db);
+    created.create({ id: 'new-chat' });
+    assert.equal(flag('new-chat'), 0, '更新のあとの会話は、読んだときに付く');
+    assert.equal(created.everTainted('new-chat'), false);
+    assert.equal(created.everTainted('old-chat'), true);
+  } finally { db.close(); }
+});
+
+test('マイグレーション 14: すでに 14 まで更新した DB を開き直しても、あとから作った会話の印は 0 のまま', t => {
+  const path = join(tempDir(t), 'clive.db');
+  const first = openDatabase(path, MIGRATIONS);
+  new Conversations(first).create({ id: 'after' });
+  first.close();
+  const again = openDatabase(path, MIGRATIONS);
+  try {
+    assert.equal(new Conversations(again).everTainted('after'), false, '更新は 1 回だけ（開き直すたびに付け直さない）');
+  } finally { again.close(); }
+});

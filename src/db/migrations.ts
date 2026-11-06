@@ -325,4 +325,9 @@ export const MIGRATIONS: readonly Migration[] = [
   UPDATE conversations SET ever_auto_read = 1 WHERE id IN (SELECT conversation_id FROM engine_runs WHERE auto_read_outside = 1 AND conversation_id IS NOT NULL);
   ALTER TABLE engine_runs DROP COLUMN auto_read_outside;
   `,
+  // 14: 12 の ever_tainted の付け直し。12 は実行の記録 engine_runs.tainted（10 で足した列）から付けるが、main からの更新では 10 も同じ更新で足されるので、前からある実行の記録は全部 0 で、1 つも付かなかった。
+  // 前の記録から「外から読んでいない」とは確かめられないので、更新の時点で既にあるすべての会話に付ける（自動承認の判定役が、前からある会話では使われなくなるだけ。更新のあとに作る会話は 0 から始まる）
+  `
+  UPDATE conversations SET ever_tainted = 1;
+  `,
 ];
