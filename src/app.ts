@@ -90,7 +90,8 @@ export class App {
   readonly worker: Worker;
   readonly health: HealthMonitor;
   readonly log: (line: string) => void;
-  readonly bootServer: AppConfig['server'];
+  // いま動いている Web サーバーの設定（起動したとき、または画面から反映したときの値）。設定ファイルの server がこれと違えば、反映が要る
+  bootServer: AppConfig['server'];
 
   constructor(options: AppOptions) {
     this.paths = options.paths;
@@ -239,6 +240,9 @@ export class App {
     this.worker.poke();
     return saved;
   }
+
+  // 画面から反映した server の設定を、「いま動いているもの」として覚える（restartRequired の比べ先）
+  markServerApplied(server: AppConfig['server']): void { this.bootServer = structuredClone(server); }
 
   restartRequired(): boolean {
     return JSON.stringify(this.config().server) !== JSON.stringify(this.bootServer);

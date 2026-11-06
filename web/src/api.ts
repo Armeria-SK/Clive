@@ -51,6 +51,9 @@ export interface ToolInfo {
   name: string; effect: 'read' | 'write' | 'exec' | 'network' | 'meta'; allowedIn: Array<'chat' | 'task' | 'review'>; policy: ToolPolicy; configurable: boolean;
 }
 
+// POST /api/server/apply の応答。url があるときは、ポートが変わったので、画面はそこへ移る
+export interface ServerApplyResult { applied: { listen: boolean; auth: boolean }; server: { host: string; port: number }; url: string | null; restartRequired: boolean }
+
 export interface ToolCallRow {
   id: string; run_id: string; conversation_id: string | null; tool: string; input: string;
   decision: 'allow' | 'ask' | 'deny'; decided_by: string; approval_id: string | null; ok: number | null;
@@ -148,6 +151,7 @@ export const api = {
   runs: (limit = 200) => call<{ runs: RunRow[] }>(`/api/runs?limit=${limit}`),
   toolCalls: () => call<{ toolCalls: ToolCallRow[] }>('/api/tool-calls?limit=200'),
   settings: () => call<SettingsView>('/api/settings'),
+  applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),

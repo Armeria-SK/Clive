@@ -4,7 +4,15 @@ import { isLoopbackHost } from '../shared/url.ts';
 const LOGIN = /^[^\s,]{1,256}$/;
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-export type AuthResult = { ok: true; origin: string } | { ok: false; reason: string };
+// local: この PC（ループバック）から来た要求か。login: Tailscale から来た要求のログイン名
+export type AuthResult = { ok: true; origin: string; local: boolean; login?: string } | { ok: false; reason: string };
+
+// 同じサイトの別のポートの画面（ポートを変えて反映したあと、古い画面が新しいアドレスへ移るとき）からの、最上位の移動。
+// 画面の部品（静的なファイル）を取る GET だけで、API・埋め込み（iframe。CSP の frame-ancestors で別に断る）・fetch・書き込みは通さない。Host の確かめは、これも通る
+function isSameSiteNavigation(req: IncomingMessage): boolean {
+  return req.method === 'GET' && req.headers['sec-fetch-site'] === 'same-site' && req.headers['sec-fetch-mode'] === 'navigate' && req.headers['sec-fetch-dest'] === 'document'
+    && !(req.url ?? '').toLowerCase().startsWith('/api');
+}
 
 export class WebAuth {
   readonly origins: readonly string[];
@@ -31,13 +39,14 @@ export class WebAuth {
     if (origin !== undefined && origin !== entry.origin) return { ok: false, reason: 'origin' };
     if (WRITE_METHODS.has(req.method ?? '') && origin !== entry.origin) return { ok: false, reason: 'origin_required' };
     const site = req.headers['sec-fetch-site'];
-    if (site !== undefined && site !== 'same-origin' && site !== 'none') return { ok: false, reason: 'cross_site' };
+    if (site !== undefined && site !== 'same-origin' && site !== 'none' && !isSameSiteNavigation(req)) return { ok: false, reason: 'cross_site' };
     if (!entry.local) {
       const login = req.headers['tailscale-user-login'];
       if (typeof login !== 'string' || !LOGIN.test(login)) return { ok: false, reason: 'tailnet' };
       if (this.#logins.size && !this.#logins.has(login.toLowerCase())) return { ok: false, reason: 'tailnet_login' };
     }
-    return { ok: true, origin: entry.origin };
+    const login = req.headers['tailscale-user-login'];
+    return { ok: true, origin: entry.origin, local: entry.local, ...(!entry.local && typeof login === 'string' ? { login } : {}) };
   }
 }
 

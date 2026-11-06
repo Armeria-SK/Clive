@@ -27,6 +27,8 @@
 .set-problem-path { flex: none; font-family: var(--font-mono); font-size: 11.5px; color: var(--color-accent-text); }
 .set-restart { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--color-surface); font-size: 13.5px; }
 .set-restart-icon { display: inline-flex; flex: none; color: var(--color-accent); }
+.set-restart-do { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.shell[data-mode="narrow"] .set-restart { flex-wrap: wrap; }
 
 .set-stack { display: flex; flex-direction: column; gap: 24px; }
 .set-rows { display: flex; flex-direction: column; }
