@@ -155,6 +155,27 @@ test('shell: 表形式のプローブ（PowerShell）', t => {
   }
 });
 
+test('shell: 外から取得するコマンドは、確かめの結果にかかわらず fetched になる（実行すると外の中身を読むので、「外から読んだ」印の材料）', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
+  const probes: Array<[string, 'bash' | 'powershell', Decision, boolean]> = [
+    ['curl -s https://example.com/', 'bash', 'allow', true],
+    ['curl -s -d x https://example.com/', 'bash', 'ask', true],
+    ['git status', 'bash', 'allow', false],
+    ['cat sub/a.txt', 'bash', 'allow', false],
+    ['echo hello', 'bash', 'allow', false],
+    ['curl.exe -s https://example.com/', 'powershell', 'allow', true],
+    ['Invoke-WebRequest -Uri https://example.com/ -MaximumRedirection 0', 'powershell', 'allow', true],
+    ['irm https://example.com/ -MaximumRedirection 0', 'powershell', 'allow', true],
+    ['Get-Content sub/a.txt', 'powershell', 'allow', false],
+  ];
+  for (const [command, shell, decision, fetched] of probes) {
+    const v = verdict(command, shell);
+    assert.deepEqual([v.decision, v.fetched], [decision, fetched], `${shell}: ${command}`);
+  }
+  assert.equal(verdict('', 'bash').fetched, false, '空のコマンドの早い戻りでも fetched は決まっている');
+});
+
 test('shell: outsideRoots=deny なら外は止める。allow は「一覧に無い」確かめだけを外し、拒否は外せない', t => {
   const f = fixture(t);
   const bash = { shell: 'bash' as const, windows: false };

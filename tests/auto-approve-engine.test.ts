@@ -255,3 +255,18 @@ test('自動承認（エンジン）: 外のメモを自動で読んだあとの
   await settled(s.app, sent.body.runId);
   assert.equal(autoRows(s).length, 1, '自動で許したのは最初の外読みだけ');
 });
+
+test('自動承認（エンジン）: シェルで外から取得したら、実行の記録に「外から読んだ」印が残り、そのあとの外読みは判定役に回さず札が出る', async t => {
+  const s = await startApp(t);
+  const outside = outsideRead(s);
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  s.adapter().scripts = [toolCall('shell_run', { command: fetch }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await waitFor(() => s.app.approvals.pending().length === 1, '取得のあとの外読みの札');
+  assert.deepEqual([...(s.app.approvals.pending()[0]!.kinds ?? [])].sort(), ['outside_read', 'taint']);
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 0, '判定役を呼ばない');
+  assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, '実行の記録に印が残る（止めた・落ちた実行の次の実行へ引き継ぐ材料）');
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+  await settled(s.app, sent.body.runId);
+  assert.equal(autoRows(s).length, 0);
+});

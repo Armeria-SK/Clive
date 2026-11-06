@@ -440,6 +440,32 @@ test('外を読むのを自動承認で許したあと、その実行の残り�
   assert.equal((await s.call('file_read', { path: 'a.txt' })).decision, 'allow');
 });
 
+test('シェルで外から取得したら、web_fetch と同じに「外から読んだ」印が付く（自動承認でもふつうのモードでも）。失敗した取得にも付く。取得でないコマンド・札で断った取得には付かない', async t => {
+  for (const mode of ['auto', 'normal'] as const) {
+    const s = await setup(t, { mode, startMode: mode });
+    await s.call('shell_run', { command: 'echo hello' });
+    assert.equal(s.ctx.taint.tainted, false, `${mode}: 取得でないコマンドには付かない`);
+    const sends = process.platform === 'win32' ? 'curl.exe -s -d x https://clive-test.invalid/' : 'curl -s -d x https://clive-test.invalid/';
+    const declined = s.call('shell_run', { command: sends });
+    s.approvals.decide((await waitPending(s)).id, 'deny');
+    await declined;
+    assert.equal(s.ctx.taint.tainted, false, `${mode}: 札で断った取得は動かないので付かない`);
+    const outcome = await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
+    assert.equal(outcome.decision, 'allow', `${mode}: 許可の一覧にある取得は札なしで動く`);
+    assert.equal(outcome.output.isError, true, `${mode}: 名前が引けず失敗しても付く（失敗の文にも相手の文字は入りうる）`);
+    assert.equal(s.ctx.taint.tainted, true, mode);
+    assert.deepEqual(s.ctx.taint.sources, ['shell_run'], mode);
+  }
+});
+
+test('シェルで取得したあと、自動承認の外読みは判定役に回さず、札が出る（taint）', async t => {
+  const s = await setup(t);
+  await s.call('shell_run', { command: FETCH_COMMANDS[0]! });
+  const seen = await askedKinds(s, 'shell_run', { command: s.readOutside });
+  assert.deepEqual(seen.kinds, ['outside_read', 'taint']);
+  assert.equal(s.prompts.length, 0, '判定役を呼ばない');
+});
+
 test('外を読むのを許していない実行（判定役が ask・ふつうのモード）では、シェルのコマンドに余計な確かめは付かない', async t => {
   const s = await setup(t, { mode: 'normal', startMode: 'normal' });
   for (const command of FETCH_COMMANDS) assert.equal((await shellRun.preCheck!({ command }, s.ctx)).decision, 'allow', command);

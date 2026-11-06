@@ -58,6 +58,8 @@ export interface ShellVerdict {
   limits: boolean;
   // コマンドの git がすべて、設定に core.hooksPath の無い 1 つのリポジトリのもので、そのリポジトリ自身のフックの置き場所（.git/hooks）。そうでなければ null
   ownHooksDir: string | null;
+  // コマンドのどれかが外から取得する（curl・wget・Invoke-WebRequest など）。実行すると外の中身を読むので、パイプラインは「外から読んだ」印を付ける
+  fetched: boolean;
 }
 
 const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
@@ -150,6 +152,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const selfHosts = opts.selfHosts ?? [];
   const env: Env = opts.env ?? process.env;
   let limits = false;
+  let fetched = false;
   // ask の理由には種類を付ける。付けなければ precheck（細かい種類なし）で、自動承認の判定役には回らない
   const add = (d: Decision, reason: string, kind: AskKind = 'precheck') => {
     decision = worst(decision, d);
@@ -168,7 +171,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const done = (): ShellVerdict => {
     const onceOnly = askKinds.includes('code') && decision !== 'deny';
     if (onceOnly) explainWithCodeGuard();
-    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir() };
+    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched };
   };
 
   // 今回だけにした理由を、より分かる文（ファイルのコードを動かします など）と、中身を見せるファイルで補う（判定は変えない）
@@ -250,7 +253,6 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
 
   const reasonText = (r: Reason): string => (r.key.startsWith('ask.') ? text('guard.needs_approval', { reason: text(r.key) }) : text(r.key, r.params));
   const allowEntries = (opts.allow ?? []).map(parseAllowEntry).filter((e): e is string[] => e !== null);
-  let fetched = false;
 
   // 1 つの絶対パスを、書く・読む・消すものとして調べる
   // intentWrite: 確かめの種類を決めるためだけの「書くための参照か」。ワイルドカードの手前のフォルダは write = false で調べるが、書く参照なら外の確かめは outside_write にする
