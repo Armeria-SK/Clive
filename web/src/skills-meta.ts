@@ -13,6 +13,7 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   file_write: { icon: 'filePen', desc: 'tool.file_write' },
   file_edit: { icon: 'pencil', desc: 'tool.file_edit' },
   file_list: { icon: 'folder', desc: 'tool.file_list' },
+  file_search: { icon: 'search', desc: 'tool.file_search' },
   shell_run: { icon: 'terminal', desc: 'tool.shell_run' },
   web_fetch: { icon: 'globe', desc: 'tool.web_fetch' },
   web_search: { icon: 'search', desc: 'tool.web_search' },
@@ -33,6 +34,8 @@ export const TOOL_LOOKS: Readonly<Record<string, ToolLook>> = {
   curiosity_add: { icon: 'sparkles', desc: 'tool.curiosity_add' },
   curiosity_list: { icon: 'sparkles', desc: 'tool.curiosity_list' },
   curiosity_update: { icon: 'sparkles', desc: 'tool.curiosity_update' },
+  calculate: { icon: 'sliders', desc: 'tool.calculate' },
+  date_calc: { icon: 'clock', desc: 'tool.date_calc' },
 };
 
 // 道具の並び: 画面の辞書の順（ファイル・シェル・Web・記憶・タスク・スキル・好奇心）。辞書に無い道具は、そのあとに名前順

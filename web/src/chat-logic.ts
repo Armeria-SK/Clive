@@ -248,7 +248,7 @@ export function renameTitleOf(input: string): string | null {
 export const isRenameWithoutTitle = (input: string): boolean => /^\/rename\s*$/u.test(input.trim());
 
 export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
-  file_read: 'file', file_write: 'filePen', file_edit: 'pencil', file_list: 'folder',
+  file_read: 'file', file_write: 'filePen', file_edit: 'pencil', file_list: 'folder', file_search: 'search',
   shell_run: 'terminal',
   web_fetch: 'globe', web_search: 'search',
   memory_save: 'bookmark', memory_update: 'bookmark', memory_forget: 'bookmark', memory_search: 'bookmark',
@@ -257,6 +257,7 @@ export const TOOL_ICONS: Readonly<Record<string, IconName>> = {
   task_create: 'tasks', task_list: 'tasks', task_update: 'tasks', task_checkpoint: 'tasks', task_complete: 'tasks',
   ask_user: 'help',
   curiosity_add: 'sparkles', curiosity_list: 'sparkles', curiosity_update: 'sparkles',
+  calculate: 'sliders', date_calc: 'clock',
 };
 
 export const toolIcon = (name: string | null | undefined): IconName => TOOL_ICONS[name ?? ''] ?? 'terminal';
