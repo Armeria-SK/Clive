@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Approval, NotificationItem, Task } from './api.ts';
+import type { Approval, ChecklistItem, NotificationItem, Task } from './api.ts';
 
 export type RunEvent =
   | { type: 'run.start'; runId: string; conversationId: string; modelId: string }
@@ -13,6 +13,7 @@ export type RunEvent =
   | { type: 'approval.requested'; runId: string; conversationId: string; approval: Omit<Approval, 'runId' | 'conversationId'> }
   | { type: 'approval.resolved'; runId: string; conversationId: string; approvalId: string; outcome: string }
   | { type: 'memory.changed'; runId: string; conversationId: string; memoryId: number; book: 'user' | 'notes'; action: 'create' | 'update' | 'forget'; content: string; eventId: number }
+  | { type: 'checklist.updated'; runId: string; conversationId: string; items: ChecklistItem[]; tainted: boolean }
   | { type: 'compaction'; runId: string; conversationId: string; summarized: number }
   | { type: 'run.end'; runId: string; conversationId: string; ok: boolean; errorKind?: string; errorMessage?: string; errorCode?: string; errorParams?: Record<string, string | number>; detail?: { reason: string; hint?: string; measured?: number; required?: number } }
   | { type: 'pending.changed'; conversationId: string }

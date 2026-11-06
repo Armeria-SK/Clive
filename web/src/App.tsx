@@ -14,7 +14,7 @@ import { useContextUsage } from './use-context-usage.ts';
 import { getLanguage, useT, type DictKey } from './i18n/index.ts';
 import { approvalTargetHash, classifyRun, isChatGenerating, type RunContext } from './conversation-state.ts';
 import { closeTopLayer, shortcutOf } from './keys.ts';
-import { mergeNotice, recountsUsage } from './chat-logic.ts';
+import { mergeNotice, recountsUsage, withChecklistEvent, type ChecklistView } from './chat-logic.ts';
 import { LanguagePrompt } from './LanguagePrompt.tsx';
 import { layoutModeFor, loadPanelPreference, savePanelPreference, type LayoutMode } from './layout.ts';
 import { Memory } from './Memory.tsx';
@@ -59,6 +59,8 @@ export function App() {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [notices, setNotices] = useState<Record<string, RunNotice[]>>({});
   const [revisions, setRevisions] = useState<Record<string, number>>({});
+  // 会話ごとの作業の一覧の、いちばん新しい出来事（checklist.updated）。開いている会話のぶんだけを Chat へ渡す
+  const [checklists, setChecklists] = useState<ReadonlyMap<string, ChecklistView>>(() => new Map());
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
@@ -332,6 +334,9 @@ export function App() {
       case 'approval.resolved':
         setApprovals(list => list.filter(a => a.id !== e.approvalId));
         break;
+      case 'checklist.updated':
+        setChecklists(state => withChecklistEvent(state, e));
+        break;
       case 'memory.changed':
         setMemoryRevision(n => n + 1);
         addNotice(e.conversationId, { runId: e.runId, kind: 'memory', message: t(MEMORY_NOTICE[e.action], e.content), eventId: e.eventId });
@@ -421,6 +426,7 @@ export function App() {
 
   const onResync = useCallback((serverDrafts: Draft[]) => {
     setDrafts(serverDrafts);
+    setChecklists(new Map());
     setRevisions(state => Object.fromEntries(Object.entries(state).map(([k, v]) => [k, v + 1])));
     setTaskRevision(n => n + 1);
     refreshList(); refreshApprovals(); refreshWorker(); refreshTasks(); refreshMeta(); refreshNotifications();
@@ -523,6 +529,7 @@ export function App() {
                 runStarts={runStarts}
                 notices={current ? notices[current] ?? [] : []}
                 approvals={current ? approvals.filter(a => a.conversationId === current) : []}
+                checklist={current ? checklists.get(current) : undefined}
                 revision={current ? revisions[current] ?? 0 : 0}
                 onCreated={id => { location.hash = chatHash(id); refreshList(); }}
                 onClearNotices={id => setNotices(n => ({ ...n, [id]: [] }))}

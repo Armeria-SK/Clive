@@ -3,10 +3,11 @@ import { api, ApiError, type Approval, type ContextUsage, type Message, type Mod
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendChoiceOf, sendFailureOf, sendTarget, toolInputSummary,
-  type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
+  advanceApprovalGate, approvalEnterAllowed, checklistCounts, checklistOf, checklistOpen, checklistPhase, checklistToShow, contextCardOf, enterApprovalId, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendChoiceOf, sendFailureOf, sendTarget, toolInputSummary,
+  type ApprovalGate, type ChatItemKind, type ChatRunRow, type ChecklistChoice, type ChecklistView, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
+import { ChecklistPanel } from './ChecklistPanel.tsx';
 import { archiveConversation, unarchiveConversation, type ConversationChange } from './conversation-actions.ts';
 import { ModeMenu, OPEN_MODE_MENU_EVENT } from './ModeMenu.tsx';
 import { ModelMenu, OPEN_MODEL_MENU_EVENT } from './ModelMenu.tsx';
@@ -52,6 +53,8 @@ interface Props {
   runStarts: Record<string, number>;
   notices: RunNotice[];
   approvals: Approval[];
+  // この会話の作業の一覧の、いちばん新しい出来事（checklist.updated）。まだ届いていなければ undefined（開いたときに読んだ一覧を出す）
+  checklist: ChecklistView | undefined;
   revision: number;
   onCreated: (id: string) => void;
   onClearNotices: (conversationId: string) => void;
@@ -92,7 +95,7 @@ function noteIcon(notice: RunNotice): IconName {
   return notice.code === 'retrying' ? 'clock' : 'alert';
 }
 
-export function Chat({ conversationId, profile, modelName, defaultModelId, usage, drafts, runStarts, notices, approvals, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
+export function Chat({ conversationId, profile, modelName, defaultModelId, usage, drafts, runStarts, notices, approvals, checklist, revision, onCreated, onClearNotices, onNewChat, onConversationChanged }: Props) {
   const t = useT();
   const [messages, setMessages] = useState<Message[]>([]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
@@ -112,6 +115,8 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [archivedNow, setArchivedNow] = useState(false);
+  const [readChecklist, setReadChecklist] = useState<ChecklistView | null>(null);
+  const [checklistChoice, setChecklistChoice] = useState<ChecklistChoice | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const thread = useRef<HTMLDivElement>(null);
@@ -142,6 +147,13 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   }, [conversationId]);
 
   useEffect(() => { void load(); }, [load, revision]);
+  // 作業の一覧: 会話を開いたとき（と、会話を読み直すとき）にサーバーから読む。出来事（checklist）が届いていればそちらが新しいので、読んだ結果は使わない
+  useEffect(() => {
+    if (!conversationId) { setReadChecklist(null); return undefined; }
+    let live = true;
+    void api.checklist(conversationId).then(result => { if (live) setReadChecklist(checklistOf(result)); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [conversationId, revision]);
   useEffect(() => { void api.models().then(r => setModels(r.models)).catch(() => undefined); }, []);
   useEffect(() => {
     const open = () => { setModeMenuOpen(false); setMenuOpen(true); };
@@ -200,6 +212,9 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   const visible = messages.filter(m => !(m.role === 'assistant' && !m.text.trim() && m.toolCalls?.length));
   const assistantName = profile?.name ?? 'Clive';
   const frontApprovalId = enterApprovalId(approvals);
+  const list = checklistToShow(checklist, readChecklist);
+  const listCounts = list ? checklistCounts(list.items) : null;
+  const listOpen = listCounts ? checklistOpen(listCounts, checklistChoice) : false;
   useLayoutEffect(() => { frontGate.current = advanceApprovalGate(frontGate.current, frontApprovalId, Date.now()); }, [frontApprovalId]);
   useEffect(() => {
     const restart = () => { frontGate.current = restartApprovalGate(frontGate.current, Date.now()); };
@@ -215,7 +230,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   useLayoutEffect(() => {
     const el = thread.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages.length, draft?.text.length, draft?.activeTool, notices.length, failure, loaded, approvals.length]);
+  }, [messages.length, draft?.text.length, draft?.activeTool, notices.length, failure, loaded, approvals.length, list?.items.length, listOpen]);
 
   async function fail(error: unknown, fallback: string): Promise<void> {
     const base = sendFailureOf(error, fallback, models);
@@ -428,6 +443,9 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
               <button type="button" className="btn btn-primary" onClick={() => void proceedWithPlan()}>{t('plan.proceed')}</button>
               <span className="chat-proceed-hint">{t('plan.proceedHint')}</span>
             </div>
+          )}
+          {list && listCounts && (
+            <ChecklistPanel list={list} counts={listCounts} open={listOpen} onToggle={() => setChecklistChoice({ phase: checklistPhase(listCounts), open: !listOpen })} />
           )}
           <Composer
             textareaRef={textarea} fileInputRef={fileInput} input={input} attached={attached} uploading={uploading} sending={sending} generating={Boolean(draft)}
