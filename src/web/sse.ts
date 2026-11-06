@@ -47,7 +47,10 @@ export class LiveStreams {
     }
   }
 
-  close(): void { for (const res of [...this.#streams]) { res.end(); this.#remove(res); } }
+  // 開いている流れを全部閉じる（待ち受けや認証が変わったとき・終了のとき）。画面は繋ぎ直し、新しい接続は、そのときの認証で確かめ直される。出来事の購読は、流れが無くなれば外れ、次に開かれたときに付け直す
+  closeAll(): void { for (const res of [...this.#streams]) { res.end(); this.#remove(res); } }
+
+  close(): void { this.closeAll(); }
 
   #start(): void {
     if (this.#unsubscribe) return;

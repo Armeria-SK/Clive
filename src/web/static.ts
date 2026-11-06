@@ -9,9 +9,11 @@ const MIME: Record<string, string> = {
 
 export const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'";
 
+// 画面（HTML）には Cross-Origin-Opener-Policy も付ける: ほかのページが window.open で Clive を開いても、開いたページから Clive の window を操作できない
 const HEADERS = (type: string) => ({
   'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache',
   'Content-Security-Policy': CSP, 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
+  ...(type.startsWith('text/html') ? { 'Cross-Origin-Opener-Policy': 'same-origin' } : {}),
 });
 
 export function serveStatic(root: string, req: IncomingMessage, res: ServerResponse): boolean {

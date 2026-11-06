@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, type ModelView, type Profile, type SettingsView } from './api.ts';
 import { ChatDialog } from './ChatDialog.tsx';
+import { copyText } from './clipboard.ts';
 import { useEscapeLayer, useSaveShortcut } from './hooks.ts';
 import { Icon } from './icons.tsx';
 import { applyServerSettings, formatDateTimeSmart, getLanguagePreference, useT } from './i18n/index.ts';
@@ -13,6 +14,7 @@ import {
   blockUnload, closeAction, countChanges, isSection, parseProblem, problemsOf, SECTION_GROUPS, SECTION_KEY, sectionChanged, type Config, type Problem, type SettingsSection,
 } from './settings/model.ts';
 import { editsToKeep, restoreKept, type KeptEdits } from './settings/keep.ts';
+import { applyFailure, applyStep } from './settings/server-apply.ts';
 import { SectionView } from './settings/SectionView.tsx';
 import { SettingsFrame } from './settings/SettingsFrame.tsx';
 import { toast } from './toast.tsx';
@@ -46,6 +48,9 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
   const [conflicted, setConflicted] = useState(false);
   const [confirm, setConfirm] = useState<{ items: Access[]; key: string } | null>(null);
   const [askDiscard, setAskDiscard] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [lockOut, setLockOut] = useState<string | null>(null);
+  const [movedTo, setMovedTo] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const pendingField = useRef<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
@@ -141,6 +146,28 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
       setProblems(error instanceof ApiError ? problemsOf(error.body, error.message, draft) : problemsOf(undefined, t('settings.saveFailed'), draft));
     } finally { setBusy(false); }
   }
+  // サーバーの設定（待ち受けと認証）を、止めずに入れ替える。反映するのは保存した設定で、編集中の分は含まない。この端末から入れなくなるときは、確かめて、もう一度押すときだけ force を付ける
+  async function applyServer(force = false) {
+    if (applying) return;
+    setApplying(true); setLockOut(null);
+    try {
+      const step = applyStep(await api.applyServer(force), location.hash);
+      setRestartRequired(step.restartRequired);
+      // ポートが変わったときは、自分では移らず、新しいアドレスを見せる（持ち主がアドレス欄に入力・貼り付けて開く）
+      if (step.kind === 'moved') setMovedTo(step.url);
+      else toast({ kind: 'done', icon: 'check', title: t('settings.restart.done') });
+    } catch (error) {
+      const failure = applyFailure(error);
+      if (failure.kind === 'lockout') setLockOut(failure.message);
+      else if (failure.kind === 'nothing') { setRestartRequired(false); toast({ kind: 'info', icon: 'info', title: t('settings.restart.already') }); }
+      else toast({ icon: 'alert', title: t('settings.restart.failed'), ...(failure.message ? { body: failure.message } : {}) });
+    } finally { setApplying(false); }
+  }
+  const copyAddress = (address: string) => {
+    void copyText(address).then(ok => toast(ok
+      ? { kind: 'done', icon: 'copy', title: t('settings.keys.copied') }
+      : { icon: 'alert', title: t('settings.keys.copyFailed'), body: t('settings.keys.copyFailedBody') }));
+  };
   useSaveShortcut(() => { if (!confirm) void save(); });
   useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
   // × ・Esc・背景で閉じるとき、保存していない変更があれば、捨てる前に確かめる
@@ -181,6 +208,34 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
   const frame = (children: ReactNode) => (
     <SettingsFrame leaving={leaving} label={t('nav.settings')} closeLabel={t('settings.close')} onClose={requestClose}>
       {children}
+      {lockOut !== null && (
+        <ChatDialog
+          title={t('settings.restart.lockoutTitle')} onClose={() => setLockOut(null)}
+          actions={(
+            <>
+              <button type="button" className="btn btn-ghost chat-plain" onClick={() => setLockOut(null)}>{t('settings.restart.lockoutCancel')}</button>
+              <button type="button" className="btn btn-primary" onClick={() => void applyServer(true)}>{t('settings.restart.lockoutDo')}</button>
+            </>
+          )}
+        >
+          <p className="chat-dialog-text">{lockOut}</p>
+          <p className="chat-dialog-text">{t('settings.restart.lockoutNote')}</p>
+        </ChatDialog>
+      )}
+      {movedTo !== null && (
+        <ChatDialog
+          title={t('settings.restart.movedTitle')} onClose={() => setMovedTo(null)}
+          actions={(
+            <>
+              <button type="button" className="btn btn-ghost chat-plain" onClick={() => setMovedTo(null)}>{t('settings.restart.movedClose')}</button>
+              <button type="button" className="btn btn-primary" onClick={() => copyAddress(movedTo)}>{t('settings.restart.movedCopy')}</button>
+            </>
+          )}
+        >
+          <p className="chat-dialog-text">{t('settings.restart.movedBody')}</p>
+          <p className="chat-dialog-text"><code className="set-moved-url">{movedTo}</code></p>
+        </ChatDialog>
+      )}
       {askDiscard && (
         <ChatDialog
           title={t('settings.discard.title')} onClose={() => setAskDiscard(false)}
@@ -260,6 +315,9 @@ export function Settings({ onProfile, open, leaving, onClose, kept, onRerunSetup
               <div className="set-restart" role="status">
                 <span className="set-restart-icon"><Icon name="refresh" size={15} /></span>
                 <span><strong>{t('settings.restartRequired')}</strong> {t('settings.restartHowto')}</span>
+                <button type="button" className="btn btn-secondary set-restart-do" onClick={() => void applyServer()} disabled={applying || busy}>
+                  {applying && <span className="spin"><Icon name="loader" size={13} /></span>}{t(applying ? 'settings.restart.busy' : 'settings.restart.button')}
+                </button>
               </div>
             )}
             <SectionView

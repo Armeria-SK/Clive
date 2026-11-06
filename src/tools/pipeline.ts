@@ -6,12 +6,13 @@ import { redactSecrets } from '../shared/redaction.ts';
 import { languageOf } from '../shared/language.ts';
 import { guardText } from '../shared/messages/guard.ts';
 import { toolText } from '../shared/messages/tools.ts';
-import type { Language } from '../config/schema.ts';
+import type { AppConfig, Language } from '../config/schema.ts';
 import { inputHash, type ApprovalBroker } from './approvals.ts';
 import { runCommandHook } from './hooks/command-hook.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import type { ToolRegistry } from './registry.ts';
-import type { PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
+import { effectivePolicy, type HasPolicies, type ToolPolicy } from './tool-policy.ts';
+import type { AskKind, PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
 
 export const REVIEW_FORBIDDEN: ReadonlySet<ToolDef['effect']> = new Set(['write', 'exec', 'network']);
 
@@ -22,6 +23,8 @@ export interface PipelineDeps {
   approvals: ApprovalBroker;
   db: DatabaseSync;
   emit: (event: RunEvent) => void;
+  // いまの設定。実行の途中で道具の方針が厳しくなったら、その場から効かせる（緩くなったときは、実行を始めたときの設定のまま = 次の実行から）
+  config?: (() => AppConfig) | undefined;
 }
 
 export interface ToolCallOutcome {
@@ -39,6 +42,13 @@ function capOutput(output: ToolOutput, language: Language, limit: number): ToolO
 }
 
 const matches = (matcher: string, name: string) => { try { return new RegExp(`^(?:${matcher})$`, 'u').test(name); } catch { return false; } };
+
+// この呼び出しに効く道具ごとの方針: 実行を始めたときの設定と、いまの設定の厳しい方
+function policyFor(name: string, ctx: ToolContext, deps: PipelineDeps): ToolPolicy {
+  let now: HasPolicies | undefined;
+  try { now = deps.config?.(); } catch { }
+  return effectivePolicy(name, now ?? ctx.config, ctx.config);
+}
 
 export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: PipelineDeps): Promise<ToolCallOutcome> {
   const id = randomUUID();
@@ -65,6 +75,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
   // 振り返りでは、登録の設定にかかわらず、外に影響する道具（書き込み・実行・送信）を使わせない（二重の禁止）
   if (ctx.kind === 'review' && REVIEW_FORBIDDEN.has(tool.effect)) return refuse('deny', 'registry', toolText(language, 'pipeline.review_forbidden', { name: call.name }));
+  // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。会話の許可・フックの allow では越えられない
+  const policy = policyFor(tool.name, ctx, deps);
+  if (policy === 'block') return refuse('deny', 'policy', toolText(language, 'pipeline.policy_blocked', { name: tool.name }));
   if (call.arguments === undefined) return refuse('deny', 'validation', toolText(language, 'pipeline.bad_json', { raw: (call.raw ?? '').slice(0, 300) }), true);
   const args = Value.Default(tool.input, Value.Clone(call.arguments));
   if (!Value.Check(tool.input, args)) {
@@ -78,18 +91,33 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const reasons: string[] = [];
   let details: string[] = [];
   let first: PreCheck | undefined;
+  // 確かめ（ask）になった理由の種類。理由を足すたびに、その種類も足す（段 8b の自動承認は、これで判定役に回すかを決める）
+  const askKinds = new Set<AskKind>();
   if (tool.preCheck) {
     try {
       const pre = await tool.preCheck(args, ctx);
       first = pre;
       decision = pre.decision; reasons.push(...pre.reasons); details = pre.details ?? [];
+      if (pre.decision === 'ask') { askKinds.add('precheck'); for (const kind of pre.askKinds ?? []) askKinds.add(kind); }
     } catch (error) {
       decision = 'deny'; reasons.push(guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message }));
     }
   }
   if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint) && decision === 'allow') {
     decision = 'ask';
+    askKinds.add('taint');
     reasons.push(guardText(language, 'pipeline.taint', { sources: ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep')) }));
+  }
+  // 道具ごとの方針 ask: 今の判定に「承認を求める」を足すだけ（拒否は拒否のまま。allow は何もしない）。振り返りには承認する人がいないので拒否として扱う
+  if (policy === 'ask' && decision !== 'deny') {
+    if (ctx.kind === 'review') {
+      decision = 'deny'; decidedBy = 'policy';
+      reasons.push(guardText(language, 'pipeline.policy_review', { name: tool.name }));
+    } else {
+      decision = worst(decision, 'ask');
+      askKinds.add('policy');
+      reasons.push(guardText(language, 'pipeline.policy_ask', { name: tool.name }));
+    }
   }
   for (const hook of ctx.config.tools.hooks.preToolUse) {
     if (!matches(hook.matcher, tool.name) || decision === 'deny') continue;
@@ -98,13 +126,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       hook_event_name: 'PreToolUse', tool_name: tool.name, tool_input: args, cwd: summary?.cwd ?? ctx.workspace, run_id: ctx.runId, conversation_id: ctx.conversationId,
     }, ctx.signal, language);
     if (result.decision && worst(decision, result.decision) !== decision) { decision = result.decision; decidedBy = `hook:${result.hook}`; }
+    if (result.decision === 'ask') askKinds.add('hook');
     if (result.reason && result.decision && result.decision !== 'allow') reasons.push(result.reason);
   }
 
   const hash = inputHash(tool.name, args);
-  // コードを動かす確かめは中身が変わりうるので、前に同じ文字のコマンドを「この会話では許可」にしていても、また確かめる
+  // コードを動かす確かめは中身が変わりうるので、前に同じ文字のコマンドを「この会話では許可」にしていても、また確かめる。方針が ask の確かめも、毎回確かめる
   const onceOnly = first?.onceOnly === true;
-  if (decision === 'ask' && !onceOnly && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
+  const everyTime = askKinds.has('policy');
+  if (decision === 'ask' && !onceOnly && !everyTime && deps.approvals.isGranted(ctx.conversationId, hash)) { decision = 'allow'; decidedBy = 'conversation-grant'; }
   if (decision === 'deny') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
 
   let approvalId: string | undefined;
@@ -113,7 +143,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
-      cwd: summary.cwd, reasons, details, onceOnly, preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore,
+      cwd: summary.cwd, reasons, details, onceOnly, everyTime, kinds: [...askKinds], preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore,
     }, ctx.config.tools.shell.approvalTimeoutSec * 1000, ctx.signal);
     approvalId = deps.approvals.pending().find(p => p.inputHash === hash && p.runId === ctx.runId)?.id;
     const outcome = await pending;

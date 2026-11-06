@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type SkillDraft, type SkillSummary } from './api.ts';
+import { api, type SkillDraft, type SkillSummary, type ToolInfo } from './api.ts';
 import { Icon } from './icons.tsx';
 import { formatDateTime, useT } from './i18n/index.ts';
 import type { SkillTarget } from './routes.ts';
-import { openSettingsSection } from './settings/model.ts';
 import { SkillDialog, type SkillDialogState } from './SkillDialog.tsx';
-import { EFFECT_LABEL, findDraft, skillRows, TOOL_CATALOG, type SkillRow } from './skills-meta.ts';
+import { findDraft, skillRows, type SkillRow } from './skills-meta.ts';
 import { toast } from './toast.tsx';
+import { ToolsList } from './ToolsList.tsx';
 import { ZoneNote } from './ZoneNote.tsx';
 
 type Segment = 'skills' | 'tools';
@@ -19,13 +19,15 @@ interface Props {
   revision: number;
 }
 
-// スキル・ツール。スキルの一覧とレビュー待ちの下書き、道具の一覧（見るだけ。触れてよいフォルダの編集は、設定の「道具」）。
+// スキル・ツール。スキルの一覧とレビュー待ちの下書き、道具の一覧と道具ごとの方針（承認なし / 承認を求める / 止める）。触れてよいフォルダの編集は、設定の「道具」。
 export function SkillsPage({ target, revision }: Props) {
   const t = useT();
   const [segment, setSegment] = useState<Segment>('skills');
   const [skills, setSkills] = useState<SkillSummary[] | null>(null);
   const [drafts, setDrafts] = useState<SkillDraft[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [tools, setTools] = useState<ToolInfo[] | null>(null);
+  const [toolsFailed, setToolsFailed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [tick, setTick] = useState(0);
   const reload = useCallback(() => setTick(n => n + 1), []);
@@ -34,6 +36,7 @@ export function SkillsPage({ target, revision }: Props) {
     let cancelled = false;
     api.skills().then(r => { if (!cancelled) { setSkills(r.skills); setFailed(false); } }, () => { if (!cancelled) setFailed(true); });
     api.review().then(r => { if (!cancelled) setDrafts(r.skillDrafts); }, () => { if (!cancelled) setDrafts(current => current ?? []); });
+    api.tools().then(r => { if (!cancelled) { setTools(r.tools); setToolsFailed(false); } }, () => { if (!cancelled) setToolsFailed(true); });
     return () => { cancelled = true; };
   }, [revision, tick]);
   const rows = useMemo(() => skillRows(drafts ?? [], skills ?? []), [drafts, skills]);
@@ -57,7 +60,7 @@ export function SkillsPage({ target, revision }: Props) {
     }).catch(() => undefined).finally(() => { checking.current = null; });
   }, [skills, t]);
 
-  const counts: Record<Segment, number | null> = { skills: skills || drafts ? rows.length : null, tools: TOOL_CATALOG.length };
+  const counts: Record<Segment, number | null> = { skills: skills || drafts ? rows.length : null, tools: tools?.length ?? null };
 
   return (
     <section className="view">
@@ -110,19 +113,10 @@ export function SkillsPage({ target, revision }: Props) {
         )}
 
         {segment === 'tools' && (
-          <div className="sk-tools">
-            <p className="view-note">{t('tools.note')} <a className="chat-link" href="#/settings" onClick={() => openSettingsSection('tools')}>{t('tools.foldersLink')}</a></p>
-            {TOOL_CATALOG.map(tool => (
-              <div className="sk-tool" key={tool.name}>
-                <span className="sk-tool-icon"><Icon name={tool.icon} size={16} /></span>
-                <div className="sk-tool-text">
-                  <span className="sk-tool-name">{tool.name}</span>
-                  <span className="sk-tool-desc">{t(tool.desc)}</span>
-                </div>
-                <span className="tag tag-neutral">{t(EFFECT_LABEL[tool.effect])}</span>
-              </div>
-            ))}
-          </div>
+          <ToolsList
+            tools={tools} failed={toolsFailed} onReload={reload}
+            onChanged={changed => setTools(current => current?.map(tool => (tool.name === changed.name ? changed : tool)) ?? current)}
+          />
         )}
       </div>
 

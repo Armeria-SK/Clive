@@ -326,3 +326,37 @@ test('広がりの検出（待ち受け）: 内向きの別の書き方（127.0.
   assert.deepEqual(accessWidening(before, { server: { host: '0.0.0.0' } }), [{ kind: 'host-exposed', host: '0.0.0.0' }]);
   assert.deepEqual(accessWidening(before, { server: { host: '192.168.1.5' } }), [{ kind: 'host-exposed', host: '192.168.1.5' }]);
 });
+
+test('広がりの検出（道具ごとの方針）: 止める → 承認を求める・承認なし、承認を求める → 承認なし、項目を消す（= 承認なし）は広がり。厳しくする変更・方針を持てない道具・読めない値は数えない', () => {
+  const withPolicies = (policies: Record<string, unknown> | undefined): Config => ({ tools: policies === undefined ? {} : { policies } });
+  const loosened = (tool: string, from: string, to: string) => ({ kind: 'tool-policy-loosened', tool, from, to });
+  // 緩める
+  assert.deepEqual(accessWidening(withPolicies({ shell_run: 'block' }), withPolicies({ shell_run: 'ask' })), [loosened('shell_run', 'block', 'ask')]);
+  assert.deepEqual(accessWidening(withPolicies({ shell_run: 'block' }), withPolicies({ shell_run: 'allow' })), [loosened('shell_run', 'block', 'allow')]);
+  assert.deepEqual(accessWidening(withPolicies({ file_write: 'ask' }), withPolicies({ file_write: 'allow' })), [loosened('file_write', 'ask', 'allow')]);
+  assert.deepEqual(accessWidening(withPolicies({ file_write: 'ask' }), withPolicies({})), [loosened('file_write', 'ask', 'allow')], '項目を消すのは承認なしに戻すこと');
+  assert.deepEqual(accessWidening(withPolicies({ file_write: 'block' }), withPolicies(undefined)), [loosened('file_write', 'block', 'allow')], 'policies ごと消えても同じ');
+  assert.deepEqual(accessWidening(withPolicies({ shell_run: 'block', file_write: 'ask', web_fetch: 'ask' }), withPolicies({ shell_run: 'ask', file_write: 'allow', web_fetch: 'block' })), [
+    loosened('file_write', 'ask', 'allow'), loosened('shell_run', 'block', 'ask'),
+  ], '名前順。厳しくした web_fetch は含めない');
+  // 厳しくする・変えない
+  for (const [from, to] of [['allow', 'ask'], ['allow', 'block'], ['ask', 'block'], ['ask', 'ask'], ['block', 'block']]) {
+    assert.deepEqual(accessWidening(withPolicies({ shell_run: from }), withPolicies({ shell_run: to })), [], `${from} → ${to}`);
+  }
+  assert.deepEqual(accessWidening(withPolicies(undefined), withPolicies({ shell_run: 'block', file_write: 'ask' })), [], '足すのは厳しくすること');
+  // サーバーが無視するものは、緩めても何も広がらない: 方針を持てない道具、読めない値は allow 扱い
+  assert.deepEqual(accessWidening(withPolicies({ task_complete: 'block', ask_user: 'ask', task_checkpoint: 'block' }), withPolicies({})), []);
+  assert.deepEqual(accessWidening(withPolicies({ shell_run: 'nope' }), withPolicies({ shell_run: 'allow' })), [], '読めない値は allow と同じ');
+  assert.deepEqual(accessWidening(withPolicies({ shell_run: 'block' }), withPolicies({ shell_run: 'nope' })), [loosened('shell_run', 'block', 'allow')], '読めない値に書き換えても、緩めたことになる');
+  // 確かめた内容と書く直前に数え直した内容が同じかを見る印は、緩め方が変われば変わる
+  const toAsk = accessWidening(withPolicies({ shell_run: 'block' }), withPolicies({ shell_run: 'ask' }));
+  const toAllow = accessWidening(withPolicies({ shell_run: 'block' }), withPolicies({ shell_run: 'allow' }));
+  assert.notEqual(accessKey(toAsk), accessKey(toAllow));
+});
+
+test('広がりの確かめの文: 道具ごとの方針を緩める行は、道具の名前と前後の方針（辞書の名前）を出す。ja と en の辞書にある', () => {
+  assert.equal(typeof ja['access.toolPolicy'], 'function');
+  assert.equal(typeof en['access.toolPolicy'], 'function');
+  assert.match(ja['access.toolPolicy']('shell_run', '止める', '承認を求める'), /shell_run.*止める.*承認を求める/u);
+  assert.match(en['access.toolPolicy']('shell_run', 'Block', 'Ask for approval'), /shell_run.*Block.*Ask for approval/u);
+});

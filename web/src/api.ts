@@ -1,3 +1,4 @@
+import type { ToolPolicy } from '../../src/tools/tool-policy.ts';
 import { getLanguage } from './i18n/state.ts';
 import { errorBodyText } from './server-text.ts';
 
@@ -31,6 +32,8 @@ export interface Approval {
   reasons: string[]; details: string[]; paths: ApprovalPathView[]; pathsMore?: number; expiresAt: number;
   // コードを動かす確かめ: 毎回確かめる（「この会話では許可」と Enter での許可は無い）。preview は動かすファイルの中身
   onceOnly: boolean; preview: ApprovalPreview[];
+  // 道具ごとの方針が「承認を求める」の確かめ: 毎回確かめる（「この会話では許可」は無い）。無い古い応答は false 扱い
+  everyTime?: boolean;
 }
 // 会話を次に送るときのコンテキストの使用量。tokens は古い発言を削る前の見積もり、available は削り始める境目、capacity はモデル全体、ratio は tokens / available（1 を超えうる）
 export interface ContextUsage { modelId: string; tokens: number; available: number; capacity: number; ratio: number }
@@ -58,6 +61,14 @@ export interface RunRow {
   started_at: number; duration_ms: number | null; ok: number | null; error_kind: string | null; error_message: string | null;
   input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; est_prompt_tokens: number | null; flags: string[];
 }
+
+// 道具の一覧（GET /api/tools）。policy は設定の tools.policies、configurable が false の道具（タスクの進め方に必要なもの）は方針を変えられない
+export interface ToolInfo {
+  name: string; effect: 'read' | 'write' | 'exec' | 'network' | 'meta'; allowedIn: Array<'chat' | 'task' | 'review'>; policy: ToolPolicy; configurable: boolean;
+}
+
+// POST /api/server/apply の応答。url があるときは、ポートが変わったので、画面はそこへ移る
+export interface ServerApplyResult { applied: { listen: boolean; auth: boolean }; server: { host: string; port: number }; url: string | null; restartRequired: boolean }
 
 export interface ToolCallRow {
   id: string; run_id: string; conversation_id: string | null; tool: string; input: string;
@@ -163,6 +174,7 @@ export const api = {
   runs: (limit = 200) => call<{ runs: RunRow[] }>(`/api/runs?limit=${limit}`),
   toolCalls: () => call<{ toolCalls: ToolCallRow[] }>('/api/tool-calls?limit=200'),
   settings: () => call<SettingsView>('/api/settings'),
+  applyServer: (force = false) => call<ServerApplyResult>('/api/server/apply', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) }),
   saveSettings: (config: unknown) => call<SettingsView & { models: ModelView[] }>('/api/settings', { method: 'PUT', body: JSON.stringify({ config }) }),
   models: () => call<{ models: ModelView[]; routing: { chat: string[]; background: string[] } }>('/api/models'),
   probe: () => call<{ models: ModelView[] }>('/api/models/probe', { method: 'POST', body: '{}' }),
@@ -190,6 +202,8 @@ export const api = {
   rejectDraft: (id: number) => call(`/api/skill-drafts/${id}/reject`, { method: 'POST', body: '{}' }),
   reviews: () => call<{ jobs: ReviewJob[]; pending: number }>('/api/reviews'),
   reviewConversation: (conversationId: string) => call<{ queued: boolean }>('/api/reviews', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+  tools: () => call<{ tools: ToolInfo[] }>('/api/tools'),
+  setToolPolicy: (name: string, policy: ToolPolicy) => call<{ tool: ToolInfo }>(`/api/tools/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify({ policy }) }),
   skills: () => call<{ skills: SkillSummary[]; dir: string }>('/api/skills'),
   skill: (name: string) => call<{ skill: SkillSummary & { body: string } }>(`/api/skills/${encodeURIComponent(name)}`),
   saveSkill: (name: string, description: string, body: string) => call(`/api/skills/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify({ description, body }) }),

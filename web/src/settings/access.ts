@@ -1,4 +1,5 @@
 import { allowEntryRunsCode } from '../../../src/tools/hooks/listed-commands.ts';
+import { isLooser, isPolicyable, isToolPolicy, type ToolPolicy } from '../../../src/tools/tool-policy.ts';
 import { deepEqual } from './merge.ts';
 import type { Config } from './model.ts';
 import { foldersFromConfig, wideningChanges, type Widening } from '../skills-meta.ts';
@@ -34,7 +35,9 @@ export type Access =
   | { kind: 'host-exposed'; host: string }
   | { kind: 'provider-url'; id: string; url: string }
   | { kind: 'provider-key'; id: string; env: string }
-  | { kind: 'searxng-url'; url: string };
+  | { kind: 'searxng-url'; url: string }
+  // 道具ごとの方針を緩める（止める → 承認を求める / 承認なし、承認を求める → 承認なし）
+  | { kind: 'tool-policy-loosened'; tool: string; from: ToolPolicy; to: ToolPolicy };
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : []);
 const added = (before: readonly string[], after: readonly string[]): string[] => after.filter(x => !before.includes(x));
@@ -92,6 +95,21 @@ function hookChanges(before: Config, after: Config, stage: HookStage): Access[] 
   return out;
 }
 
+// 道具ごとの方針の変更のうち、緩めるもの。方針を持てない道具（サーバーが無視する）と、読めない値（allow 扱い）は、サーバーの読み方に合わせる
+export function toolPolicyLoosened(tool: string, from: unknown, to: unknown): Access | null {
+  if (!isPolicyable(tool)) return null;
+  const before: ToolPolicy = isToolPolicy(from) ? from : 'allow';
+  const after: ToolPolicy = isToolPolicy(to) ? to : 'allow';
+  return isLooser(before, after) ? { kind: 'tool-policy-loosened', tool, from: before, to: after } : null;
+}
+
+function toolPolicyChanges(before: Config, after: Config): Access[] {
+  const was = obj(obj(before.tools).policies);
+  const now = obj(obj(after.tools).policies);
+  const names = [...new Set([...Object.keys(was), ...Object.keys(now)])].sort();
+  return names.flatMap(name => toolPolicyLoosened(name, was[name], now[name]) ?? []);
+}
+
 export function accessWidening(before: Config, after: Config): Access[] {
   const out: Access[] = [...wideningChanges(foldersFromConfig(before), foldersFromConfig(after))];
   const bt = obj(before.tools);
@@ -111,6 +129,7 @@ export function accessWidening(before: Config, after: Config): Access[] {
   if ((obj(before.worker).selfTasksNeedApproval ?? false) === true && (obj(after.worker).selfTasksNeedApproval ?? false) === false) out.push({ kind: 'self-tasks-unapproved' });
   out.push(...hookChanges(before, after, 'preToolUse'), ...hookChanges(before, after, 'postToolUse'));
   out.push(...providerChanges(before, after));
+  out.push(...toolPolicyChanges(before, after));
   const searxHost = hostOf(obj(at.web).searxngUrl);
   const searxChanged = searxHost !== hostOf(obj(bt.web).searxngUrl) || ((obj(bt.web).search ?? 'duckduckgo') !== 'searxng' && (obj(at.web).search ?? 'duckduckgo') === 'searxng');
   if (searxHost !== null && !isLoopbackHost(searxHost) && searxChanged) out.push({ kind: 'searxng-url', url: String(obj(at.web).searxngUrl) });

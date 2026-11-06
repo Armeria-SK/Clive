@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { Value } from '@sinclair/typebox/value';
 import type { App } from '../app.ts';
 import { AppConfig, LANGUAGES, type Language } from '../config/schema.ts';
@@ -13,7 +13,6 @@ import { eraseConversation } from '../db/erase.ts';
 import { searchHistory } from '../memory/history.ts';
 import { join } from 'node:path';
 import { MemoryError, planBooks } from '../memory/store.ts';
-import { defaultOrigins, WebAuth } from './auth.ts';
 import { httpText } from '../shared/messages/http.ts';
 import { configProblem, domainProblem, HttpProblem, problem, readBody, readJson, requireObject, requireString, Router, sendJson } from './http.ts';
 import { attachmentBlock, MAX_ATTACHMENTS, MAX_UPLOAD_BYTES, stripAttachments, UploadError } from '../uploads/store.ts';
@@ -21,6 +20,7 @@ import type { AttachmentMeta, ImageRef } from '../engine/types.ts';
 import { registerOnboardingRoutes } from './routes-onboarding.ts';
 import { registerReviewRoutes } from './routes-review.ts';
 import { registerTaskRoutes } from './routes-tasks.ts';
+import { createListener, ServerHost, type ApplyFailure } from './server-host.ts';
 import { LiveStreams } from './sse.ts';
 import { serveStatic } from './static.ts';
 
@@ -30,10 +30,27 @@ const MAX_REVIEW_STOP_ROUNDS = 10;
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export interface WebServer {
-  server: Server;
+  // いま待ち受けているサーバー。画面から server の設定を反映して入れ替えたあとは、新しい方を指す
+  readonly server: Server;
   streams: LiveStreams;
   handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  // 試験用: 待ち受けの場所は変えず、許す origin だけを入れ替える
   setOrigins: (origins: readonly string[]) => void;
+  // 待ち受けを始める（起動で使う。場所は起動したときの server の設定。始められなければ reject）。override は試験用
+  listen: (override?: { host: string; port: number }) => Promise<void>;
+  // 終了: いまの待ち受けと開いている流れを閉じる
+  close: () => void;
+}
+
+function applyProblem(failure: ApplyFailure): HttpProblem {
+  switch (failure.code) {
+    case 'nothing_to_apply': return problem(409, 'nothing_to_apply', 'nothing_to_apply');
+    case 'busy': return problem(409, 'busy', 'apply_busy');
+    case 'host_not_loopback': return problem(409, 'invalid_server', 'host_not_loopback', { params: { host: failure.host } });
+    case 'bad_server': return problem(409, 'invalid_server', 'bad_server');
+    case 'listen_failed': return problem(409, 'listen_failed', 'listen_failed', { params: { host: failure.host, port: failure.port, errno: failure.errno } });
+    case 'would_lock_out': return problem(409, 'would_lock_out', `lockout_${failure.reason}`, { params: failure.params });
+  }
 }
 
 function settingsView(app: App) {
@@ -98,10 +115,13 @@ function readChoice(app: App, body: Record<string, unknown>, current: { model_id
 }
 
 export function createWebServer(app: App): WebServer {
-  const config = app.config();
-  let auth = new WebAuth(defaultOrigins(config.server.port, config.server.origins), config.server.tailscaleLogins);
   const streams = new LiveStreams(app.bus);
   const router = new Router();
+  // 待ち受けと認証は ServerHost が持つ（起動したときの server の設定から。画面からの反映で入れ替わる）
+  const host = new ServerHost({
+    running: app.bootServer, create: createListener((req, res) => handle(req, res)), closeStreams: () => streams.closeAll(),
+    accept: server => app.markServerApplied(server), log: line => app.log(line),
+  });
 
   router.add('GET', '/api/health', ({ res }) => sendJson(res, 200, {
     ok: true, bootId: app.bus.bootId, now: Date.now(), activeRuns: app.engine.activeRuns().length,
@@ -373,10 +393,22 @@ export function createWebServer(app: App): WebServer {
     await app.status.probeAll(app.config());
     sendJson(res, 200, modelsView(app));
   });
+  // サーバーの設定（待ち受けと認証）を、プロセスを止めずに入れ替える。書き込みなので、ほかの書き込みと同じく Host・Origin・Sec-Fetch-Site を通った要求だけ。
+  // 反映する設定は、ここで 1 回だけ読む。モデルのシェルからこの API を呼ぶ形は、この PC の中のサーバーへの接続（code.loopback）として、毎回、中身を見せて人の承認を求める（今回だけ。人が拒否すれば呼ばれない）。確かめなしでは通らない
+  router.add('POST', '/api/server/apply', async ({ req, res }) => {
+    const body = requireObject(await readJson(req));
+    if (body.force !== undefined && typeof body.force !== 'boolean') throw problem(400, 'invalid_field', 'bad_bool', { field: 'force', params: { field: 'force' } });
+    const outcome = await host.apply(req, structuredClone(app.config().server), body.force === true);
+    if (!outcome.ok) throw applyProblem(outcome.failure);
+    // 応答を返し終えてから、古い待ち受けを閉じる（この応答そのものを切らないため）
+    res.once('finish', outcome.retire);
+    res.once('close', outcome.retire);
+    sendJson(res, 200, { applied: outcome.changed, server: { host: outcome.server.host, port: outcome.server.port }, url: outcome.url, restartRequired: app.restartRequired() });
+  });
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const verdict = auth.check(req);
+    const verdict = host.auth.check(req);
     if (!verdict.ok) { sendJson(res, 403, { error: 'forbidden', reason: verdict.reason }); return; }
     if (!url.pathname.startsWith('/api/')) {
       if (!serveStatic(app.paths.webDist, req, res)) sendJson(res, 404, { error: 'not_found' });
@@ -393,8 +425,11 @@ export function createWebServer(app: App): WebServer {
     }
   };
 
-  const server = createServer((req, res) => { void handle(req, res); });
-  server.on('close', () => streams.close());
-  const setOrigins = (origins: readonly string[]) => { auth = new WebAuth(origins, config.server.tailscaleLogins); };
-  return { server, streams, handle, setOrigins };
+  return {
+    get server() { return host.server; },
+    streams, handle,
+    setOrigins: origins => host.setOrigins(origins),
+    listen: override => host.listen(override),
+    close: () => host.close(),
+  };
 }

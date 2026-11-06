@@ -15,6 +15,11 @@ import type { ApprovalPath, PreviewFile } from './approvals.ts';
 
 export type ToolEffect = 'read' | 'write' | 'exec' | 'network' | 'meta';
 
+// 確かめ（ask）になった理由の種類。段 8b の自動承認は、これを見て判定役に回すかを決める。
+// precheck: 道具の事前の判定（まだ細かい種類が無い理由）/ code: コードを動かす / taint: 外から読んだ内容のあと / policy: 道具ごとの方針の ask / hook: 実行前フック。
+// 種類の付かない理由・知らない種類は、自動では通さない（新しい確かめを足したときに、黙って自動になることを防ぐ）
+export type AskKind = 'precheck' | 'code' | 'taint' | 'policy' | 'hook';
+
 export type RunKind = 'chat' | 'task' | 'review';
 
 export interface ToolOutput {
