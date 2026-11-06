@@ -254,3 +254,111 @@ test('履歴の検索・読み出しの visibleModelIds: 空の一覧を渡す�
   assert.equal(readHistory(s.app.db, uuid(12), { visibleModelIds: [] }).length, 1);
   assert.equal(readHistory(s.app.db, uuid(13), {}).length, 1);
 });
+
+// ── 3: 手元のモデルを選んだ会話から作ったタスクは、手元のモデルだけで動かす ──
+const taskRows = (s: Started) => s.app.tasks.list({ statuses: ['inbox', 'ready', 'running', 'waiting', 'scheduled', 'done', 'failed', 'cancelled'] });
+
+async function runIn(s: Started, id: string, modelId: string | null, scripts: Script[], adapterId: 'fake' | 'ext' = 'fake'): Promise<void> {
+  if (!s.app.conversations.get(id)) s.app.conversations.create({ id, title: '会話' });
+  if (modelId) s.app.conversations.setChoice(id, { modelId });
+  s.adapters.get(adapterId)!.scripts = scripts;
+  const sent = await s.json(`/api/conversations/${id}/messages`, 'POST', { text: 'タスクにして' });
+  assert.equal(sent.status, 202);
+  await settled(s.app, sent.body.runId);
+  await s.app.engine.wait(sent.body.runId);
+}
+const complete = call('task_complete', { summary: 'できた', notify: false });
+
+test('タスク: 手元のモデルを選んだ会話の task_create で作ったタスクは local_only。自動・外のモデルの会話のものは違う', async t => {
+  const s = await startApp(t, twoProviders([]));
+  await runIn(s, uuid(1), 'loc', [call('task_create', { title: '手元の会話のタスク', requested_by_user: true }), reply('作りました')], 'fake');
+  await runIn(s, uuid(2), 'ext1', [call('task_create', { title: '外のモデルの会話のタスク', requested_by_user: true }), reply('作りました')], 'ext');
+  await runIn(s, uuid(3), null, [call('task_create', { title: '自動の会話のタスク', requested_by_user: true }), reply('作りました')], 'fake');
+  const byTitle = Object.fromEntries(taskRows(s).map(task => [task.title, task.local_only]));
+  assert.deepEqual(byTitle, { 手元の会話のタスク: 1, 外のモデルの会話のタスク: 0, 自動の会話のタスク: 0 });
+});
+
+test('タスク: 手元のモデルを選んだ会話の繰り返しのタスクから作られる実行も local_only を引き継ぐ', async t => {
+  const s = await startApp(t, twoProviders([]));
+  await runIn(s, uuid(1), 'loc', [call('task_create', { title: '毎朝', repeat: '0 9 * * *', requested_by_user: true }), reply('作りました')], 'fake');
+  const template = taskRows(s).find(task => task.title === '毎朝')!;
+  assert.equal(template.local_only, 1);
+  assert.equal(s.app.tasks.spawnNow(template.id)!.local_only, 1, '予定から作る実行');
+});
+
+test('タスク: 手元のモデルを選んだ会話で task_update したタスクも local_only になる（会話の文がメモとして入るため）。外のモデルの会話では変わらない', async t => {
+  const s = await startApp(t, twoProviders([]));
+  const mine = s.app.tasks.create({ title: '前からあるタスク', origin: 'user', actor: 'user' });
+  const other = s.app.tasks.create({ title: '別のタスク', origin: 'user', actor: 'user' });
+  await runIn(s, uuid(1), 'loc', [call('task_update', { id: mine.id.slice(0, 8), note: '手元の会話で決めたこと' }), reply('書きました')], 'fake');
+  await runIn(s, uuid(2), 'ext1', [call('task_update', { id: other.id.slice(0, 8), note: '外のモデルの会話で決めたこと' }), reply('書きました')], 'ext');
+  assert.equal(s.app.tasks.get(mine.id)!.local_only, 1);
+  assert.equal(s.app.tasks.get(other.id)!.local_only, 0);
+});
+
+test('タスク: 道具の上限のまとめ（会話の経過をタスクのメモへ書く）が手元のモデルの会話から書かれたら、書き先のタスクも local_only になる', async t => {
+  const s = await startApp(t, { ...twoProviders([]), configure: c => { twoProviders([]).configure(c); c.tools.maxIterations = 1; } });
+  const id = uuid(1);
+  const created = s.app.tasks.create({ title: 'この会話で作ったタスク', origin: 'user', actor: 'user', createdInConversation: id });
+  await runIn(s, id, 'loc', [call('task_list', {}), reply('ここまでやりました。次の一手: 続きを書く')]);
+  const task = s.app.tasks.get(created.id)!;
+  assert.match(task.body, /ここまでやりました/u, '前提: まとめがメモに書かれた');
+  assert.equal(task.local_only, 1);
+});
+
+test('タスクの実行: local_only のタスクは、裏方の順番のうち手元のモデルだけで動かす。そうでないタスクは今までどおり順番どおり', async t => {
+  const s = await startApp(t, twoProviders(['ext1', 'loc2', 'ext2']));
+  s.app.tasks.create({ title: '手元だけで', origin: 'user', actor: 'user', localOnly: true });
+  s.adapter().scripts = [complete];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.adapters.get('ext')!.calls.length, 0, '外のモデルは呼ばれない');
+  assert.deepEqual(s.adapter().calls.map(c => c.model.id), ['loc2']);
+  assert.equal(taskRows(s).find(task => task.title === '手元だけで')!.status, 'done');
+
+  s.app.tasks.create({ title: '普通のタスク', origin: 'user', actor: 'user' });
+  s.adapters.get('ext')!.scripts = [complete];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.deepEqual(s.adapters.get('ext')!.calls.map(c => c.model.id), ['ext1'], '手元でないタスクは裏方の順番の先頭');
+});
+
+test('タスクの実行: 使える手元の裏方モデルが無ければ、外のモデルに回さず待つ（回数も数えず、不調の通知も出さない）。順番が空でもチャットの順番には回さない', async t => {
+  for (const background of [['ext1', 'ext2'], []]) {
+    const s = await startApp(t, twoProviders(background));
+    const task = s.app.tasks.create({ title: '手元だけで', origin: 'user', actor: 'user', localOnly: true });
+    assert.equal(await s.app.worker.tick(), 'no_model');
+    assert.equal(s.adapter().calls.length + s.adapters.get('ext')!.calls.length, 0, `どのモデルも呼ばれない（裏方の順番: ${JSON.stringify(background)}）`);
+    const waiting = s.app.tasks.get(task.id)!;
+    assert.equal(waiting.status, 'ready');
+    assert.ok(waiting.run_at! > Date.now(), 'あとでもう一度');
+    assert.equal(waiting.attempts, 0);
+    assert.match(s.app.tasks.events(task.id).find(e => e.kind === 'requeued')!.content ?? '', /手元のモデル/u);
+    assert.equal(s.app.notifications.list().filter(n => n.kind === 'health_alert').length, 0);
+  }
+});
+
+test('タスクの実行: local_only のタスクが task_create で作る子のタスクも local_only（手元のタスクを経由して外へ出さない）', async t => {
+  const s = await startApp(t, twoProviders(['loc2']));
+  s.app.tasks.create({ title: '手元だけで', origin: 'user', actor: 'user', localOnly: true });
+  s.adapter().scripts = [call('task_create', { title: '子のタスク', requested_by_user: true }), complete];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(taskRows(s).find(task => task.title === '子のタスク')!.local_only, 1);
+});
+
+test('タスクの実行: local_only のタスクが終わったあとの振り返り（記憶に残す振り返り）も、手元の裏方モデルだけで行う。外のモデルには回さない', async t => {
+  const s = await startApp(t, twoProviders(['ext1', 'loc2', 'ext2']));
+  const task = s.app.tasks.create({ title: '手元だけで', origin: 'user', actor: 'user', localOnly: true });
+  s.app.tasks.finish(task.id, 'done', 'タスクの結果', 'clive');
+  s.app.reviews.enqueue('task', `task:${task.id}`, { taskId: task.id });
+  s.adapter().scripts = [reply('変更なし')];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.equal(s.adapters.get('ext')!.calls.length, 0, '外のモデルは呼ばれない');
+  assert.deepEqual(s.adapter().calls.map(c => c.model.id), ['loc2']);
+  assert.match(String(s.adapter().calls[0]!.messages.at(-1)?.content), /タスクの結果/u);
+
+  const normal = s.app.tasks.create({ title: '普通のタスク', origin: 'user', actor: 'user' });
+  s.app.tasks.finish(normal.id, 'done', 'ふつうの結果', 'clive');
+  s.app.reviews.enqueue('task', `task:${normal.id}`, { taskId: normal.id });
+  s.adapters.get('ext')!.scripts = [reply('変更なし')];
+  assert.equal(await s.app.worker.tick(), 'ran');
+  assert.deepEqual(s.adapters.get('ext')!.calls.map(c => c.model.id), ['ext1'], '手元でないタスクは裏方の順番どおり');
+});

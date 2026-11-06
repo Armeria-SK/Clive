@@ -60,7 +60,7 @@ export const taskCreate: ToolDef<{ title: string; body?: string; next_action?: s
       const task = store(ctx).create({
         title: input.title, body: input.body, nextAction: input.next_action, doneCriteria: input.done_criteria, priority: input.priority,
         runAt: parseWhen(input.when), cron: input.repeat, timezone: ctx.config.timezone,
-        origin: self ? 'self' : 'user', propose: self && ctx.config.worker.selfTasksNeedApproval, actor: 'clive', createdInConversation: ctx.conversationId,
+        origin: self ? 'self' : 'user', propose: self && ctx.config.worker.selfTasksNeedApproval, actor: 'clive', createdInConversation: ctx.conversationId, localOnly: ctx.localOnly === true,
       });
       ctx.touchedTasks?.add(task.id);
       const language = languageOf(ctx.config);
@@ -114,6 +114,7 @@ export const taskUpdate: ToolDef<{ id: string; note?: string; next_action?: stri
       }, 'clive', ctx.runId);
       if (input.status) updated = s.finish(task.id, input.status, input.note ?? null, 'clive', ctx.runId);
       ctx.touchedTasks?.add(task.id);
+      if (ctx.localOnly === true) s.markLocalOnly(task.id);
       return { content: toolText(languageOf(ctx.config), 'task.updated', { line: line(updated, ctx.config.timezone, languageOf(ctx.config)) }) };
     } catch (error) { return fail(error, ctx); }
   },

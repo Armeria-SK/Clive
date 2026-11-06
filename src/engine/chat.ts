@@ -21,7 +21,7 @@ import type { RunBus } from './bus.ts';
 import { CONTEXT_FILL_RATIO, MEMORY_BUDGET_RATIO, PERSONA_BUDGET_RATIO, contextAvailable, toolOutputLimit } from './context-budget.ts';
 import { modelEfforts } from './efforts.ts';
 import { ContextOverflow, fitMessages } from './fit.ts';
-import { isLocalModel, isLocalProvider } from './local-model.ts';
+import { isLocalModel, isLocalPinned, isLocalProvider } from './local-model.ts';
 import type { ModelStatus } from './status.ts';
 import { extractToolCalls, jsonFallbackInstructions, looksLikeTextToolCall, toJsonFallbackHistory } from './toolcall-parse.ts';
 import type { AttachmentMeta, ChatMessage, ContextDetail, EngineErrorKind, EngineResult, ImageRef, StopReason, ToolCall, Usage } from './types.ts';
@@ -328,12 +328,14 @@ export class ChatEngine {
     return { ok: true, runId };
   }
 
-  runTask(task: Task, conversationId: string, prompt: string): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string } {
+  // task.local_only: 手元のモデルを選んだ会話から作ったタスク。裏方の順番のうち手元のモデルだけで動かし、使えるものが無ければ（チャットの順番や外のモデルに回さず）始めない（localOnly: true で知らせる）
+  runTask(task: Task, conversationId: string, prompt: string): { ok: true; runId: string; control: { value: TaskControl }; done: Promise<EngineResult> } | { ok: false; errorMessage: string; localOnly?: true } {
     if (this.#byConversation.has(conversationId)) return { ok: false, errorMessage: engineText(languageOf(this.#d.config()), 'send.task_running') };
-    const chain = this.#chain('background');
+    const localOnly = task.local_only === 1;
+    const chain = this.#chain('background', null, localOnly);
     if (!chain.usable.length) {
       const outcome = this.#noUsableModel(chain.problems);
-      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage };
+      return { ok: false, errorMessage: outcome.ok ? '' : outcome.errorMessage, ...(localOnly ? { localOnly: true as const } : {}) };
     }
     const saved = this.#d.conversations.append(conversationId, { role: 'user', content: prompt });
     const runId = randomUUID();
@@ -529,6 +531,7 @@ export class ChatEngine {
       ...(forbid ? { forbiddenTools: forbid } : {}),
     };
     ctx.modelsLocal = chain.every(route => isLocalProvider(route.provider));
+    ctx.localOnly = kind === 'chat' ? isLocalPinned(config, d.conversations.get(conversationId)?.model_id) : task?.task.local_only === 1;
     // 外から読んだ印は、実行の記録に読んだ時点で書く（途中で止まる・落ちる実行でも、やり直し・続きが引き継げるように）
     let taintRecorded = false;
     const recordTaint = () => { if (taintRecorded || !ctx.taint.tainted) return; taintRecorded = true; d.runs.markTainted(runId); };
@@ -540,7 +543,7 @@ export class ChatEngine {
     let replyLanguage: Language | undefined;
     const finishOk = (text: string, stop: StopReason, wrapUp?: { nextAction: string | undefined }): EngineResult => {
       if (replyLanguage && this.#lastReplyLanguage(conversationId) !== replyLanguage) d.kv.set(replyLanguageKey(conversationId), replyLanguage);
-      if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted });
+      if (kind === 'chat') this.#handOver(runId, conversationId, { note: text, nextAction: wrapUp?.nextAction }, { wrapUp: wrapUp !== undefined, workCalls: counters.workCalls, touched: touchedTasks, tainted: ctx.taint.tainted, localOnly: ctx.localOnly === true });
       d.runs.finish(runId, { ok: true, modelId: lastRoute.model.id, providerId: lastRoute.provider.id, model: lastRoute.model.model, attempts: counters.attempts, stop, iterations: counters.iterations, toolCalls: counters.toolCalls, usage, estPromptTokens: lastEstimate, flags });
       d.bus.publish({ type: 'run.end', runId, conversationId, ok: true });
       return { ok: true, runId, text, modelId: lastRoute.model.id, usage, stop };
@@ -649,7 +652,8 @@ export class ChatEngine {
   // - 道具の上限で止まったときは、さらに、この会話で作った実行待ち・返事待ちのタスク。まとめに次の一手があれば、次の一手も書く
   // この実行が止めたタスク（preempted）は、止めただけでは書かない（止めるのは、同じモデルの提供元を使っているだけで、別の会話のタスクかもしれない）。触った・この会話で作ったときだけ書き、そのとき実行中のままの状態（running）も許す
   // 外から読んだ実行（taint）は書かない: メモはタスクの詳細に入り、外を読んでいないタスクの実行が指示として読むため
-  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, run: { wrapUp: boolean; workCalls: number; touched: ReadonlySet<string>; tainted: boolean }): void {
+  // 手元のモデルの会話の実行（localOnly）が書いたタスクは、手元のモデルだけで動かすタスクにする（メモに会話の文が入るため）
+  #handOver(runId: string, conversationId: string, summary: { note: string; nextAction?: string | undefined }, run: { wrapUp: boolean; workCalls: number; touched: ReadonlySet<string>; tainted: boolean; localOnly: boolean }): void {
     const d = this.#d;
     const note = summary.note.trim();
     if (!d.tasks || !note || run.tainted) return;
@@ -665,6 +669,7 @@ export class ChatEngine {
       const open = preempted.has(id) ? ['ready', 'running', 'waiting'] : ['ready', 'waiting'];
       if (!open.includes(task.status)) continue;
       d.tasks.update(id, { appendNote: engineText(language, 'handover.note', { text: note.slice(0, 1500) }), ...(summary.nextAction ? { nextAction: summary.nextAction } : {}) }, 'clive', runId);
+      if (run.localOnly) d.tasks.markLocalOnly(id);
     }
   }
 

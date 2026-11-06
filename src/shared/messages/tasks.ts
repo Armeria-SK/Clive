@@ -30,6 +30,7 @@ const ja = {
   'summary.cancelled_from_ui': '画面から取り消しました',
 
   'reason.no_model': '使えるモデルが無いため待ちます: {detail}',
+  'reason.local_wait': '手元のモデルで話した会話から作ったタスクなので、使える手元のモデルが無いあいだは待ちます（外のモデルには回しません）',
   'reason.preempted': 'ユーザーとの会話を優先するため中断しました（続きから再開します）',
   'reason.checkpoint': '{minutes} 分後に再開します',
   'reason.no_progress': '進展が無かったので、少し休んでから再開します',
@@ -101,6 +102,7 @@ const en: Record<keyof typeof ja, string> = {
   'summary.cancelled_from_ui': 'Cancelled from the screen',
 
   'reason.no_model': 'Waiting because no model is available: {detail}',
+  'reason.local_wait': 'This task came from a conversation that used a local model, so it waits while no local model is available (it is never sent to an external model)',
   'reason.preempted': 'Paused to give priority to the conversation with the user (it will resume from where it left off)',
   'reason.checkpoint': 'Will resume in {minutes} min',
   'reason.no_progress': 'No progress was made, so it will rest for a while and then resume',
