@@ -178,6 +178,33 @@ test('三種類の引用符と # をすべて含む鍵は、.env に安全に書
   assert.equal(JSON.stringify(res.body).includes('xyz'), false);
 });
 
+test('引用符・バッククォートで始まる鍵は 400（.env のあとの行の引用符で閉じられて、続きの変数を飲み込むため）。何も書かず、.env のほかの変数はそのまま', async t => {
+  const s = await start(t);
+  const original = "OTHER=keep\n# don't touch\nLAST=3\n";
+  writeFileSync(s.paths.env, original);
+  for (const key of [`'${KEY}`, `"${KEY}`, `${String.fromCharCode(96)}${KEY}`]) {
+    const res = await s.put('my-llm', { key });
+    assert.equal(res.status, 400, key.slice(0, 3));
+    assert.equal(res.body.field, 'key');
+    assert.equal(JSON.stringify(res.body).includes(KEY), false);
+  }
+  assert.equal(readFileSync(s.paths.env, 'utf8'), original);
+  assert.equal(existsSync(`${s.paths.env}.bak`), false);
+  assert.equal(s.app.config().providers.find(p => p.id === 'my-llm')!.apiKeyEnv, undefined, '設定も変えない');
+});
+
+test('.env の前の方に閉じていない引用符の行があり、鍵の引用符がそれを閉じてしまうなら、書かずに 409（.env も設定も変えない）', async t => {
+  const s = await start(t);
+  const original = 'OPEN="never closed\nOTHER=keep\n';
+  writeFileSync(s.paths.env, original);
+  const res = await s.put('my-llm', { key: 'abc"def' });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, 'env_unwritable');
+  assert.equal(readFileSync(s.paths.env, 'utf8'), original);
+  assert.equal(s.app.config().providers.find(p => p.id === 'my-llm')!.apiKeyEnv, undefined);
+  assert.equal(JSON.stringify(res.body).includes('def'), false);
+});
+
 test('知らないプロバイダは 404。ID の形が変でも同じ（環境変数の名前を作らない）', async t => {
   const s = await start(t);
   for (const id of ['nope', 'A%20B', '..%2F..', 'CLIVE_X_API_KEY']) {

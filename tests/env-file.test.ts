@@ -3,7 +3,7 @@ import { chmodSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, sy
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseEnv } from 'node:util';
-import { removeEnvValue, setEnvValue } from '../src/env-file.ts';
+import { EnvFileError, removeEnvValue, setEnvValue } from '../src/env-file.ts';
 import { keyEnvName, keyProblem, MAX_KEY_CHARS, isSecretEnvName } from '../src/shared/provider-key.ts';
 import { tempDir } from './helpers.ts';
 
@@ -111,7 +111,7 @@ test('Linux: .env は 0600 で作る・保つ。元がゆるい権限でも、�
 
 test('どんな文字の鍵も、起動で読み込むのと同じ読み方で、そのまま読み戻せる（# ・引用符・空白・= ・$ ・バックスラッシュ・日本語）', t => {
   const BS = String.fromCharCode(92);
-  const values = ['sk-abc_123', 'a b', 'a#b', 'a #b', "it's", 'q"q', 'back`tick', 'a=b=c', `x${BS}y`, '$HOME', '${X}', 'あいう', "'lead", '"lead', '`lead', '#start', `a${BS}nb`, `end${BS}`, `a${BS}"b`, 'sp  ace'];
+  const values = ['sk-abc_123', 'a b', 'a#b', 'a #b', "it's", 'q"q', 'back`tick', 'a=b=c', `x${BS}y`, '$HOME', '${X}', 'あいう', '#start', `a${BS}nb`, `end${BS}`, `a${BS}"b`, 'sp  ace'];
   for (const value of values) {
     const f = fixture(t, 'FIRST=1\nLAST=2\n');
     setEnvValue(f.path, 'K_API_KEY', value);
@@ -166,4 +166,109 @@ test('環境変数の名前: あればその名前、Anthropic は ANTHROPIC_API
 test('鍵を持つ名前だけを書く（isSecretEnvName）: PATH などの環境変数は、鍵の名前として書き換えない', () => {
   for (const ok of ['ANTHROPIC_API_KEY', 'FAKE_KEY', 'MY_TOKEN', 'SVC_SECRET', 'DB_PASSWORD']) assert.equal(isSecretEnvName(ok), true, ok);
   for (const bad of ['PATH', 'NODE_OPTIONS', 'HOME', 'LD_PRELOAD', 'HTTP_PROXY', 'GIT_SSH_COMMAND']) assert.equal(isSecretEnvName(bad), false, bad);
+});
+
+test('引用符で始まる鍵は、書かずに断る（あとの行の引用符で閉じられて、続きの変数を飲み込むため）。.env は変えず、控えも作らない', t => {
+  const f = fixture(t, "K=old\nB=keep\n# don't remove\nC=3\n");
+  for (const value of ["'abc", '"abc', '`abc', "'", '"']) {
+    assert.throws(() => setEnvValue(f.path, 'K', value), (error: unknown) => error instanceof EnvFileError && error.reason === 'value', JSON.stringify(value));
+  }
+  assert.equal(f.text(), "K=old\nB=keep\n# don't remove\nC=3\n");
+  assert.deepEqual(f.files(), ['.env']);
+  const parsed = parseEnv(f.text());
+  assert.equal(parsed.B, 'keep');
+  assert.equal(parsed.C, '3');
+});
+
+test('閉じていない引用符で始まる別の変数の行は、その行だけ（続きの行を飲み込まない）。置き換えても、ほかの変数が残る', t => {
+  const f = fixture(t, 'OTHER="oops\nB_KEY=1\nCLIVE_X_API_KEY=old\nC=2\n');
+  setEnvValue(f.path, 'OTHER', 'new');
+  assert.equal(f.text(), 'OTHER=new\nB_KEY=1\nCLIVE_X_API_KEY=old\nC=2\n');
+  const parsed = parseEnv(f.text());
+  assert.deepEqual([parsed.OTHER, parsed.B_KEY, parsed.CLIVE_X_API_KEY, parsed.C], ['new', '1', 'old', '2']);
+});
+
+test('閉じていない引用符の行を消しても、続きの行とコメントが残る', t => {
+  const f = fixture(t, 'A=1\nMY_KEY="abc\n# comment\nZ=2\n');
+  assert.equal(removeEnvValue(f.path, 'MY_KEY'), true);
+  assert.equal(f.text(), 'A=1\n# comment\nZ=2\n');
+  assert.equal(parseEnv(f.text()).Z, '2');
+});
+
+test('引用符が閉じる行までが 1 つの値。その中の行を、別の変数と間違えて消さない', t => {
+  const f = fixture(t, 'A="x\nB=1\nC=y"\nD=2\n');
+  assert.equal(removeEnvValue(f.path, 'C'), false, 'C は A の値の一部で、変数ではない');
+  assert.equal(removeEnvValue(f.path, 'B'), false);
+  assert.equal(f.text(), 'A="x\nB=1\nC=y"\nD=2\n');
+  setEnvValue(f.path, 'A', 'new');
+  assert.equal(f.text(), 'A=new\nD=2\n', 'A を置き換えると、閉じる行までが 1 つ分として外れる');
+});
+
+test('値そのものは書けても、ファイル全体で読むと前の行の引用符を閉じて飲み込むなら、別の形で書く（書けなければ断って、.env は変えない）', t => {
+  const open = fixture(t, "Z='open\nA=1\n");
+  setEnvValue(open.path, 'K', 'a #b');
+  assert.equal(open.text(), "Z='open\nA=1\nK=`a #b`\n", "' で囲むと Z の引用符が閉じてしまうので、` で囲む");
+  const parsed = parseEnv(open.text());
+  assert.deepEqual([parsed.Z, parsed.A, parsed.K], ["'open", '1', 'a #b']);
+  const shut = fixture(t, 'Z="open\nA=1\n');
+  assert.throws(() => setEnvValue(shut.path, 'K', 'a"b'), (error: unknown) => error instanceof EnvFileError && error.reason === 'file');
+  assert.equal(shut.text(), 'Z="open\nA=1\n');
+  assert.deepEqual(shut.files(), ['.env']);
+});
+
+test('消したあとに読み直して、鍵以外の変数が変わるなら消さない', t => {
+  const f = fixture(t, 'A="x\nK=1\nB=y"\nK=2\n');
+  assert.equal(parseEnv(f.text()).K, '2');
+  assert.equal(removeEnvValue(f.path, 'K'), true, '2 行目の K は A の値の中。変数の K は 4 行目だけ');
+  assert.equal(f.text(), 'A="x\nK=1\nB=y"\n');
+  assert.equal(parseEnv(f.text()).A, 'x\nK=1\nB=y');
+});
+
+// 同じ入力なら同じ結果になるよう、乱数は種から作る
+function random(seed: number) {
+  let state = seed >>> 0;
+  return () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state / 4294967296; };
+}
+
+test('どんな .env に、どんな順で書き込み・削除をしても、鍵以外の変数は 1 つも変わらない（変えるくらいなら書かずに断り、そのとき .env は変わらない）', t => {
+  const lines = ['# comment', '  # indented = comment', '', 'A=1', 'B="x y"', "C='z'", 'D=`q`', 'export E=5', 'KEY_1=old', 'KEY_1="old', "KEY_1='o", 'MY_KEY=`old', 'export MY_KEY=old2', 'F="multi', 'line"', "it's", 'G=has"quote', "H=it's", 'I=a # c', 'J=', 'x"', "x'", '=junk', 'junk', 'A = 2', '  K2=indented', 'L="a # b"', 'M="oops', "N='n", 'O=`o'];
+  const values = ['sk-abc', 'a b', 'a#b', 'a #b', "it's", 'q"q', 'back`tick', 'a=b', "'lead", '"lead', '`lead', '$HOME', '日本語', 'a\nb', 'x'.repeat(30), 'a b c', '#', 'q"q\'q'];
+  const names = ['KEY_1', 'MY_KEY', 'A', 'F', 'J', 'M', 'NEW_ONE'];
+  const f = fixture(t, '');
+  let accepted = 0;
+  let refused = 0;
+  for (const seed of [1, 2, 3]) {
+    const next = random(seed);
+    const pick = <T,>(items: readonly T[]): T => items[Math.floor(next() * items.length)]!;
+    for (let round = 0; round < 250; round++) {
+      const eol = next() < 0.3 ? '\r\n' : '\n';
+      const body = Array.from({ length: Math.floor(next() * 9) }, () => pick(lines)).join(eol);
+      const original = body + (next() < 0.8 ? eol : '');
+      writeFileSync(f.path, original);
+      const before = parseEnv(original);
+      const name = pick(names);
+      const remove = next() < 0.4;
+      const value = pick(values);
+      let changed: boolean;
+      try {
+        if (remove) changed = removeEnvValue(f.path, name); else { setEnvValue(f.path, name, value); changed = true; }
+      } catch (error) {
+        assert.ok(error instanceof EnvFileError, String(error));
+        assert.equal(f.text(), original, `断ったら変えない: ${JSON.stringify({ original, name, value, remove })}`);
+        refused += 1;
+        continue;
+      }
+      accepted += 1;
+      const after = parseEnv(f.text());
+      const context = JSON.stringify({ original, name, value, remove, now: f.text() });
+      const others = (env: Record<string, string | undefined>) => Object.fromEntries(Object.entries(env).filter(([key]) => key !== name));
+      assert.deepEqual(others(after), others(before), `鍵以外の変数が変わった: ${context}`);
+      if (remove) assert.equal(after[name], undefined, `消えていない: ${context}`);
+      else assert.equal(after[name], value, `書けていない: ${context}`);
+      if (!changed) assert.equal(f.text(), original, `何も外さないなら変えない: ${context}`);
+      if (!remove && before[name] === undefined) assert.ok(f.text().startsWith(original), `新しい変数は末尾に足すだけ: ${context}`);
+    }
+  }
+  assert.ok(accepted > 300, `書けた回数 ${accepted}`);
+  assert.ok(refused > 0, '断る場合も試している');
 });
