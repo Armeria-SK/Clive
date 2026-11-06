@@ -58,7 +58,7 @@ export interface ShellVerdict {
   limits: boolean;
   // コマンドの git がすべて、設定に core.hooksPath の無い 1 つのリポジトリのもので、そのリポジトリ自身のフックの置き場所（.git/hooks）。そうでなければ null
   ownHooksDir: string | null;
-  // コマンドのどれかが外から取得する（curl・wget・Invoke-WebRequest など）。実行すると外の中身を読むので、パイプラインは「外から読んだ」印を付ける
+  // コマンドのどれかが外から取得する（curl・wget・Invoke-WebRequest など）か、外の中身を持ち込む（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）。実行すると外の中身を読むので、パイプラインは「外から読んだ」印を付ける
   fetched: boolean;
 }
 
@@ -72,6 +72,8 @@ const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
 ]);
 const ELEVATE = /^\s*\(?\s*(?:sudo|doas|su|runas|pkexec)(?:\.exe)?\b/iu;
 const FORK_BOMB = /:\s*\(\s*\)\s*\{/u;
+// 外の中身を持ち込む git のサブコマンド（NET のうち、通信するもの。init と worktree は含めない）
+const PULLING_GIT: ReadonlySet<string> = new Set(['fetch', 'pull', 'clone', 'ls-remote', 'submodule']);
 const SHELL_SINKS = new Set(['sh', 'bash', 'zsh', 'pwsh', 'powershell', 'iex', 'invoke-expression', 'cmd', 'python', 'python3', 'node', 'perl', 'ruby']);
 const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git' };
 const CWD_CMDS = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir']);
@@ -153,6 +155,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const env: Env = opts.env ?? process.env;
   let limits = false;
   let fetched = false;
+  // 外の中身を持ち込むコマンド（git の取得・パッケージの導入）。curl などと違い、取ってきたものを動かす形を新しく止める（download_exec）ことはしないので、fetched とは別に持つ
+  let pulled = false;
   // ask の理由には種類を付ける。付けなければ precheck（細かい種類なし）で、自動承認の判定役には回らない
   const add = (d: Decision, reason: string, kind: AskKind = 'precheck') => {
     decision = worst(decision, d);
@@ -171,7 +175,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const done = (): ShellVerdict => {
     const onceOnly = askKinds.includes('code') && decision !== 'deny';
     if (onceOnly) explainWithCodeGuard();
-    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched };
+    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled };
   };
 
   // 今回だけにした理由を、より分かる文（ファイルのコードを動かします など）と、中身を見せるファイルで補う（判定は変えない）
@@ -425,6 +429,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const allowedByConfig = allowEntries.some(entry => entryMatches(entry, st.words, windows));
     for (const reason of result.reasons) {
       if (hard || denied) break;
+      if (reason.key === 'list.install' || (reason.key === 'list.git_net' && PULLING_GIT.has(String(reason.params.cmd)))) pulled = true;
       if (reason.exempt && allowedByConfig) continue;
       if (reason.key === 'list.install' || reason.key === 'list.expand') limits = limits || reason.key === 'list.install';
       if (reason.level === 'deny') add('deny', reasonText(reason));

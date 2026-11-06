@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { Type } from '@sinclair/typebox';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AppConfig } from '../src/config/schema.ts';
@@ -18,7 +19,7 @@ import { ASK_REASON_KINDS } from '../src/tools/hooks/ask-kinds.ts';
 import { effectiveMode, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
-import type { AskKind, ToolContext } from '../src/tools/types.ts';
+import type { AskKind, ToolContext, ToolDef } from '../src/tools/types.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 // 段 8b: 自動承認。確かめ（ask）のうち決まった範囲だけを判定役（AI）に聞く。判定役が何と答えても、範囲の外・拒否・今回だけ・毎回・フック・外から読んだあとは通さない
@@ -149,7 +150,7 @@ test('確かめの種類の表: 許可の一覧が ask で返す理由のキー�
 
 type Setup = Awaited<ReturnType<typeof setup>>;
 
-async function setup(t: { after: (fn: () => void) => void }, options: { mutate?: (c: AppConfig) => void; classify?: (prompt: ClassifierPrompt, signal: AbortSignal) => Promise<string> | string; mode?: PermissionMode; startMode?: PermissionMode } = {}) {
+async function setup(t: { after: (fn: () => void) => void }, options: { tools?: ToolDef[]; mutate?: (c: AppConfig) => void; classify?: (prompt: ClassifierPrompt, signal: AbortSignal) => Promise<string> | string; mode?: PermissionMode; startMode?: PermissionMode } = {}) {
   const paths: AppPaths = resolvePaths(tempDir(t));
   mkdirSync(paths.workspace, { recursive: true });
   const outside = join(paths.data, 'outside.txt');
@@ -164,6 +165,7 @@ async function setup(t: { after: (fn: () => void) => void }, options: { mutate?:
     ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
     : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
   const registry = new ToolRegistry().register(fileRead).register(fileWrite).register(shellRun).register(webFetch);
+  for (const tool of options.tools ?? []) registry.register(tool);
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const prompts: ClassifierPrompt[] = [];
@@ -550,6 +552,58 @@ test('シェルで外から取得したら、web_fetch と同じに「外から�
     assert.equal(s.ctx.taint.tainted, true, mode);
     assert.deepEqual(s.ctx.taint.sources, ['shell_run'], mode);
   }
+});
+
+// 持ち主が札を通した、外とやり取りする確かめ（種類 egress）は、動かしたら「外から読んだ」印を付ける（外の中身を持ち込むため）。確かめの種類だけを決める代わりの道具
+const standIn = (kinds: AskKind[]): ToolDef => ({
+  name: 'stand_in', description: '', input: Type.Object({}), effect: 'exec', allowedIn: ['chat', 'task'],
+  preCheck: () => ({ decision: 'ask', reasons: ['外とやり取りします'], askKinds: kinds }),
+  execute: async () => ({ content: 'ran' }),
+});
+
+test('持ち主が札を通した egress の確かめは、動かしたら「外から読んだ」印を付ける。断ったもの・egress でない確かめ・自動承認のあとの毎回の確かめには付かない。会話の許可で通っても付く', async t => {
+  // 通した: 印が付き、道具の名前が材料になる
+  const s = await setup(t, { mode: 'normal', startMode: 'normal', tools: [standIn(['egress'])] });
+  const running = s.call('stand_in', {});
+  const request = await waitPending(s);
+  assert.deepEqual([...(request.kinds ?? [])], ['egress']);
+  assert.equal(s.ctx.taint.tainted, false, '札が出ているあいだは、まだ動いていない');
+  s.approvals.decide(request.id, 'once');
+  assert.equal((await running).output.content, 'ran');
+  assert.equal(s.ctx.taint.tainted, true);
+  assert.deepEqual(s.ctx.taint.sources, ['stand_in']);
+  // 断った: 動かないので付かない
+  const denied = await setup(t, { mode: 'normal', startMode: 'normal', tools: [standIn(['egress'])] });
+  const declined = denied.call('stand_in', {});
+  denied.approvals.decide((await waitPending(denied)).id, 'deny');
+  await declined;
+  assert.equal(denied.ctx.taint.tainted, false);
+  // egress でない確かめ（コードを動かす確かめ・持ち主の確かめ）は、これだけでは付かない
+  for (const kinds of [['code'], ['owner'], ['precheck']] as AskKind[][]) {
+    const other = await setup(t, { mode: 'normal', startMode: 'normal', tools: [standIn(kinds)] });
+    const other1 = other.call('stand_in', {});
+    other.approvals.decide((await waitPending(other)).id, 'once');
+    await other1;
+    assert.equal(other.ctx.taint.tainted, false, kinds.join());
+  }
+  // 自動承認で外を読んだ会話の「毎回の確かめ」（egress）は、事前の判定が付けた種類ではないので、動かしても付かない
+  const gated = await setup(t, { mode: 'normal', startMode: 'normal' });
+  gated.state.conversationAutoRead = true;
+  const echo = gated.call('shell_run', { command: 'echo hello' });
+  const gate = await waitPending(gated);
+  assert.deepEqual([...(gate.kinds ?? [])], ['egress']);
+  gated.approvals.decide(gate.id, 'once');
+  assert.match((await echo).output.content, /hello$/u);
+  assert.equal(gated.ctx.taint.tainted, false, '外へ送る心配の確かめであって、外の中身を持ち込むコマンドではない');
+  // 前に「この会話では許可」にした同じ入力が、確かめなしで通るときも付く
+  const grant = await setup(t, { mode: 'normal', startMode: 'normal', tools: [standIn(['egress'])] });
+  const first = grant.call('stand_in', {});
+  grant.approvals.decide((await waitPending(grant)).id, 'conversation');
+  await first;
+  grant.ctx.taint = { tainted: false, sources: [] };
+  const second = await grant.call('stand_in', {});
+  assert.equal(second.decidedBy, 'conversation-grant');
+  assert.equal(grant.ctx.taint.tainted, true, '会話の許可で通っても、動かせば外の中身を持ち込む');
 });
 
 test('シェルで取得したあと、自動承認の外読みは判定役に回さず、札が出る（taint）', async t => {

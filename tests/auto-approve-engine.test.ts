@@ -358,6 +358,28 @@ test('自動承認（エンジン）: 自動で外を読んだ実行を止めた
   await settled(failing.app, fourth.body.runId);
 });
 
+test('自動承認（エンジン）: 持ち主が札で許した git clone も、動かしたら「外から読んだ」印が付き、そのあとの外読みは判定役に回さず札が出る', async t => {
+  const s = await startApp(t);
+  const outside = outsideRead(s);
+  // 名前が引けない宛先（.invalid）なので、動いても外には出ず、失敗して終わる。失敗しても印は付く
+  s.adapter().scripts = [toolCall('shell_run', { command: 'git clone https://clive-test.invalid/x.git' }), toolCall('shell_run', { command: outside.command }), say(ALLOW), say('おわり')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await waitFor(() => s.app.approvals.pending().length === 1, 'git clone の札');
+  const cloneCard = s.app.approvals.pending()[0]!;
+  assert.ok(cloneCard.onceOnly, 'git clone は今回だけの確かめ');
+  assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 0, '札のあいだは、まだ動いていない');
+  s.app.approvals.decide(cloneCard.id, 'once');
+  await waitFor(() => s.app.approvals.pending().some(p => p.id !== cloneCard.id), '外読みの札');
+  const readCard = s.app.approvals.pending().find(p => p.id !== cloneCard.id)!;
+  assert.deepEqual([...(readCard.kinds ?? [])].sort(), ['outside_read', 'taint'], 'clone を動かしたあとなので taint が載る');
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 0, '判定役を呼ばない');
+  assert.equal(s.app.runs.get(sent.body.runId)!.tainted, 1, '実行の記録に印が残る');
+  assert.equal(s.app.conversations.everTainted(CONVERSATION), true);
+  s.app.approvals.decide(readCard.id, 'deny');
+  await settled(s.app, sent.body.runId);
+  assert.equal(autoRows(s).length, 0);
+});
+
 test('自動承認（エンジン）: 外のメモを自動で読んだ会話は、その返事が終わったあとの発言でも、シェルのコマンド（許可の一覧にある curl も）を毎回確かめる。モードをふつうに戻しても、ずっと', async t => {
   const s = await startApp(t);
   const outside = outsideRead(s);

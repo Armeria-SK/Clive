@@ -256,8 +256,11 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   try { output = await tool.execute(args, ctx, { approvedOnce, ...(approvedOnce && first ? { check: first } : {}) }); }
   catch (error) { output = { content: toolText(language, 'pipeline.exec_error', { detail: (error as Error).message }), isError: true }; }
   // 外から読んだ印は、通信の道具が「結果の文に相手の文字が 1 つも入らない失敗」と自分で言ったとき（noRemoteContent）のほかは付ける。失敗の文にも相手の文字（Content-Type・転送先の URL など）は入りうる。
-  // シェルのコマンドが外から取得する（curl・Invoke-WebRequest など。first.fetched）ときも、動かした以上は、成功・失敗を問わず付ける（どのモードでも）
-  if ((tool.effect === 'network' && !(output.isError && output.noRemoteContent)) || first?.fetched === true) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
+  // シェルのコマンドが外から取得する・外の中身を持ち込む（curl・Invoke-WebRequest・git clone・npm install など。first.fetched）ときも、動かした以上は、成功・失敗を問わず付ける（どのモードでも）。
+  // 事前の判定が「外とやり取りする」確かめ（種類 egress。git push・curl の送信など）にして、持ち主が通した（札・会話の許可）呼び出しも、動かしたら付ける。
+  // 自動承認で外を読んだ会話の毎回の確かめ（afterAutoRead）は、ここで言う egress ではない（事前の判定の種類だけを見る）
+  const approvedEgress = first?.decision === 'ask' && first.askKinds?.includes('egress') === true;
+  if ((tool.effect === 'network' && !(output.isError && output.noRemoteContent)) || first?.fetched === true || approvedEgress) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 
   // ── 実行後フック（記録用。結果は変えない） ──
   for (const hook of ctx.config.tools.hooks.postToolUse) {

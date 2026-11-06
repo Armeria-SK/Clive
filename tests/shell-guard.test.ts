@@ -176,6 +176,24 @@ test('shell: 外から取得するコマンドは、確かめの結果にかか�
   assert.equal(verdict('', 'bash').fetched, false, '空のコマンドの早い戻りでも fetched は決まっている');
 });
 
+test('shell: 外の中身を持ち込むコマンド（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）も fetched になる。持ち込まないもの（init・worktree・npm ls）はならない。持ち主の許可の一覧に入れても fetched', t => {
+  const f = fixture(t);
+  const verdict = (command: string, allow: string[] = []) => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell: 'bash', windows: false, allow });
+  const probes: Array<[string, boolean]> = [
+    ['git clone https://example.com/x.git', true], ['git fetch origin', true], ['git pull', true], ['git ls-remote https://example.com/x.git', true], ['git submodule update --init', true],
+    ['npm install left-pad', true], ['npm i', true], ['pip install requests', true], ['yarn add x', true], ['cargo install x', true],
+    ['git init', false], ['git worktree add ../w', false], ['git status', false], ['npm ls', false], ['npm --version', false], ['pip list', false],
+  ];
+  for (const [command, fetched] of probes) {
+    const v = verdict(command);
+    assert.equal(v.fetched, fetched, command);
+    if (fetched) assert.equal(v.decision, 'ask', `${command}: 持ち込むものはもともと確かめ（札を通ったときに印が付く）`);
+  }
+  assert.equal(verdict('git fetch origin', ['git fetch']).fetched, true, '持ち主が許可の一覧に入れて札なしで動く形でも、動かせば外の中身を持ち込む');
+  assert.equal(verdict('git clone https://example.com/x.git && echo done').fetched, true, 'つないだコマンドの一部でも');
+  assert.equal(verdict('git clone https://example.com/x.git; bash x/run.sh').decision, 'ask', 'clone のあとにシェルで動かす形を、新しく止めたりしない（curl とは別。今まで通り確かめ）');
+});
+
 test('shell: outsideRoots=deny なら外は止める。allow は「一覧に無い」確かめだけを外し、拒否は外せない', t => {
   const f = fixture(t);
   const bash = { shell: 'bash' as const, windows: false };
