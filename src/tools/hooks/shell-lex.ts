@@ -474,7 +474,7 @@ const PS_METHOD_OK = new Set([
   'tostring', 'tolower', 'toupper', 'tolowerinvariant', 'toupperinvariant', 'trim', 'trimstart', 'trimend', 'replace', 'split', 'substring', 'startswith', 'endswith',
   'contains', 'indexof', 'lastindexof', 'padleft', 'padright', 'join', 'format',
 ]);
-const isNumberWord = (v: string): boolean => /^[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
+const isNumberWord = (v: string): boolean => /^[-+]?[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
 
 function naiveSubEnd(src: string, from: number): number {
   let depth = 1;
@@ -724,14 +724,15 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
     return plain('@{…}', { kind: 'hash', dynamic: true, hashKeys: keys });
   };
 
-  // 値のあとに続く .メンバー・.メソッド( … )・[添字] を読む。許していないメソッドの印を返す
-  const chain = (depth: number, st: Statement): LexFail | null => {
+  // 値のあとに続く .メンバー・.メソッド( … )・[添字] を読む。許していないメソッドの印を返す。calls が false なら、メソッドの呼び出しの ( の手前で止める（代入の左辺の試し読み用）
+  const chain = (depth: number, st: Statement, calls = true): LexFail | null => {
     for (;;) {
       const t = peek();
       if (t?.t === 'member') {
         k++;
         const open = peek();
         if (isP(open, '(') && !open!.sp) {
+          if (!calls) return null;
           if (!PS_METHOD_OK.has(t.v.toLowerCase())) st.shapes.push(`method:${t.v}`);
           k++;
           const r = statements(')', depth + 1);
@@ -968,31 +969,16 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
       }
       if (PS_OTHER_CONTROL.has(lower)) return controlSkip(depth);
     }
-    // 代入
+    // 代入。左辺（$a.b[ … ]）は chain で読む（添字の中の文もトップレベルの文と同じに判定される）。代入でなければ、読んだ位置と文を戻して、式として読み直す
     if (t.t === 'var') {
-      let j = 1;
-      let indexSubs = false;
-      for (;;) {
-        const x = peek(j);
-        if (x?.t === 'member') { j++; continue; }
-        if (isP(x, '[')) {
-          let level = 0;
-          for (;;) {
-            const y = peek(j);
-            if (!y) break;
-            if (y.subs) indexSubs = true;
-            j++;
-            if (isP(y, '[')) level++;
-            else if (isP(y, ']') && --level === 0) break;
-          }
-          continue;
-        }
-        break;
-      }
-      const op = peek(j);
+      const from = k;
+      const mark = sink.length;
+      k++;
+      const left = chain(depth, st, false);
+      if (left) return left;
+      const op = peek();
       if (op?.t === 'word' && ASSIGN_OPS.has(op.v)) {
-        if (indexSubs) return fail('ps_expand', '$(');
-        k += j + 1;
+        k++;
         skipNl();
         const r = pipeline(depth + 1);
         if (r) return r;
@@ -1000,6 +986,8 @@ function lexPowerShell(src: string, shell: ShellKind, sink: Statement[]): LexFai
         st.assigns.push({ name: t.v, op: op.v, value: null });
         return finish(st);
       }
+      k = from;
+      sink.length = mark;
     }
     // コマンド
     const startsExpression = t.t !== 'word' && !isP(t, '&') ? true : t.t === 'word' && (/^[-+]?[0-9]/u.test(t.v) || t.v === '!' || t.v.toLowerCase() === '-not' || t.v.startsWith('..'));

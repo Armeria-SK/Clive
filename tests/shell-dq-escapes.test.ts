@@ -190,7 +190,7 @@ test('PowerShell: 読みきれない "…" の中の $( は、これまでどお
     ['Write-Output "$($a[0)"', 'unclosed'], ['Write-Output "$(} 1)"', 'unexpected'], ['Write-Output "$(1 ＢＣ)" x', 'fullwidth'],
     ['Write-Output "$("$("$("$("$(1)")")")")"', 'depth'],
     ['Write-Output "$(Get-Date)" ＡＢ', 'fullwidth'], ["Write-Output \"a$('\"')b\" ＡＢ", 'fullwidth'], ["Write-Output \"$(Write-Output '\"')\" ＡＢ", 'fullwidth'],
-    ['$a["$(Get-Date)"] = 1', 'ps_expand'], ['$a[0]["$(Get-Date)"] = 1', 'ps_expand'], ['$a.b["x$(Get-Date)"] = 1', 'ps_expand'],
+    ['$a["${x}"] = 1', 'ps_expand'], ['$a["$$(Get-Date)"] = 1', 'ps_expand'], ['$a.b["x$(Get-Date"] = 1', 'unclosed'],
   ];
   for (const shell of PS_SHELLS) for (const [command, code] of cases) assert.equal(failure(command, shell), code, `${shell}: ${JSON.stringify(command)}`);
   for (const shell of PS_SHELLS) {
@@ -198,6 +198,8 @@ test('PowerShell: 読みきれない "…" の中の $( は、これまでどお
     assert.equal(failure('Write-Output "$(Get-Date) ＡＢ"', shell), null, `${shell}: 引用符の中の全角は可`);
     assert.equal(failure("Write-Output \"a$('\"')b ＡＢ\"", shell), null, `${shell}: 入れ子の引用符のあとも、文字列の中の全角は可`);
     assert.equal(failure('$a[0] = "$(Get-Date)"', shell), null, `${shell}: 代入の右辺の "$( )" は読める`);
+    // 代入の左辺の添字の中の "$( )" も読める（以前は先読みで飛ばす作りで、止めていた）。中の文の判定は tests/shell-ps-index.test.ts
+    for (const command of ['$a["$(Get-Date)"] = 1', '$a[0]["$(Get-Date)"] = 1', '$a.b["x$(Get-Date)"] = 1']) assert.equal(failure(command, shell), null, `${shell}: ${command}`);
   }
 });
 

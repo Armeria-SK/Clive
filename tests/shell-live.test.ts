@@ -336,10 +336,51 @@ test('実機（Windows PowerShell 5.1・制限モード）: "…" の中の $( �
   const secret = await s.call('Write-Output "$(Get-Content .env)"');
   assert.equal(secret.decision, 'deny');
   assert.doesNotMatch(secret.output.content, /SECRET=1/u);
-  for (const command of ['Write-Output "${env:PATH}"', 'Write-Output "$$(Get-Date)"', "Write-Output \"$(Write-Output ')')\"", 'Write-Output "$(Get-Date # c`n)"', '$a["$(Get-Date)"] = 1']) {
+  for (const command of ['Write-Output "${env:PATH}"', 'Write-Output "$$(Get-Date)"', "Write-Output \"$(Write-Output ')')\"", 'Write-Output "$(Get-Date # c`n)"']) {
     const outcome = await s.call(command);
     assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
     assert.match(outcome.output.content, /書き方を判定できません/u, command);
+  }
+});
+
+// 代入の左辺の添字（$a[ … ] = 1）の中の $( … ) も、トップレベルの文と同じに調べる。以前は代入かどうかの先読みが添字の中を読み飛ばして、確かめなしで書いた・消した
+test('実機（Windows PowerShell 5.1・制限モード）: 代入の左辺の添字の中で書く・消す部分式は、素の PowerShell では動くが、Clive のシェルでは確かめになり、拒否すれば何も書かれない', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('x'), 'keep');
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  const raw = (command: string) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage';${command}`], { cwd: s.paths.workspace, encoding: 'utf8' });
+  raw('$a = @(1,2); $a[$(Set-Content premise.txt hello; 0)] = 5');
+  assert.equal(existsSync(s.files('premise.txt')), true, '前提: 素の PowerShell（制限モード）では、添字の中の部分式が本当に書く');
+  raw('$a = @(1,2); $a[$(Remove-Item x; 0)] = 5');
+  assert.equal(existsSync(s.files('x')), false, '前提: 素の PowerShell では、添字の中の部分式が本当に消す');
+  raw('$a = @{}; $a[$(Set-Content SOUL.md pwned; 1)] = 1');
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8').trim(), 'pwned', '前提: 素の PowerShell では、添字の中の部分式が人格を書き換える');
+  rmSync(s.files('premise.txt'));
+  writeFileSync(s.files('x'), 'keep');
+  writeFileSync(s.files('SOUL.md'), 'persona');
+  for (const command of [
+    '$a = @(1,2); $a[$(Remove-Item x; 0)] = 5', '$a = @(1,2); $a[$(Set-Content out.txt hello; 0)] = 5', '$a = @{}; $a[$(Set-Content SOUL.md pwned; 1)] = 1', '$a = @{}; $a["k$(Set-Content out2.txt hello)"] = 1',
+    '$a = @(1,2); $a[$(Remove-Item x; 0)] += 5', '$a = @(1,2); $a[($(Remove-Item x; 0))] = 5', '$a = @(1,2); $a[0..$(Remove-Item x; 1)] = 5', '$a = @{}; $a.b = @{}; $a.b[$(Set-Content out3.txt hello; 1)] = 1',
+    '$a = @{}; $a[$a[$(Set-Content out4.txt hello; 1)]] = 1',
+  ]) await expectAsk(s, command);
+  assert.equal(readFileSync(s.files('x'), 'utf8'), 'keep', 'x が消えた');
+  assert.equal(readFileSync(s.files('SOUL.md'), 'utf8'), 'persona', '人格が書き換わった');
+  for (const name of ['premise.txt', 'out.txt', 'out2.txt', 'out3.txt', 'out4.txt']) assert.equal(existsSync(s.files(name)), false, `${name} ができた`);
+  for (const command of ['$a = @(1,2); $a[$(Get-Content .env | Out-Null; 0)] = 5', '$a = @{}; $a[$(Get-Content .env)] = 1', '$a = @{}; $a["$(Get-Content .env)"] = 1']) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'deny', `${command}: ${outcome.output.content}`);
+    assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
+  }
+  // ふつうの代入は、今までどおり承認なしで動く
+  for (const [command, expected] of [
+    ['$a = @(1,2,3); $a[1] = 9; $a -join ","', /1,9,3/u], ['$a = @(1,2,3); $a[-1] = 9; $a -join ","', /1,2,9/u], ['$h = @{}; $h["a"] = 1; $h.a', /\b1\b/u], ['$h = @{}; $h["k$(Get-Date -Format yyyy)"] = 7; $h.Count', /\b1\b/u],
+    ['$a = @(1,2,3); $i = 2; $a[$i] = 5; $a -join ","', /1,2,5/u], ['$h = @{}; $h.b = @{}; $h.b["x"] = 3; $h.b.x', /\b3\b/u],
+  ] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.equal(outcome.output.isError, false, `${command}: ${outcome.output.content}`);
+    assert.match(outcome.output.content, expected, command);
   }
 });
 
