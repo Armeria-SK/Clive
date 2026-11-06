@@ -654,7 +654,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
             j = inner.end;
             continue;
           }
-          if (next !== undefined && /[A-Za-z_?$^]/u.test(next)) dyn = true;
+          if (/^[\p{L}\p{Nd}_?$^:]/u.test(src.slice(j + 1, j + 3))) dyn = true;
         }
         value += c; j++;
       }

@@ -460,6 +460,52 @@ test('実機（bash・Windows）: "…" の中の連続する \\\\ は、素の 
   await expectAsk(s, 'echo "\\\\$(node -e 1)"');
 });
 
+// 最終審査で再現: 空になりうる変数（PowerShell の $1 $0 $é $日 $$ $^ $?、bash の $1 $@ $* $!）を名前に含む読むパスは、文字どおりの名前と読まれて .env の確かめを通り抜けた。
+// 本物のシェルでは .env を読むこと（前提）と、Clive のシェルでは確かめなしに読まず、拒否すれば秘密が出ないことを確かめる。ただ出すだけの "$1" は承認なしで動く
+async function expectAskedNotRun(s: ReturnType<typeof setup>, command: string): Promise<void> {
+  let settled = false;
+  const pending = s.call(command).then(outcome => { settled = true; return outcome; });
+  for (let i = 0; i < 300 && !settled && !s.approvals.pending().length; i++) await new Promise(r => setTimeout(r, 10));
+  const request = s.approvals.pending()[0];
+  assert.ok(request, `${command}: 承認の依頼が来ていない（確かめなしで動いた）`);
+  s.approvals.decide(request.id, 'deny');
+  const outcome = await pending;
+  assert.notEqual(outcome.decision, 'allow', command);
+  assert.doesNotMatch(outcome.output.content, /SECRET=1/u, `${command}: 秘密が出た`);
+}
+
+test('実機（Windows PowerShell 5.1・制限モード）: Get-Content ".env$1" は素のシェルでは .env を読むが、Clive のシェルでは確かめなしに読まない。"$1" をただ出すだけは承認なしで動く', { skip: !psAvailable && 'Windows の PowerShell が無い' }, async t => {
+  const s = setup(t, 'powershell');
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  const raw = (command: string): string => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  for (const command of ['Get-Content ".env$1"', 'Get-Content ".env$0"', 'Get-Content ".env$é"', 'Get-Content ".env$日"', 'Select-String -Path ".env$1" -Pattern SECRET', 'Get-Content -Path ".env$12"']) {
+    assert.match(raw(command), /SECRET=1/u, `前提: 素のシェルでは .env を読む: ${command}`);
+    await expectAskedNotRun(s, command);
+  }
+  for (const [command, expected] of [['Write-Output "a$1 b"', /a b/u], ['Write-Output "$1"', /^[\s\S]*$/u], ['Get-Content a.txt -TotalCount 1', /line1/u]] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
+test('実機（bash）: cat .env$@ や cat ".env$1" は素の bash では .env を読むが、Clive のシェルでは確かめなしに読まない。"$1" $@ をただ出すだけは承認なしで動く', { skip: !bashAvailable && 'bash が無い' }, async t => {
+  const s = setup(t, 'bash');
+  writeFileSync(s.files('.env'), 'SECRET=1\n');
+  const raw = (command: string): string => spawnSync(bashPath!, ['--noprofile', '--norc', '-c', command], { cwd: s.paths.workspace, encoding: 'utf8' }).stdout;
+  for (const command of ['cat .env$@', 'cat ".env$1"', 'cat .env$*', 'cat .env$!', 'grep SECRET .env$@']) {
+    assert.match(raw(command), /SECRET=1/u, `前提: 素の bash では .env を読む: ${command}`);
+    await expectAskedNotRun(s, command);
+  }
+  for (const [command, expected] of [['echo "a$1b" $@', /ab/u], ['cat a.txt', /line1/u]] as const) {
+    const outcome = await s.call(command);
+    assert.equal(outcome.decision, 'allow', `${command}: ${outcome.output.content}`);
+    assert.equal(outcome.decidedBy !== 'user', true, `${command}: 承認を求めた`);
+    assert.match(outcome.output.content, expected, command);
+  }
+});
+
 // 全角の見張りは、字句の読み取りと同じ引用符の組み方で、引用符の外の全角（＂--pre=x＂ は Windows で " になって引数を割る）を止める
 test('実機（bash）: "…" の中の $( ) の中の引用符・コメント・ヒアドキュメントの引用符に惑わされず、引用符の外の全角は動かす前に止まる。引用符の中の全角は動く', { skip: !bashAvailable && 'bash が無い' }, async t => {
   const s = setup(t, 'bash');

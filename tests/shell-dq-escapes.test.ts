@@ -364,3 +364,41 @@ test('PowerShell: "$$" と "$^" を含む文字列は、値の分からない語
   assert.notEqual(level(f.ps('rg "$$" src')), 'allow', '値の分からない rg のパターンは、読むだけでも確かめなしにはならない');
   assert.equal(level(f.ps('rg "$-" src')), 'allow', '文字のままの "$-" は今までどおり');
 });
+
+// 最終審査で再現: Get-Content ".env$1" は、本物の PowerShell 5.1 では "$1"（空の変数）を展開して .env を読むのに、"…" の中の $ に数字・非 ASCII の文字・: が続く形を
+// 変数と見ず、文字どおりの名前 .env$1 と読んで確かめなしで通した。本物の Parser（tests/shell-lex-real.test.ts）が展開する文字列にする形は、すべて値の分からない語にする
+test('PowerShell: "…" の中の $ に数字・文字（Unicode も）・_ ? $ ^ : が続く形は、本物の Parser と同じに展開する文字列（値の分からない語）。それ以外は文字のまま', () => {
+  const dynamic = ['$1', '$0', '$9', '$12', '$1x', '$é', '$日', '$Ａ', '$ǅ', '$٣', '$ª', '$_', '$?', '$$', '$^', '$:x', '$::x', '$x:y', '$global:x', '$𠮷', 'a$1b', '.env$1', '.env$0', '.env$é', '.env$日', '.env$:x', '$1.txt'];
+  const constant = ['$', 'a$', '$-', '$*', '$#', '$ b', '$.x', '$;', '$@', '$%', '$&', '$+', '$,', '$²', '$‿', '$Ⅷ', '100$', '$ '];
+  for (const shell of PS_SHELLS) {
+    for (const text of dynamic) {
+      const word = read(`Write-Output "${text}"`, shell)[0]!.words[1]!;
+      assert.deepEqual([word.text, word.dynamic, word.quoted], [text, true, true], `${shell}: "${text}"`);
+    }
+    for (const text of constant) {
+      const word = read(`Write-Output "${text}"`, shell)[0]!.words[1]!;
+      assert.deepEqual([word.text, word.dynamic], [text, false], `${shell}: "${text}"`);
+    }
+    assert.equal(read("Write-Output '$1'", shell)[0]!.words[1]!.dynamic, false, `${shell}: シングルクォートの中は文字`);
+  }
+});
+
+// 読むパスが変数を含むなら、パスは決まらない（確かめる）。$1 $0 $é $$ $^ $? は PowerShell で、$1 $@ $* $! は bash で空になりうるのに、パスの展開は
+// $名前 の ASCII の名前と %名前% しか知らず、それ以外の $ を文字として .env$1 というパスを調べて通していた。本物の bash では cat .env$@ が .env を表示した
+test('PowerShell・bash: 読むパスの中の $1 $0 $é $日 $$ $^ $? $@ $* $! は、空になりうる変数なのでパスが決まらず、確かめなしには読まない', t => {
+  const f = fixture(t);
+  const ps = [
+    'Get-Content ".env$1"', 'Get-Content ".env$0"', 'Get-Content ".env$é"', 'Get-Content ".env$日"', 'Get-Content ".env$$"', 'Get-Content ".env$^"', 'Get-Content ".env$?"', 'Get-Content ".env$:x"',
+    'Select-String -Path ".env$1" -Pattern SECRET', 'Get-Content -Path ".env$12"', 'Get-Content "$1"', 'Get-Content "f.txt$1"', 'Get-ChildItem ".env$1"', 'Get-Content ".en$1v"',
+  ];
+  for (const c of ps) assert.notEqual(f.ps(c).decision, 'allow', c);
+  const bash = ['cat .env$@', 'cat ".env$1"', 'cat .env$*', 'cat .env$!', 'cat .env$$', 'cat .env$?', 'cat .env$#', 'cat .env$-', 'grep SECRET .env$@', 'cat f.txt$1', 'cat "$1"', 'head -n 1 .en$1v', 'cat ${1}', 'cat .env${1}'];
+  for (const c of bash) assert.notEqual(f.bash(c).decision, 'allow', c);
+  // 読むパスでない所の $1 や、ASCII の名前の変数は、今までどおり
+  assert.equal(f.ps('Write-Output "$1"').decision, 'allow');
+  assert.equal(f.ps('Write-Output "a$1b $日"').decision, 'allow');
+  assert.equal(f.bash('echo "$1" $@ $#').decision, 'allow');
+  assert.equal(f.ps('Get-Content "f.txt$"').decision, 'allow', '$ だけで終わるのは文字');
+  assert.equal(f.ps('Get-Content ".env$x"').decision, 'ask', '名前つきの変数は今までどおり');
+  assert.equal(f.bash('cat f.txt').decision, 'allow');
+});

@@ -313,6 +313,10 @@ const PS_DQ_ROWS = [
   'Write-Output "$(if ($true) { Get-Date })"', 'Write-Output "$(foreach ($i in 1,2) { Get-Date })"', 'Write-Output "$(Get-ChildItem | ForEach-Object { $_.Name })"',
   // "$$"（直前の最後の語）と "$^"（最初の語）は本物も変数として展開する。"$-" "$*" "$" だけなどは文字のまま
   'Write-Output "$$"', 'Write-Output "$^"', 'Write-Output "a$$b"', 'Write-Output "a$^b"', 'Write-Output "$$.txt"', 'Write-Output "$-"', 'Write-Output "$*"', 'Write-Output "a$"', 'Write-Output "$ b"', 'Write-Output "$#"', 'Write-Output "100$"',
+  // "$1" "$0" "$é" "$日" は、数字・Unicode の文字の変数名として展開する（空）。Get-Content ".env$1" は .env を読む。$@ $% $+ $, $; $.x $² $‿ $Ⅷ は文字のまま。"$:x" は : のあとの名前つき
+  'Write-Output "$1"', 'Write-Output "$0"', 'Write-Output "$9"', 'Write-Output "$12"', 'Write-Output "a$1b"', 'Write-Output "$é"', 'Write-Output "$日"', 'Write-Output "$Ａ"', 'Write-Output "$ǅ"', 'Write-Output "$٣"', 'Write-Output "$ª"',
+  'Write-Output "$_"', 'Write-Output "$:x"', 'Write-Output "$global:x"', 'Get-Content ".env$1"', 'Get-Content ".env$é"', 'Get-Content ".env$日"', 'Get-Content -Path ".env$0"',
+  'Write-Output "$@"', 'Write-Output "$%"', 'Write-Output "$+"', 'Write-Output "$,"', 'Write-Output "$;"', 'Write-Output "$.x"', 'Write-Output "$²"', 'Write-Output "$‿"', 'Write-Output "$Ⅷ"', 'Write-Output "$&"',
 ];
 
 const PS_DQ_SCRIPT = `

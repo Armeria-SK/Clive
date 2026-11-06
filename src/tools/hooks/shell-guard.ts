@@ -97,8 +97,15 @@ function windowsNames(p: string): string {
   return p.split(sep).map(seg => (seg === '.' || seg === '..' ? seg : seg.replace(/[. ]+$/u, '') || seg)).join(sep);
 }
 
+// expandPath が展開できない変数の形（$1 $0 $@ $* $! $? $$ $^ $: ${1} と非 ASCII の名前）。空になりうるので、含むパスは決まらない
+const UNEXPANDABLE_VAR = /\$(?![A-Za-z_]|\{[A-Za-z_][A-Za-z0-9_]*\})(?=[\p{L}\p{Nd}?$^:@*#!{(-])/u;
+
 // 語が指すパス。リテラルは $ や % を展開しない（シェルも展開しない）。変数を含むものは既知の変数だけ展開する
 export function resolveWord(word: Word, base: string, windows: boolean, language: Language): Expanded {
+  if (word.dynamic) {
+    const m = UNEXPANDABLE_VAR.exec(word.text);
+    if (m) return { unresolved: guardText(language, 'scope.unknown_env', { name: [...word.text.slice(m.index, m.index + 4)].slice(0, 2).join('') }) };
+  }
   const text = word.dynamic ? word.text : word.text.replace(/[$%`]/gu, '_');
   const expanded = expandPath(text, base, process.env, language);
   if ('unresolved' in expanded) return expanded;
