@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { App } from '../src/app.ts';
@@ -141,6 +141,60 @@ test('承認を待っているあいだは、実行が道具の呼び出しの�
   await settled(s.app, first.body.runId);
   assert.deepEqual(roles(s), ['user:書いて', 'assistant:', 'tool:[shell_run] ', 'user:承認の最中に送る', 'assistant:見ました']);
   assert.deepEqual(seen[0]!.messages.slice(-2).map(m => m.role), ['tool', 'user']);
+});
+
+// 最終審査の低: 「この返事のあいだ、このフォルダ以下への書き込みを許可」は、持ち主がその札に答えた返事の間だけのもの。実行の途中で待たせた発言が差し込まれると、
+// それは別の発言（別の返事）なので、許可はすべて終わる。残すと、持ち主が見ていない発言の後ろでも、同じフォルダへの書き込みが札なしで通ってしまう
+test('フォルダの許可（この返事のあいだ）は、待たせた発言が差し込まれた時点で終わり、そのあとの同じフォルダへの書き込みはまた札から', async t => {
+  const s = await startApp(t);
+  const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
+  const written = (name: string) => existsSync(join(s.paths.workspace, 'notes', name));
+  s.adapter().scripts = [call('file_write', { path: 'notes/a.txt', content: 'A' }), call('file_write', { path: 'notes/b.txt', content: 'B' }), say('おわり')];
+  const first = await post(s, '添付を読んで書いて', { attachments: [upload.id] });
+  await waitFor(() => s.app.approvals.pending().length === 1, '最初の札');
+  const firstCard = s.app.approvals.pending()[0]!;
+  assert.ok((await s.json('/api/approvals', 'GET')).body.approvals[0].grantFolder.endsWith('notes'), '札にフォルダの許可が添えられる');
+  const queued = await post(s, '待たせる発言');
+  assert.equal(queued.body.queued, true);
+  s.app.approvals.decide(firstCard.id, 'folder');
+  await waitFor(() => s.app.approvals.pending().length === 1 && s.app.approvals.pending()[0]!.id !== firstCard.id, '2 つ目の札（許可は差し込みで終わっている）');
+  assert.equal(written('a.txt'), true, '許可した札の書き込みは通った');
+  assert.equal(written('b.txt'), false, '2 つ目はまだ書かれていない');
+  assert.deepEqual(roles(s).slice(-3), ['tool:[file_write]', 'user:待たせる発言', 'assistant:'], '待たせた発言は、1 つ目の書き込みのあとの区切りで入った');
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
+  await settled(s.app, first.body.runId);
+  assert.equal(written('b.txt'), false);
+  assert.equal(runsOf(s).length, 1, '同じ実行の中');
+});
+
+test('フォルダの許可は、待たせた発言が無ければ、その返事の残りの間つづく（差し込みで終わるのは、発言があったときだけ）', async t => {
+  const s = await startApp(t);
+  const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
+  s.adapter().scripts = [call('file_write', { path: 'notes/a.txt', content: 'A' }), call('file_write', { path: 'notes/b.txt', content: 'B' }), say('おわり')];
+  const first = await post(s, '添付を読んで書いて', { attachments: [upload.id] });
+  await waitFor(() => s.app.approvals.pending().length === 1, '最初の札');
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'folder');
+  await settled(s.app, first.body.runId);
+  assert.equal(existsSync(join(s.paths.workspace, 'notes', 'b.txt')), true, '発言が無ければ、2 つ目は札なしで書かれた');
+  assert.equal(s.app.approvals.pending().length, 0);
+});
+
+test('フォルダの許可は、差し込まれない発言（モデルを替えたあとに待たせた held）では終わらない。差し込まれたときだけ終わる', async t => {
+  const s = await startApp(t);
+  const upload = s.app.uploads.save({ name: 'memo.txt', mime: 'text/plain', body: Buffer.from('添付の文') });
+  s.adapter().scripts = [call('file_write', { path: 'notes/a.txt', content: 'A' }), call('file_write', { path: 'notes/b.txt', content: 'B' }), say('m1 の返事'), say('m2 の返事')];
+  const first = await post(s, '添付を読んで書いて', { attachments: [upload.id], modelId: 'm1' });
+  await waitFor(() => s.app.approvals.pending().length === 1, '最初の札');
+  assert.equal((await s.json(`/api/conversations/${CONVERSATION}`, 'PATCH', { modelId: 'm2' })).status, 200);
+  assert.equal((await post(s, 'HELD')).body.queued, true);
+  s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'folder');
+  await waitFor(() => existsSync(join(s.paths.workspace, 'notes', 'b.txt')) || s.app.approvals.pending().length > 0, '2 つ目の書き込み');
+  assert.equal(existsSync(join(s.paths.workspace, 'notes', 'b.txt')), true, '差し込まれない発言では許可は終わらず、2 つ目は札なしで書かれた');
+  assert.equal(s.app.approvals.pending().length, 0);
+  await s.app.engine.wait(first.body.runId);
+  const second = s.app.engine.activeRuns().find(r => r.conversationId === CONVERSATION);
+  if (second) await settled(s.app, second.runId);
+  assert.equal(s.adapter().calls.map(c => c.model.id).join(), 'm1,m1,m1,m2', '古いモデルの実行が終わってから、新しいモデルが held を読む');
 });
 
 test('止めて送る（interrupt）: 今の実行を止めてから、待っていた発言と一緒に新しい実行を始める', async t => {
