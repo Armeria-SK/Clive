@@ -1,4 +1,4 @@
-import { ApiError, type ApprovalPathView, type ModelView } from './api.ts';
+import { ApiError, type ApprovalPathView, type ModelChoice, type ModelView } from './api.ts';
 import { formatElapsed, getLanguage, getTimezone, type Lang, type PlainKey } from './i18n/index.ts';
 import type { IconName } from './icon-paths.ts';
 import { probeMessage, serverText } from './server-text.ts';
@@ -116,6 +116,15 @@ export function sendTarget(conversationId: string | null, created: string | null
   if (conversationId) return { id: conversationId, created };
   const id = created ?? generate();
   return { id, created: id };
+}
+
+// 発言と一緒に送る、モデルと考える深さの選び。会話がまだ無いときは、画面で覚えている選びを最初の発言と一緒に送る（サーバーにまだ覚える会話が無いため）。
+// 会話があれば送らない（サーバーが覚えている）。override（使えるモデルで送る道など、その場で決めた選び）は、画面で覚えている選びより優先して、そのまま送る
+// （画面の状態は、押した直後はまだ古いので使わない。モデルだけを替えるときは、古い考える深さも持ち越さない）
+export function sendChoiceOf(conversationId: string | null, current: { modelId: string | null; effort: string | null }, override?: ModelChoice): ModelChoice {
+  if (override) return { ...override };
+  if (conversationId) return {};
+  return { ...(current.modelId ? { modelId: current.modelId } : {}), ...(current.effort ? { effort: current.effort } : {}) };
 }
 
 export type ChatItemKind = 'user' | 'assistant' | 'think' | 'tool' | 'run' | 'note' | 'fail';

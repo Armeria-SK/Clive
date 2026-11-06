@@ -3,7 +3,7 @@ import { api, ApiError, type Approval, type ContextUsage, type Message, type Mod
 import { ApprovalDock } from './ApprovalCard.tsx';
 import { decideApproval } from './approval-decide.ts';
 import {
-  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendFailureOf, sendTarget, toolInputSummary,
+  advanceApprovalGate, approvalEnterAllowed, contextCardOf, enterApprovalId, replyTurns, isNearBottom, isRenameWithoutTitle, joinsToolRun, renameTitleOf, restartApprovalGate, runOverflowOf, sendChoiceOf, sendFailureOf, sendTarget, toolInputSummary,
   type ApprovalGate, type ChatItemKind, type ChatRunRow, type ContextCardData, type SendFailure, type SlashCommand,
 } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
@@ -238,8 +238,9 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
     await archiveConversation(conversationId, title, t, onConversationChanged);
   }
 
-  // 返事を作っている最中でも送れる: 今の実行の次の区切りで読まれる（interrupt なら、今の実行を止めて、この発言から始める）
-  async function send(preset?: string, interrupt = false): Promise<void> {
+  // 返事を作っている最中でも送れる: 今の実行の次の区切りで読まれる（interrupt なら、今の実行を止めて、この発言から始める）。
+  // override: その場で決めたモデルの選び（使えるモデルで送る道）。画面の状態（setState）は押した直後はまだ古いので、状態を待たず、これを送る
+  async function send(preset?: string, interrupt = false, override?: ModelChoice): Promise<void> {
     const text = (preset ?? input).trim();
     if ((!text && !attached.length) || sending) return;
     const newTitle = renameTitleOf(text);
@@ -252,7 +253,11 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
       const id = target.id;
       created.current = target.created;
       onClearNotices(id);
-      await api.send(id, text, attached.map(a => a.id), conversationId ? {} : { ...(modelId ? { modelId } : {}), ...(effort ? { effort } : {}) }, interrupt && draft ? { interrupt: true } : {});
+      await api.send(id, text, attached.map(a => a.id), sendChoiceOf(conversationId, { modelId, effort }, override), interrupt && draft ? { interrupt: true } : {});
+      if (override?.modelId !== undefined) {
+        setModelId(override.modelId); setEffort(override.effort ?? null);
+        if (conversationId) onConversationChanged({ kind: 'model', id: conversationId });
+      }
       if (preset === undefined) setInput('');
       setAttached([]);
       if (!conversationId) onCreated(id);
@@ -340,7 +345,7 @@ export function Chat({ conversationId, profile, modelName, defaultModelId, usage
   }
   if (failure) {
     push('send-failure', 'fail', failure.context
-      ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} alternative={failure.alternative ? { label: failure.alternative.label, onUse: () => { const alt = failure.alternative!; void choose({ modelId: alt.id }).then(() => send()); } } : undefined} />
+      ? <PreSendCard message={failure.message} hint={failure.card?.hint ?? failure.hint} numbers={failure.card?.numbers ?? null} alternative={failure.alternative ? { label: failure.alternative.label, onUse: () => { void send(undefined, false, { modelId: failure.alternative!.id }); } } : undefined} />
       : <SendErrorCard message={failure.message} hint={failure.hint} setup={failure.noModels} />);
   }
 

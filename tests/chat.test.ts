@@ -4,7 +4,7 @@ import { builtinTools } from '../src/app.ts';
 import { ApiError, type ModelView, type Probe } from '../web/src/api.ts';
 import {
   advanceApprovalGate, APPROVAL_ENTER_GRACE_MS, approvalEnterAllowed, approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, compactTokens, contextPercent, chatTime, createDecisionTracker, contextCardOf, enterApprovalId, firstLine, liveRenderDelay, replyTurns, formatCountdown, isNearBottom, isRenameWithoutTitle, joinsToolRun, newConversationId, renameTitleOf,
-  mergeNotice, restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
+  mergeNotice, restartApprovalGate, runOverflowOf, SLASH_COMMANDS, sendChoiceOf, sendFailureOf, sendTarget, slashMatches, TextThrottle, toolIcon, TOOL_ICONS, toolInputSummary,
 } from '../web/src/chat-logic.ts';
 import { decideApproval } from '../web/src/approval-decide.ts';
 import { en } from '../web/src/i18n/en.ts';
@@ -360,6 +360,16 @@ test('sendFailureOf: モデルが 1 つも無い 409（problems が空）だけ 
   assert.equal(sendFailureOf(new ApiError(409, broken), 'x', []).noModels, false, 'モデルがあるけれど使えないときは、設定を開くだけ');
   assert.equal(sendFailureOf(new ApiError(409, { error: 'busy', errorCode: 'engine.send.busy', problems: [] }), 'x', []).noModels, false);
   assert.equal(sendFailureOf(new Error('x'), 'x', []).noModels, false);
+});
+
+test('sendChoiceOf: 新しい会話の最初の発言は、画面で覚えている選びを一緒に送る。使えるモデルで送る道は、押したモデルを明示して送る（覚えている古い選びは使わない）', () => {
+  const stale = { modelId: 'broken', effort: 'high' };
+  assert.deepEqual(sendChoiceOf(null, stale), { modelId: 'broken', effort: 'high' }, '新しい会話: 画面の選びを送る');
+  assert.deepEqual(sendChoiceOf(null, { modelId: null, effort: null }), {}, '自動のまま');
+  assert.deepEqual(sendChoiceOf('c1', stale), {}, '会話があれば、サーバーが覚えているので送らない');
+  assert.deepEqual(sendChoiceOf(null, stale, { modelId: 'alt' }), { modelId: 'alt' }, '新しい会話でも、押したモデルを送る（覚えている選びや考える深さは持ち越さない）');
+  assert.deepEqual(sendChoiceOf('c1', stale, { modelId: 'alt' }), { modelId: 'alt' }, '会話があるときも、押したモデルを一緒に送って会話に覚えさせる');
+  assert.deepEqual(sendChoiceOf(null, stale, { modelId: 'alt', effort: 'low' }), { modelId: 'alt', effort: 'low' });
 });
 
 test('newConversationId / sendTarget: 最初の発言は画面が決めた id へ送り（会話を先に作らない）、断られたあとのやり直しは同じ id を使う', () => {

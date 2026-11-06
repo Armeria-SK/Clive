@@ -76,6 +76,23 @@ test('選んだモデルが使えないとき、ほかのモデルへ黙って�
   assert.equal(s.adapter().calls.length, 0);
 });
 
+test('「使えるモデルで送る」: 選んだモデルが使えないとき、使えるモデルを明示して送れば、そのモデルで返し、会話にも覚える（新しい会話の最初の発言でも同じ）', async t => {
+  const s = await startApp(t);
+  await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'はじめ', modelId: 'm2' }).then(r => settled(s.app, r.body.runId));
+  s.app.status.disable('m2', '落ちています');
+  s.adapter().calls.length = 0;
+  const sent = await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: '使えるほうで送る', modelId: 'm1' });
+  assert.equal(sent.status, 202);
+  await settled(s.app, sent.body.runId);
+  assert.deepEqual(s.adapter().calls.map(c => c.model.id), ['m1']);
+  assert.equal(s.app.conversations.get(CONVERSATION)!.model_id, 'm1');
+  // 新しい会話: 最初の発言と一緒に、押したモデルだけを送る（画面で覚えていた古い選びや考える深さは送らない）
+  const fresh = await s.json(`/api/conversations/${uuid(7)}/messages`, 'POST', { text: 'はじめて', modelId: 'm1' });
+  assert.equal(fresh.status, 202);
+  await settled(s.app, fresh.body.runId);
+  assert.equal(s.app.conversations.get(uuid(7))!.model_id, 'm1');
+});
+
 test('選んだモデルが設定から消えたら not_in_config で止める。使える量の見積もり（A2）は選んだモデルで数える', async t => {
   const s = await startApp(t, { models: [fakeModel('m1', { contextLength: 65536 }), fakeModel('m2', { contextLength: 32768 })] });
   await s.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'はじめ', modelId: 'm2' }).then(r => settled(s.app, r.body.runId));
