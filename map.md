@@ -224,6 +224,7 @@
 - シェルの見張りの試験は分野ごとに分かれている: `shell-*`（字句・許可の一覧・パス・cd・パイプ・PowerShell の閉じ方・PowerShell 5.1 の引数・秘密の読み取り・秘密のフォルダ・ダウンロードと URL の展開・curl のファイル・jq・言語の版・IPv6 と rmdir・UNC・git のフォルダ・フック・本物のシェルで動かす `shell-live`）、`git-repo` `git-env` `tool-config` `allow-entry` `code-guard`。ほかに `memory-guard`（記憶の守り）と `upstream-body`（相手のサーバーの返事の中身を画面に出さない）。
 - 画面の外の試験に、はじめの設定がある: `onboarding`（名前・話し方の節の書き換え、見出しの両言語の探し方、書き込みの守り〔リンク・控え〕、`.env` の読み直し、`/api/onboarding` `persona` `workspace/persona` `reload-env` の API）と `onboarding-screen`（続きの手順・送る値・モデルの入力 → 設定・見積もり・辞書）。
 - `screen-server.ts`: 画面が読む API を確かめるための、本物の Web サーバーの起動（`skills` と `runlog` のテストが使う。モデルは使わない）。
+- `app-setup.ts`: 本物の `App` と Web サーバーを偽のモデルの窓口で立ち上げる（`startApp`。提供元ごとの `FakeAdapter` を持ち、`json` は Origin つきで呼ぶ）、実行が終わるまで待つ `settled`。会話ごとのモデル（`model-choice`）・要約の重ね直し（`resummarize`）・アーカイブの一覧（`archive-list`）・会話の削除（`delete-conversation`。どの表にも会話の ID と本文が残らないことを全部の表で確かめる）・実行中の送信（`queued-send`）の試験が使う。
 - `helpers.ts`: モデルが要るテストの出発点になる設定（`testConfig`。`defaultConfig` はモデルを持たない）、一時フォルダ（`tempDir`）、偽のサーバー（`fakeServer`）、偽のモデル窓口（`FakeAdapter`）と返事の台本（`reply` `fail`）。
 - 入口: `tests/helpers.ts`
 - 使うもの: `src/` の各部品（`App` で組み立てるものが多い）
