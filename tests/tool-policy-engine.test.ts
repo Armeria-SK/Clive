@@ -141,3 +141,43 @@ test('A3: 実行の途中で持ち主が道具を止めたら、その実行の�
   assert.equal(existsSync(join(s.paths.workspace, 'late.md')), false);
   assert.deepEqual(s.app.db.prepare('SELECT tool, decided_by FROM tool_calls WHERE run_id = ?').all(runId).map(r => ({ ...r })), [{ tool: 'file_write', decided_by: 'policy' }]);
 });
+
+// 道具ごとの方針は「実行を始めたときの設定」と「いまの設定」の厳しい方（パイプラインの policyFor と同じ決め）。モデルに渡す一覧（#toolsFor）も同じ決めにする
+const withPolicies = async (s: { app: App }, policies: Record<string, 'allow' | 'ask' | 'block'>) => {
+  const current = s.app.config();
+  await s.app.applyConfig({ ...current, tools: { ...current.tools, policies } }, { probe: false });
+};
+const toolListCall = (s: { app: App }, policies: Record<string, 'allow' | 'ask' | 'block'>): Script => async function* () {
+  await withPolicies(s, policies);
+  const call: ToolCall = { id: 'call_list', name: 'file_list', arguments: {} };
+  yield { type: 'tool_call', call };
+  yield { type: 'done', stop: 'tool_use' as StopReason };
+};
+
+test('A3: 実行を始めたときに止めていた道具は、途中で「承認なし」に緩めても、その実行のあいだはモデルに渡す一覧へ戻らない。次の実行からは戻る', async t => {
+  const s = await setup(t, { file_write: 'block' });
+  const first = s.adapter();
+  first.scripts.push(toolListCall(s, {}));
+  const { runId, done } = await s.send('一覧を見て');
+  assert.ok((await done).ok);
+  assert.ok(!toolNames(first.calls[0]!).includes('file_write'), '最初の呼び出しでは止めている');
+  assert.notEqual(s.adapter(), first, '設定を保存したので、窓口は作り直されている（2 回目の呼び出しは新しい窓口）');
+  const second = s.adapter().calls[0]!;
+  assert.ok(second, '道具を呼んだあとの 2 回目のモデルの呼び出し');
+  assert.ok(!toolNames(second).includes('file_write'), '途中で緩めても、この実行の 2 回目の呼び出しの一覧に戻らない');
+  assert.ok(toolNames(second).includes('file_list'));
+  assert.equal(s.app.db.prepare('SELECT COUNT(*) AS n FROM tool_calls WHERE run_id = ?').get(runId)!.n, 1);
+
+  s.adapter().scripts.push(reply('はい'));
+  await (await s.send('次の実行', 'c2')).done;
+  assert.ok(toolNames(s.adapter().calls.at(-1)!).includes('file_write'), '次の実行からは、緩めた設定が効いて一覧に戻る');
+});
+
+test('A3: 途中で厳しくした分は、その場から一覧に効く（始めたときが承認なしでも、いまが止めるなら外れる）', async t => {
+  const s = await setup(t);
+  s.adapter().scripts.push(toolListCall(s, { file_write: 'block' }));
+  const { done } = await s.send('一覧を見て');
+  assert.ok((await done).ok);
+  assert.ok(!toolNames(s.adapter().calls[0]!).includes('file_write'), '途中で止めたら、2 回目の呼び出しの一覧から外れる');
+  assert.ok(toolNames(s.adapter().calls[0]!).includes('file_list'));
+});

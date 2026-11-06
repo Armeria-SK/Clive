@@ -11,7 +11,7 @@ import { inputHash, type ApprovalBroker } from './approvals.ts';
 import { runCommandHook } from './hooks/command-hook.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import type { ToolRegistry } from './registry.ts';
-import { stricterPolicy, toolPolicy, type ToolPolicy } from './tool-policy.ts';
+import { effectivePolicy, type HasPolicies, type ToolPolicy } from './tool-policy.ts';
 import type { AskKind, PreCheck, ToolContext, ToolDef, ToolOutput } from './types.ts';
 
 export const REVIEW_FORBIDDEN: ReadonlySet<ToolDef['effect']> = new Set(['write', 'exec', 'network']);
@@ -45,10 +45,9 @@ const matches = (matcher: string, name: string) => { try { return new RegExp(`^(
 
 // この呼び出しに効く道具ごとの方針: 実行を始めたときの設定と、いまの設定の厳しい方
 function policyFor(name: string, ctx: ToolContext, deps: PipelineDeps): ToolPolicy {
-  const started = toolPolicy(ctx.config, name);
-  let now: ToolPolicy = 'allow';
-  try { if (deps.config) now = toolPolicy(deps.config(), name); } catch { }
-  return stricterPolicy(started, now);
+  let now: HasPolicies | undefined;
+  try { now = deps.config?.(); } catch { }
+  return effectivePolicy(name, now ?? ctx.config, ctx.config);
 }
 
 export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: PipelineDeps): Promise<ToolCallOutcome> {

@@ -13,7 +13,7 @@ import type { ApprovalBroker } from '../tools/approvals.ts';
 import { REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
-import { toolPolicy } from '../tools/tool-policy.ts';
+import { effectivePolicy } from '../tools/tool-policy.ts';
 import type { RunKind, TaskControl, ToolContext, ToolDef } from '../tools/types.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from '../tools/skills/store.ts';
@@ -306,11 +306,12 @@ export class ChatEngine {
   }
 
   // モデルに渡す道具の一覧。外す条件はここだけ（maxTools の数える前に外す）: 振り返りで禁止の効果・この実行で禁止された道具・持ち主が「止める」にした道具（tools.policies）。
+  // 「止める」は、パイプラインと同じく、実行を始めたときの設定（started）といまの設定の厳しい方。始めたときに止めていた道具は、途中で緩めても、その実行のあいだは戻らない。
   // 段 8b の会話ごとのモード（計画など）も、ここに条件を足す（パイプラインの二重の拒否は runToolCall）
-  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>): ToolDef[] {
+  #toolsFor(model: ModelConfig, kind: RunKind, forbid?: ReadonlySet<string>, started?: AppConfig): ToolDef[] {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
-    const exclude = (t: ToolDef) => (kind === 'review' && REVIEW_FORBIDDEN.has(t.effect)) || forbid?.has(t.name) === true || toolPolicy(config, t.name) === 'block';
+    const exclude = (t: ToolDef) => (kind === 'review' && REVIEW_FORBIDDEN.has(t.effect)) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block';
     return this.#d.tools.registry.forRun(kind, { limit: model.maxTools, exclude });
   }
 
@@ -364,7 +365,7 @@ export class ChatEngine {
     const maxIterations = iterationLimit(config.tools.maxIterations, kind);
     const compaction = { done: false };
     for (counters.iterations = 1; counters.iterations <= maxIterations; counters.iterations++) {
-      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid });
+      const call = await this.#callModel({ runId, conversationId, chain, start: index, snapshot, signal, counters, flags, compaction, kind, forbid, started: config });
       if (!call.ok) {
         if (call.cancelled) return this.#finishCancelled(runId, conversationId, counters, call.route ?? lastRoute, call.partial);
         return finishFail(call.failure);
@@ -474,7 +475,7 @@ export class ChatEngine {
     }
   }
 
-  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: { done: boolean }; kind: RunKind; forbid?: ReadonlySet<string> | undefined }): Promise<CallResult> {
+  async #callModel(p: { runId: string; conversationId: string; chain: Route[]; start: number; snapshot: string; signal: AbortSignal; counters: { attempts: number }; flags: string[]; compaction: { done: boolean }; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined }): Promise<CallResult> {
     const d = this.#d;
     const sleep = d.sleep ?? abortableSleep;
     const retries = d.retriesPerModel ?? d.config().routing.retriesPerModel;
@@ -493,7 +494,7 @@ export class ChatEngine {
       for (let attempt = 0; attempt <= retries; attempt++) {
         if (p.signal.aborted) return { ok: false, cancelled: true, partial: '', failure: last, route };
         p.counters.attempts++;
-        const { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid });
+        const { toolDefs, fallbackMode, system, history, stored, conversation, apiTools, capacity, available, factor } = this.#assemble({ conversationId: p.conversationId, snapshot: p.snapshot, model, kind: p.kind, forbid: p.forbid, started: p.started });
         const toolNames = new Set(toolDefs.map(t => t.name));
         let fitted;
         try {
@@ -565,12 +566,12 @@ export class ChatEngine {
 
   // モデルへ送る 1 回分の組み立て（system・履歴・道具の仕様・見積もりの補正）。実行（#callModel）と使用量（contextUsage）の両方がここを通るので、数がずれない。
   // 何も書かない。固定の system（snapshot）は呼ぶ側が渡す
-  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined }) {
+  #assemble(p: { conversationId: string; snapshot: string; model: ModelConfig; kind: RunKind; forbid?: ReadonlySet<string> | undefined; started?: AppConfig | undefined }) {
     const d = this.#d;
     const { model } = p;
     const config = d.config();
     const language = languageOf(config);
-    const toolDefs = this.#toolsFor(model, p.kind, p.forbid);
+    const toolDefs = this.#toolsFor(model, p.kind, p.forbid, p.started);
     const specs = ToolRegistry.specs(toolDefs);
     const fallbackMode = model.toolMode === 'json_fallback';
     const capacity = d.status.get(model.id)?.effective ?? model.contextLength ?? 0;

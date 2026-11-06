@@ -28,7 +28,7 @@ export const stricterPolicy = (a: ToolPolicy, b: ToolPolicy): ToolPolicy => (STR
 // a より b のほうが緩い（広がる）か
 export const isLooser = (from: ToolPolicy, to: ToolPolicy): boolean => STRICTNESS[to] < STRICTNESS[from];
 
-interface HasPolicies { tools: { policies?: Record<string, string> | undefined } }
+export interface HasPolicies { tools: { policies?: Record<string, string> | undefined } }
 
 // 設定に書かれた、その道具の方針。書いていない・読めない値・方針を持てない道具は allow
 export function toolPolicy(config: HasPolicies, name: string): ToolPolicy {
@@ -37,6 +37,10 @@ export function toolPolicy(config: HasPolicies, name: string): ToolPolicy {
   const value = policies[name];
   return isToolPolicy(value) ? value : 'allow';
 }
+
+// 実行に効く方針: 実行を始めたときの設定と、いまの設定の厳しい方。途中で厳しくした分はその場から効き、緩めた分は次の実行から。
+// パイプライン（runToolCall）と、モデルに渡す道具の一覧（ChatEngine の #toolsFor）が、同じこの決めを使う。started が無ければ（実行の外）、now だけで決める
+export const effectivePolicy = (name: string, now: HasPolicies, started?: HasPolicies): ToolPolicy => (started ? stricterPolicy(toolPolicy(now, name), toolPolicy(started, name)) : toolPolicy(now, name));
 
 // 設定に block・ask と書かれているのに、方針を持てない道具のため無視する名前（ログに出す）
 export function ignoredPolicyNames(config: HasPolicies): string[] {
