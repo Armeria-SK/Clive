@@ -26,6 +26,7 @@ async function start(): Promise<void> {
   else log('[INFO] モデルのコンテキスト長を確認しています…');
   const results = await app.status.probeAll(config);
   for (const r of results) log(`[${r.status === 'ok' ? 'INFO' : 'WARN'}] ${r.modelId}: ${r.status} — ${r.message}`);
+  app.settleStaleNotifications();
   const web = createWebServer(app);
   await web.listen();
   log(`[INFO] Clive が起動しました: http://${boot.host}:${boot.port}/`);

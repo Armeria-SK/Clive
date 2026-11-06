@@ -197,18 +197,19 @@ export class App {
       }
       this.worker.poke();
     };
-    this.#settleStaleNotifications();
   }
 
-  // 起動の時点で、もう答えようのない大事な未読を既読にする（片づいたときに既読にする仕組みの前からあった通知と、落ちて承認の札ごと消えた通知）。
-  // 起動直後は承認の札がひとつも無いので、承認待ちは全部。返事待ち・失敗は、タスクが今もその状態のものだけ残す
-  #settleStaleNotifications(): void {
+  // Web サーバーを起動するときに呼ぶ（doctor など、動いているサーバーと同じ DB を開くだけの使い方では呼ばない。呼ぶと動いている承認待ちの通知まで既読になる）。
+  // もう答えようのない大事な未読を既読にする（片づいたときに既読にする仕組みの前からあった通知と、落ちて承認の札ごと消えた通知）。
+  // 起動直後は承認の札がひとつも無いので、承認待ちは全部。返事待ち・失敗は、タスクが無いか、今その状態でないものだけ既読にする
+  settleStaleNotifications(): void {
     const stale = this.notifications.list(0).filter(n => {
       if (n.kind === 'approval_needed') return true;
-      const task = n.link?.startsWith('#/tasks/') ? this.tasks.get(n.link.slice('#/tasks/'.length)) : undefined;
-      return task !== undefined && task.status !== (n.kind === 'task_waiting' ? 'waiting' : 'failed');
+      if (!n.link?.startsWith('#/tasks/')) return false;
+      const task = this.tasks.get(n.link.slice('#/tasks/'.length));
+      return task === undefined || task.status !== (n.kind === 'task_waiting' ? 'waiting' : 'failed');
     });
-    if (stale.length) this.notifications.markRead(stale.map(n => n.id));
+    if (stale.length) this.notifications.settleIds(stale.map(n => n.id));
   }
 
   #applied = '';

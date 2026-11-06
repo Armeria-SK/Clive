@@ -56,8 +56,15 @@ export class Notifications {
       : this.#db.prepare('SELECT id FROM notifications WHERE read_at IS NULL AND kind = ? AND dedup_key = ?').all(kind, by.dedupKey)) as Array<{ id: number }>;
     if (!rows.length) return;
     const ids = rows.map(r => r.id);
-    this.markRead(ids);
+    this.settleIds(ids);
     this.onSettled?.(ids);
+  }
+
+  // 片づいた通知を既読にし、重ねない印（dedup_key）も外す。外さないと、同じ dedupKey（失敗・相談は task ごとに 1 つ）の次の通知が 24 時間止まる。
+  // 持ち主が読んだだけの markRead は印を残す。画面へは流さない（起動の掃除から直に呼ぶ）
+  settleIds(ids: readonly number[]): void {
+    const now = this.#now();
+    for (const id of ids) this.#db.prepare('UPDATE notifications SET read_at = ?, dedup_key = NULL WHERE id = ? AND read_at IS NULL').run(now, id);
   }
 
   markRead(ids?: readonly number[]): void {

@@ -9,7 +9,7 @@ import { resolvePaths } from '../src/paths.ts';
 import { ProviderError } from '../src/providers/types.ts';
 import type { Task } from '../src/tasks/store.ts';
 import { createWebServer } from '../src/web/server.ts';
-import { fail, FakeAdapter, tempDir, type Script, testConfig } from './helpers.ts';
+import { fail, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -83,7 +83,8 @@ for (const outcome of ['approved', 'denied', 'expired', 'cancelled'] as const) {
       const known = new Set(s.app.approvals.pending().map(p => p.id));
       void s.app.approvals.request({ runId: 'r', conversationId, tool: 'file_write', input: { path: 'x' }, title: 'Write', body: 'body', reasons: [], details: [] }, timeoutMs, controller.signal);
       const id = s.app.approvals.pending().find(p => !known.has(p.id))!.id;
-      const notice = () => s.app.db.prepare('SELECT id, read_at FROM notifications WHERE dedup_key = ?').get(`approval:${id}`) as { id: number; read_at: number | null };
+      const noticeId = (s.app.db.prepare('SELECT id FROM notifications WHERE dedup_key = ?').get(`approval:${id}`) as { id: number }).id;
+      const notice = () => s.app.db.prepare('SELECT id, read_at FROM notifications WHERE id = ?').get(noticeId) as { id: number; read_at: number | null };
       return { id, controller, notice };
     };
     const first = withConversation('first');
@@ -194,9 +195,87 @@ test('失敗のタスクを直しても（題を変えるだけ）、まだ失�
   assert.equal(s.readEvents().length, 0);
 });
 
+// ── 片づけたあとの同じ知らせ（24 時間の重ね止めに引っかからない）──
+
+async function failThrough(s: Setup, task: Pick<Task, 'id'>): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    s.adapter().scripts.push(fail(new ProviderError('provider_error', 'boom', { retryable: false })));
+    await s.app.worker.tick();
+    s.clock.now += 10 * MIN;
+  }
+  assert.equal(s.app.tasks.get(task.id)!.status, 'failed');
+}
+
+async function getStuck(s: Setup, task: Pick<Task, 'id'>): Promise<void> {
+  for (const wait of [15 * MIN, 30 * MIN, 0]) {
+    s.adapter().scripts.push(reply('考えました'));
+    assert.equal(await s.app.worker.tick(), 'ran');
+    s.clock.now += wait;
+  }
+  assert.equal(s.app.tasks.get(task.id)!.status, 'waiting');
+}
+
+const noticeEvents = (s: Setup) => s.events.filter(e => e.type === 'notification');
+
+test('失敗の知らせが片づいたあと、24 時間以内にまた失敗したら、新しい知らせが未読で出て画面へも流れる', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'flaky', origin: 'user', actor: 'user' });
+  const started = s.clock.now;
+  await failThrough(s, task);
+  assert.equal(s.rows('task_failed', task).length, 1);
+
+  assert.equal((await s.json(`/api/tasks/${task.id}/run-now`, 'POST')).status, 202);
+  assert.notEqual(s.rows('task_failed', task)[0]!.read_at, null);
+  const sent = noticeEvents(s).length;
+
+  await failThrough(s, task);
+  const after = s.rows('task_failed', task);
+  assert.equal(after.length, 2, '2 回目の失敗にも知らせが出る');
+  assert.equal(after[1]!.read_at, null, '新しい知らせは未読');
+  assert.equal(noticeEvents(s).length, sent + 1, '画面へも流れる');
+  assert.equal(s.app.notifications.list()[0]!.id, after[1]!.id, '一覧の先頭に出る');
+  assert.ok(s.clock.now - started < 24 * HOUR, '24 時間以内の出来事');
+});
+
+test('相談の知らせが片づいたあと、24 時間以内にまた行き詰まったら、新しい相談の知らせが未読で出て画面へも流れる', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'vague', origin: 'user', actor: 'user' });
+  const started = s.clock.now;
+  await getStuck(s, task);
+  assert.equal(s.rows('task_waiting', task).length, 1);
+
+  assert.equal((await s.json(`/api/tasks/${task.id}/answer`, 'POST', { text: 'こうして' })).status, 200);
+  assert.notEqual(s.rows('task_waiting', task)[0]!.read_at, null);
+  const sent = noticeEvents(s).length;
+
+  await getStuck(s, task);
+  const after = s.rows('task_waiting', task);
+  assert.equal(after.length, 2, '2 回目の相談にも知らせが出る');
+  assert.equal(after[1]!.read_at, null, '新しい知らせは未読');
+  assert.equal(noticeEvents(s).length, sent + 1, '画面へも流れる');
+  assert.ok(s.clock.now - started < 24 * HOUR, '24 時間以内の出来事');
+});
+
+test('持ち主が自分で読んだ知らせと、まだ片づいていない知らせは、これまでどおり 24 時間は同じ知らせを重ねない。承認の知らせの片づけ方は変わらない', async t => {
+  const s = await setup(t);
+  const task = s.app.tasks.create({ title: 'dup', origin: 'user', actor: 'user' });
+  const input = { kind: 'task_failed', title: 'f', link: `#/tasks/${task.id}`, dedupKey: `failed:${task.id}` } as const;
+  const first = s.app.notifications.notify(input)!;
+  assert.equal(s.app.notifications.notify(input), undefined, '未読のあいだは重ねない');
+  s.app.notifications.markRead([first.id]);
+  assert.equal(s.app.notifications.notify(input), undefined, '持ち主が読んだだけなら、重ねない');
+  assert.equal(s.rows('task_failed', task).length, 1);
+  assert.equal(s.readEvents().length, 0);
+
+  const approval = s.app.notifications.notify({ kind: 'approval_needed', title: 'a', link: `#/tasks/${task.id}`, dedupKey: 'approval:fixed' })!;
+  s.app.notifications.settle('approval_needed', { dedupKey: 'approval:fixed' });
+  assert.notEqual(s.rows('approval_needed', task)[0]!.read_at, null, '承認の知らせは、これまでどおり既読になる');
+  assert.deepEqual(s.readEvents(), [{ type: 'notification.read', ids: [approval.id], unread: 0 }]);
+});
+
 // ── 起動 ──
 
-test('起動の時点で、答えようのない大事な未読は既読にする（承認の札は再起動で無くなる／タスクがもうその状態ではない）。まだ答えられるものは残す', async t => {
+test('起動の時点で（settleStaleNotifications）、答えようのない大事な未読は既読にする（承認の札は再起動で無くなる／タスクがもうその状態ではない・もう無い）。まだ答えられるものは残す。App を作っただけでは触らない', async t => {
   const { dir, paths } = prepare(t);
   const databasePath = join(dir, 'clive.db');
   const first = open(paths, databasePath);
@@ -215,6 +294,8 @@ test('起動の時点で、答えようのない大事な未読は既読にす�
     failed: notify('task_failed', stillFailed, 'failed:1'),
     answered: notify('task_waiting', answeredEarlier, 'waiting:2'),
     retried: notify('task_failed', retriedEarlier, 'failed:2'),
+    ghost: first.app.notifications.notify({ kind: 'task_failed', title: 'ghost', link: '#/tasks/no-such-task', dedupKey: 'failed:ghost' })!.id,
+    elsewhere: first.app.notifications.notify({ kind: 'task_waiting', title: 'elsewhere', link: '#/tasks', dedupKey: 'waiting:list' })!.id,
   };
   first.app.close();
 
@@ -222,11 +303,17 @@ test('起動の時点で、答えようのない大事な未読は既読にす�
   const second = open(paths, databasePath);
   try {
     const readAt = (id: number) => (second.app.db.prepare('SELECT read_at FROM notifications WHERE id = ?').get(id) as { read_at: number | null }).read_at;
+    for (const id of Object.values(ids)) assert.equal(readAt(id), null, 'App を作っただけでは、何も既読にしない（doctor が動いているサーバーの通知を触らないため）');
+
+    second.app.settleStaleNotifications();
     assert.notEqual(readAt(ids.approval), null, '承認の札は起動で全部無くなっている');
     assert.notEqual(readAt(ids.answered), null, 'もう返事待ちではないタスクの通知');
     assert.notEqual(readAt(ids.retried), null, 'もう失敗ではないタスクの通知');
+    assert.notEqual(readAt(ids.ghost), null, 'タスクがもう無い失敗の通知');
     assert.equal(readAt(ids.waiting), null, '今も返事待ちのタスクの通知は残す');
     assert.equal(readAt(ids.failed), null, '今も失敗のタスクの通知は残す');
-    assert.deepEqual(second.app.notifications.list().filter(n => n.read_at === null).map(n => n.id), [ids.failed, ids.waiting], '先頭に残るのも、その 2 件だけ');
+    assert.equal(readAt(ids.elsewhere), null, 'タスク 1 件を指さない通知（一覧へのリンク）は触らない');
+    assert.deepEqual(second.app.notifications.list().filter(n => n.read_at === null).map(n => n.id), [ids.elsewhere, ids.failed, ids.waiting], '先頭に残るのも、その 3 件だけ');
+    assert.ok(second.app.notifications.notify({ kind: 'task_failed', title: 'again', link: `#/tasks/${retriedEarlier.id}`, dedupKey: 'failed:2' }), '掃除で既読にした分は、同じ dedupKey の次の通知を止めない');
   } finally { second.app.close(); }
 });
