@@ -152,7 +152,8 @@
     "attachment.file": "（ファイルを添付しました）",
     "attachment.taint": "添付「{name}」",
     "taint.carried": "前の実行で読んだもの",
-    "taint.unknown": "履歴が長く、確かめきれないもの"
+    "taint.unknown": "履歴が長く、確かめきれないもの",
+    "taint.checklist": "外の内容を読んだあとに書かれた作業の一覧"
   },
   "guard": {
     "scope.cmd_subst": "コマンド置換を含んでいます",

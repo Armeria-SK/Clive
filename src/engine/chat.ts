@@ -13,6 +13,7 @@ import { ProviderError, providerError, type ProviderAdapter } from '../providers
 import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
+import { checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
 import { PLAN_EFFECTS, REVIEW_FORBIDDEN, runToolCall, TOOL_OUTPUT_LIMIT } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
@@ -233,6 +234,7 @@ export class ChatEngine {
   // - 最後の返事（道具の呼び出しだけではない assistant の発言）より後のユーザーの発言に添付がある。今送った発言・保存だけになった待ちの発言・やり直す発言のどれでも数え、道具を呼んだ assistant の発言は返事ではないので、またいで見る
   // - 最後の返事を、読み出す発言の数（TAINT_SCAN_LIMIT）の中に見つけられない。添付の有無を確かめきれないので、承認制の側に倒す
   // - 前のチャットの実行が、外から読んだまま、最後まで返事を書かずに終わった（止めた・失敗・取り消し・道具の上限のまとめ）。Web を読んだ分もこれで持ち越す。やり直し・続きは、その実行のやり直し・続きとみなす
+  // - 外から読んだ実行が書いた作業の一覧が残っている（一覧は毎回の system に入るため、一覧を空にするまで、その会話の実行は「外から読んだ」で始める）
   #taintFromHistory(runId: string, conversationId: string): void {
     const language = languageOf(this.#d.config());
     const sources: string[] = [];
@@ -245,7 +247,12 @@ export class ChatEngine {
     }
     if (!replied && stored.length >= TAINT_SCAN_LIMIT) sources.push(engineText(language, 'taint.unknown'));
     if (this.#previousRunCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.carried'));
+    if (this.#checklistCarriesTaint(conversationId)) sources.push(engineText(language, 'taint.checklist'));
     if (sources.length) this.#initialTaint.set(runId, sources);
+  }
+
+  #checklistCarriesTaint(conversationId: string): boolean {
+    return readChecklist(this.#d.kv, conversationId)?.tainted === true;
   }
 
   // 前のチャットの実行が、外から読んだ印（taint）を持ったまま、最後まで返事を書かずに終わったか。最後まで返事を書いて終わった実行（ok で、道具の上限のまとめではない）の印は持ち越さない
@@ -354,6 +361,7 @@ export class ChatEngine {
     const runId = randomUUID();
     this.#d.bus.publish({ type: 'message.saved', runId, conversationId, messageId: saved.id, role: 'user' });
     const control = { value: { outcome: 'none' } as TaskControl };
+    if (this.#checklistCarriesTaint(conversationId)) this.#initialTaint.set(runId, [engineText(languageOf(this.#d.config()), 'taint.checklist')]);
     this.#start(runId, conversationId, chain.usable, 'task', { task, control });
     return { ok: true, runId, control, done: this.#active.get(runId)!.done };
   }
@@ -865,7 +873,8 @@ export class ChatEngine {
     const upto = conversation?.summary_upto ?? 0;
     const stored = d.conversations.messages(p.conversationId).filter(m => m.id > upto);
     const summary = summarySection(conversation?.summary ?? '', language);
-    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
+    const checklist = checklistSection(readChecklist(d.kv, p.conversationId), language);
+    const dynamic = [buildDynamic(config.timezone, language, d.now?.() ?? new Date(), mode), summary, checklist, fallbackMode ? jsonFallbackInstructions(specs, language) : ''].filter(Boolean).join('\n\n');
     const system = { frozen: p.snapshot, dynamic };
     let history = stored.map(m => m.message);
     if (fallbackMode) history = toJsonFallbackHistory(history, language);
