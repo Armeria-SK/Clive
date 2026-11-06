@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type Approval } from './api.ts';
 import { decideApproval, useDecisionPending, type ApprovalDecision } from './approval-decide.ts';
-import { approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, formatCountdown } from './chat-logic.ts';
+import { approvalFraction, approvalPathKey, approvalPathsMore, approvalPathTone, formatCountdown, grantFolderLabel } from './chat-logic.ts';
 import { ChatDialog } from './ChatDialog.tsx';
 import { useNow } from './hooks.ts';
 import { useT } from './i18n/index.ts';
@@ -68,6 +68,7 @@ function ApprovalPanel({ approval, hint, position, onDetails }: PanelProps) {
       <div className="chat-approval-actions">
         <button type="button" className="btn btn-ghost chat-plain" disabled={busy} onClick={() => void decide('deny')}>{t('approval.deny')}</button>
         {!approval.onceOnly && !approval.everyTime && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
+        {approval.grantFolder && <button type="button" className="btn btn-secondary" disabled={busy} title={approval.grantFolder} onClick={() => void decide('folder')}>{t('approval.folder', grantFolderLabel(approval.grantFolder))}</button>}
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide('once')}>
           {hint && !approval.onceOnly ? <>{t('approval.run')}<span className="chat-approval-key">↵</span></> : t('approval.once')}
         </button>
@@ -93,6 +94,7 @@ function ApprovalDetails({ approval, onClose }: { approval: Approval; onClose: (
         <>
           <button type="button" className="btn btn-ghost chat-plain" disabled={busy} onClick={() => void decide('deny')}>{t('approval.deny')}</button>
           {!approval.onceOnly && !approval.everyTime && <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void decide('conversation')}>{t('approval.conversation')}</button>}
+          {approval.grantFolder && <button type="button" className="btn btn-secondary" disabled={busy} title={approval.grantFolder} onClick={() => void decide('folder')}>{t('approval.folder', grantFolderLabel(approval.grantFolder))}</button>}
           <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void decide('once')}>{t('approval.once')}</button>
         </>
       )}

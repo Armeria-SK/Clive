@@ -67,6 +67,7 @@ function ToolsTable({ calls }: { calls: ToolCallRow[] }) {
           <span role="cell" className="lg-cell">
             {decidedByLabel(call.decided_by)}
             {call.autoReason && <span className="lg-sub" title={`${t('runs.autoReason')}: ${call.autoReason}`}>{call.autoReason}</span>}
+            {call.grantFolder && <span className="lg-sub" title={call.grantFolder}>{t('runs.grantFolder', call.grantFolder)}</span>}
           </span>
           <span role="cell" className="lg-cell"><StatusCell status={toolStatus(call.ok)} /></span>
         </div>

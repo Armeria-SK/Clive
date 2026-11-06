@@ -55,6 +55,13 @@ const RC_NAME = /^(?:\.curlrc|_curlrc|\.wgetrc)$/iu;
 // どこにあっても、この名前のファイルは python の起動のたびに動く（venv の site-packages など）。.pth は PyTorch の重みと名前が同じなので、user-site の下だけ
 const PY_STARTUP_NAME = /^(?:sitecustomize|usercustomize)\.py$/iu;
 
+// ホームの直下に置く名前（.npmrc・.gitattributes・.bashrc・.ssh など）。作業フォルダの中にある同じ名前も、そのツールの設定として読まれうる（プロジェクトの .npmrc など）。
+// 「フォルダごと許可」のような広い許可が覆わない場所を見分けるのに使う（パスのどこかの名前が当たれば、設定の場所とみなす。当たりすぎる側は、許可が及ばず確かめに戻るだけ）
+const CONFIG_NAMES: ReadonlySet<string> = new Set(HOME_PATHS.filter(p => !p.includes('/')).map(p => p.toLowerCase()));
+export function hasToolConfigName(abs: string, env: Env = process.env): boolean {
+  return abs.split(/[\\/]/u).some(segment => CONFIG_NAMES.has(segment.toLowerCase())) || isToolConfigPath(abs, env);
+}
+
 export function isToolConfigPath(abs: string, env: Env = process.env): boolean {
   const name = abs.split(/[\\/]/u).pop() ?? '';
   if (PROFILE_NAME.test(name) || RC_NAME.test(name) || PY_STARTUP_NAME.test(name)) return true;

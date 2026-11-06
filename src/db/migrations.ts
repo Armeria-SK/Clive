@@ -330,4 +330,8 @@ export const MIGRATIONS: readonly Migration[] = [
   `
   UPDATE conversations SET ever_tainted = 1;
   `,
+  // 15: 承認の記録に、「この返事のあいだ、このフォルダ以下への書き込みを許可」を選んだときのフォルダ grant_folder（そのとき scope は folder。選ばなかった承認は NULL）
+  `
+  ALTER TABLE approvals ADD COLUMN grant_folder TEXT;
+  `,
 ];

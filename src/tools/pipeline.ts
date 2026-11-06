@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { Value } from '@sinclair/typebox/value';
 import type { RunEvent, ToolCall } from '../engine/types.ts';
@@ -11,6 +12,8 @@ import type { AppConfig, Language } from '../config/schema.ts';
 import { inputHash, type ApprovalBroker } from './approvals.ts';
 import { autoDecide, mayClassify, type ClassifierPrompt } from './auto-approve.ts';
 import { runCommandHook } from './hooks/command-hook.ts';
+import { isInside, placePath, realish, writeApprovalKind } from './hooks/scope.ts';
+import { hasToolConfigName } from './hooks/tool-config.ts';
 import { worst, type Decision } from './hooks/shell-guard.ts';
 import type { ToolRegistry } from './registry.ts';
 import { effectivePolicy, type HasPolicies, type ToolPolicy } from './tool-policy.ts';
@@ -80,6 +83,19 @@ export function effectiveMode(ctx: ToolContext, deps: PipelineDeps): PermissionM
 function conversationTainted(deps: PipelineDeps): boolean {
   if (!deps.conversationTainted) return true;
   try { return deps.conversationTainted(); } catch { return true; }
+}
+
+// 外から読んだ内容のあとの書き込みだけが理由の確かめ（理由の種類が taint だけ。ほかの種類がある方針 ask = 毎回の確かめ・コードを動かす今回だけの確かめ・フック・人格などは入らない）の file_write / file_edit で、書き込み先が許可フォルダの中（書ける方）で、
+// そのフォルダと書き込み先が保護された場所（人格・スキル・.git・ツールの設定）でないとき、書き込み先と、その書き込み先のフォルダ（「この返事のあいだ許可」の対象）を返す。それ以外は undefined
+function folderGrantTarget(tool: ToolDef, first: PreCheck | undefined, kinds: ReadonlySet<AskKind>, onceOnly: boolean, ctx: ToolContext): { path: string; folder: string } | undefined {
+  if (!tool.folderGrant || tool.effect !== 'write' || onceOnly || kinds.size !== 1 || !kinds.has('taint')) return undefined;
+  const found = first?.paths;
+  const only = found?.length === 1 ? found[0] : undefined;
+  if (first?.decision !== 'allow' || !only || only.verdict !== 'in' || only.mode !== 'write' || !only.path) return undefined;
+  const folder = dirname(only.path);
+  const place = placePath(folder, ctx.policy);
+  if (place.kind !== 'inside' || place.mode !== 'write' || writeApprovalKind(folder, ctx.policy) !== undefined || hasToolConfigName(only.path)) return undefined;
+  return { path: only.path, folder };
 }
 
 function conversationAutoRead(deps: PipelineDeps): boolean {
@@ -189,6 +205,10 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   if (decision === 'deny') return refuse('deny', decidedBy, toolText(language, 'pipeline.denied', { reasons: reasons.join('\n- ') }));
 
   let approvalId: string | undefined;
+  // 「この返事のあいだ、このフォルダ以下への書き込みを許可」: 許されたフォルダの下（実際の置き場所で比べる）への、同じ実行の書き込みは、確かめなしで通す
+  const grantTarget = decision === 'ask' ? folderGrantTarget(tool, first, askKinds, onceOnly, ctx) : undefined;
+  const covering = grantTarget ? ctx.writeGrants?.find(g => isInside(realish(g.folder), realish(grantTarget.path))) : undefined;
+  if (covering) { decision = 'allow'; decidedBy = 'folder-grant'; approvalId = covering.approvalId; }
   // ── 自動承認（段 8b）: 判定役に回してよい確かめだけを、判定役に聞く。許せば実行、確かめる・失敗・時間切れ・読めない返事なら、いつもの承認の札 ──
   if (decision === 'ask' && deps.autoClassify && mayClassify({ mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime, tainted: ctx.taint.tainted, conversationTainted: conversationTainted(deps) })) {
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
@@ -228,7 +248,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const pending = deps.approvals.request({
       runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body,
-      cwd: summary.cwd, reasons, details, onceOnly, everyTime, kinds: [...askKinds], preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore,
+      cwd: summary.cwd, reasons, details, onceOnly, everyTime, kinds: [...askKinds], preview: first?.preview, paths: first?.paths, pathsMore: first?.pathsMore, grantFolder: grantTarget?.folder,
     }, ctx.config.tools.shell.approvalTimeoutSec * 1000, ctx.signal);
     approvalId = deps.approvals.pending().find(p => p.inputHash === hash && p.runId === ctx.runId)?.id;
     const outcome = await pending;
@@ -239,6 +259,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       return finish({ output: { content: message, isError: true }, decision: 'ask', decidedBy: 'user', invalidArguments: false }, approvalId);
     }
     decidedBy = 'user';
+    // 「この返事のあいだ、このフォルダ以下への書き込みを許可」を選ばれたら、この実行の残りの間だけ覚える
+    const grantedFolder = grantTarget && approvalId ? deps.approvals.grantedFolder(approvalId) : undefined;
+    if (grantedFolder && approvalId) (ctx.writeGrants ??= []).push({ folder: grantedFolder, approvalId });
 
     // 見せたあとで中身が変わっていたら（ほかの会話やタスクが書き換えた場合など）、許可されたものとは別のコードなので動かさない
     if (onceOnly && tool.preCheck) {

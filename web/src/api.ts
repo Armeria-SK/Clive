@@ -37,6 +37,8 @@ export interface Approval {
   onceOnly: boolean; preview: ApprovalPreview[];
   // 道具ごとの方針が「承認を求める」の確かめ: 毎回確かめる（「この会話では許可」は無い）。無い古い応答は false 扱い
   everyTime?: boolean;
+  // 外から読んだ内容のあとの file_write / file_edit の確かめ（理由が「外から読んだ」だけ）に添える、「この返事のあいだ、このフォルダ以下への書き込みを許可」のフォルダ。添えないときは null（無い古い応答も null 扱い）
+  grantFolder?: string | null;
 }
 // 会話を次に送るときのコンテキストの使用量。tokens は古い発言を削る前の見積もり、available は削り始める境目、capacity はモデル全体、ratio は tokens / available（1 を超えうる）
 export interface ContextUsage { modelId: string; tokens: number; available: number; capacity: number; ratio: number }
@@ -79,6 +81,8 @@ export interface ToolCallRow {
   duration_ms: number | null; output_preview: string | null; full_ref: string | null; created_at: number;
   // 自動承認が許した呼び出しで、判定役の短い理由（ほかは null）
   autoReason: string | null;
+  // 「この返事のあいだ、このフォルダ以下への書き込みを許可」で許可された札と、それで札なしで通った呼び出しで、許可したフォルダ（ほかは null）
+  grantFolder: string | null;
 }
 
 export type Book = 'user' | 'notes';
@@ -163,7 +167,7 @@ export const api = {
   summary: (id: string) => call<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/summary`),
   contextUsage: (id: string, modelId?: string) => call<ContextUsage>(`/api/conversations/${encodeURIComponent(id)}/context${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`),
   approvals: () => call<{ approvals: Approval[] }>('/api/approvals'),
-  decide: (id: string, decision: 'once' | 'conversation' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
+  decide: (id: string, decision: 'once' | 'conversation' | 'folder' | 'deny') => call(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ decision }) }),
   // 実行中に送ると待たされる（queued）。interrupt なら、今の実行を止めて、この発言から始める
   send: (id: string, text: string, attachments: string[] = [], choice: ModelChoice = {}, options: { interrupt?: boolean } = {}) =>
     call<{ runId: string; queued?: boolean; pendingId?: string }>(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ text, ...(attachments.length ? { attachments } : {}), ...choice, ...(options.interrupt ? { interrupt: true } : {}) }) }),

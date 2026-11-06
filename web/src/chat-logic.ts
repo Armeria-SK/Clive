@@ -288,6 +288,12 @@ export function firstLine(value: string, max = 160): string {
 
 export const formatCountdown = (ms: number): string => formatElapsed(Math.max(0, ms));
 
+// 「この返事のあいだ、このフォルダ以下への書き込みを許可」のボタンに出すフォルダ名: 長い絶対パスは、末尾の 2 つの名前だけ（全部はボタンの title）
+export function grantFolderLabel(folder: string): string {
+  const parts = folder.split(/[\\/]+/u).filter(Boolean);
+  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : parts.join('/') || folder;
+}
+
 // 承認の札の、見つけたパスごとの判定の札。中は読み書き・読むだけで文が分かれ、知らない判定は「判定できない」
 export function approvalPathKey(path: Pick<ApprovalPathView, 'verdict' | 'mode'>): PlainKey {
   switch (path.verdict) {

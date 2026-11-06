@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { api } from './api.ts';
 import { createDecisionTracker } from './chat-logic.ts';
 
-export type ApprovalDecision = 'once' | 'conversation' | 'deny';
+export type ApprovalDecision = 'once' | 'conversation' | 'folder' | 'deny';
 
 const tracker = createDecisionTracker();
 const listeners = new Set<() => void>();
