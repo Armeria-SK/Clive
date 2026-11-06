@@ -124,7 +124,7 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
 };
 
 // 中に何万ものファイルがあり、一覧に入れると 500 件の枠を使い切る（本当に見たいものが出てこない）フォルダ。下の階層を見るときは中に入らない
-const HEAVY_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', '.next', '.cache', '.turbo', '.parcel-cache']);
+export const HEAVY_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', '.next', '.cache', '.turbo', '.parcel-cache']);
 
 export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }> = {
   name: 'file_list',

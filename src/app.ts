@@ -32,6 +32,8 @@ import { ReviewJobs } from './memory/review.ts';
 import { curiosityAdd, curiosityList, curiosityUpdate } from './tools/builtin/curiosity.ts';
 import { skillDraft, skillView } from './tools/builtin/skills.ts';
 import { webFetch, webSearch } from './tools/builtin/web.ts';
+import { fileSearch } from './tools/builtin/file-search.ts';
+import { calculate, dateCalc } from './tools/builtin/calc.ts';
 import type { PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { SkillStore } from './tools/skills/store.ts';
@@ -50,6 +52,7 @@ export function builtinTools(): ToolDef[] {
     taskCreate, taskList, taskUpdate,
     memoryUpdate, memoryForget, memorySearch, historyRead,
     skillView, skillDraft, curiosityAdd, curiosityList, curiosityUpdate,
+    fileSearch, calculate, dateCalc,
   ];
 }
 
