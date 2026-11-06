@@ -155,9 +155,15 @@ function readExisting(path: string): string {
   try { return readFileSync(path, 'utf8'); } catch (error) { throw new EnvFileError('io', `.env を読めませんでした（${(error as NodeJS.ErrnoException).code ?? 'error'}）`); }
 }
 
+// 控え（.env.bak）がリンクなら、写すとリンク先を上書きしてしまうので断る
+function checkBackup(path: string): void {
+  if (lstatSync(`${path}.bak`, { throwIfNoEntry: false })?.isSymbolicLink()) throw new EnvFileError('link', '.env.bak がリンクなので書き換えません');
+}
+
 function save(path: string, previous: string | undefined, content: string): void {
   try {
     if (previous !== undefined) {
+      checkBackup(path);
       copyFileSync(path, `${path}.bak`);
       if (!WINDOWS) chmodSync(`${path}.bak`, 0o600);
     }

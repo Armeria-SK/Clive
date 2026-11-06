@@ -272,3 +272,21 @@ test('どんな .env に、どんな順で書き込み・削除をしても、�
   assert.ok(accepted > 300, `書けた回数 ${accepted}`);
   assert.ok(refused > 0, '断る場合も試している');
 });
+
+test('控え（.env.bak）がリンクなら、書かずに断る（写すとリンク先を上書きしてしまうため）。リンク先も .env も変えない', t => {
+  const f = fixture(t, 'A=1\nK_API_KEY=old\n');
+  const target = join(f.dir, 'target');
+  const decoy = join(f.dir, 'decoy-dir');
+  writeFileSync(target, 'TARGET-CONTENT\n');
+  mkdirSync(decoy);
+  // シンボリックリンク（Windows は権限が要るので、フォルダへのジャンクションで代える。lstat ではどちらもリンク）
+  try { symlinkSync(target, `${f.path}.bak`); } catch {
+    try { symlinkSync(decoy, `${f.path}.bak`, 'junction'); } catch { t.skip('この環境ではリンクを作れない'); return; }
+  }
+  for (const act of [() => setEnvValue(f.path, 'K_API_KEY', 'new'), () => removeEnvValue(f.path, 'K_API_KEY')]) {
+    assert.throws(act, (error: unknown) => error instanceof EnvFileError && error.reason === 'link');
+  }
+  assert.equal(f.text(), 'A=1\nK_API_KEY=old\n', '.env は変えない');
+  assert.equal(readFileSync(target, 'utf8'), 'TARGET-CONTENT\n', 'リンク先は変えない');
+  assert.equal(readdirSync(f.dir).some(name => name.endsWith('.tmp')), false, '一時ファイルは残らない');
+});
