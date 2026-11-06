@@ -627,6 +627,8 @@ export const en: Dict = {
   'settings.key.loadFailed': 'Could not load the state of the key.',
   'settings.key.confirmTitle': 'This key will be sent outside this PC',
   'settings.key.confirmOk': 'Save and send it there',
+  'settings.key.unsafeEnv': (name: string) => `The environment variable "${name}" cannot be used as an API key name (so that variables like PATH, which change how programs run, are never overwritten). Use a name that contains KEY, TOKEN, SECRET, PASSWORD or CREDENTIAL. You can change it in "Advanced" below, under "API key variable name".`,
+  'settings.key.openAdvanced': 'Open Advanced',
   'settings.key.howNow': 'You can also enter it in the "API key" field of the Providers section.',
   'settings.keys.none': 'No provider uses an API key variable.',
   'settings.keys.unused': 'Not used',

@@ -57,7 +57,7 @@ const ja = {
   'key_padded': 'API キーの前か後ろに空白が入っています。取り除いてもう一度入れてください',
   'key_too_long': 'API キーが長すぎます（{max} 文字まで）',
   'key_unsupported': 'この API キーの文字の並びは、.env に安全に書けません',
-  'key_env_unsafe': '環境変数「{env}」は API キーの名前として使えません（KEY・TOKEN・SECRET・PASSWORD のどれかを含む名前にしてください）',
+  'key_env_unsafe': '環境変数「{env}」は API キーの名前として使えません（KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL のどれかを含む名前にしてください）',
   'env_unwritable': '.env に書けなかったので、API キーは保存していません（{reason}）',
   'internal': '内部エラーが発生しました（ログを確認してください）',
 } as const;
@@ -119,7 +119,7 @@ const en: Record<keyof typeof ja, string> = {
   'key_padded': 'The API key has a space before or after it. Remove it and enter the key again',
   'key_too_long': 'The API key is too long (up to {max} characters)',
   'key_unsupported': 'This sequence of characters in the API key cannot be written to .env safely',
-  'key_env_unsafe': 'The environment variable "{env}" cannot be used as an API key name (use a name that contains KEY, TOKEN, SECRET or PASSWORD)',
+  'key_env_unsafe': 'The environment variable "{env}" cannot be used as an API key name (use a name that contains KEY, TOKEN, SECRET, PASSWORD or CREDENTIAL)',
   'env_unwritable': 'Could not write to .env, so the API key was not saved ({reason})',
   'internal': 'An internal error occurred (check the log)',
 };

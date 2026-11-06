@@ -1,7 +1,7 @@
 import type { PlainKey } from '../i18n/index.ts';
 import { getLanguage, type Lang } from '../i18n/state.ts';
 import { serverText } from '../server-text.ts';
-import { keyEnvName, takenKeyEnvs } from '../../../src/shared/provider-key.ts';
+import { isSecretEnvName, keyEnvName, takenKeyEnvs } from '../../../src/shared/provider-key.ts';
 
 // 設定の画面の、画面を使わない部分。節の一覧・変更の数え方・保存に失敗したときの問題の読み取り・設定の書き換え。
 
@@ -276,6 +276,12 @@ export function providerKeyEnv(config: Config, id: string): string | undefined {
   const providers = providerRows(config);
   const provider = providers.find(p => p.id === id);
   return provider ? keyEnvName(provider, takenKeyEnvs(providers, id)) : undefined;
+}
+
+// 鍵の環境変数の名前が、鍵の名前として使えない（KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL を含まない）ときの、その名前。サーバーはこの名前に鍵を書かない（409）ので、画面は鍵の欄を出さない
+export function keyEnvUnsafe(config: Config, id: string): string | undefined {
+  const name = providerKeyEnv(config, id);
+  return name !== undefined && !isSecretEnvName(name) ? name : undefined;
 }
 
 // 同じ環境変数を使うほかのプロバイダ（鍵を入れ直す・消すと、そちらにも効く）。まだ名前を付けていない非 Anthropic は、ほかと重ならない

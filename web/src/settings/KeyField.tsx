@@ -18,11 +18,15 @@ interface Props {
   sharedWith: string[];
   // 鍵を入れた・消したあと（設定の apiKeyEnv とモデルの確認が変わりうる）
   onChanged: () => void;
+  // 鍵の環境変数の名前が、鍵の名前として使えないときの、その名前（サーバーが鍵を書かない名前）
+  unsafeEnv: string | undefined;
+  // 「詳しい設定」（環境変数名の欄）を開く
+  onOpenAdvanced: () => void;
 }
 
 // プロバイダの API キーの欄。入れたキーは画面に残さず、サーバーが .env に書く。入っているかと末尾 4 文字だけを見せる。
 // 送り先がこの PC の外なら、送る先を並べて確かめてから送る
-export function KeyField({ id, saved, ready, sharedWith, onChanged }: Props) {
+export function KeyField({ id, saved, ready, sharedWith, onChanged, unsafeEnv, onOpenAdvanced }: Props) {
   const t = useT();
   const [state, setState] = useState<ProviderKeyState | 'failed' | null>(null);
   const [value, setValue] = useState('');
@@ -34,11 +38,11 @@ export function KeyField({ id, saved, ready, sharedWith, onChanged }: Props) {
 
   useEffect(() => {
     setState(null); setValue(''); setEditing(false); setRemoving(false); setError(null); setConfirm(null);
-    if (!ready) return undefined;
+    if (!ready || unsafeEnv) return undefined;
     let live = true;
     api.providerKey(id).then(next => { if (live) setState(next); }).catch(() => { if (live) setState('failed'); });
     return () => { live = false; };
-  }, [id, ready]);
+  }, [id, ready, unsafeEnv]);
   useEscapeLayer('dialog', confirm !== null, () => setConfirm(null));
 
   async function submit(confirmed = false) {
@@ -71,6 +75,14 @@ export function KeyField({ id, saved, ready, sharedWith, onChanged }: Props) {
   }
 
   if (!ready) return <span className="set-note">{t('settings.key.needSave')}</span>;
+  if (unsafeEnv) {
+    return (
+      <div className="set-keyfield">
+        <span className="set-row-error" role="alert">{t('settings.key.unsafeEnv', unsafeEnv)}</span>
+        <div className="set-keyrow"><button type="button" className="btn btn-secondary" onClick={onOpenAdvanced}>{t('settings.key.openAdvanced')}</button></div>
+      </div>
+    );
+  }
   if (state === null) return <span className="set-note" role="status">{t('settings.loading')}</span>;
   const current = state === 'failed' ? undefined : state;
   const isSet = current?.set === true;

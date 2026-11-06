@@ -4,7 +4,7 @@ import { en } from '../web/src/i18n/en.ts';
 import { ja } from '../web/src/i18n/ja.ts';
 import { errorBodyText } from '../web/src/server-text.ts';
 import { accessKey, keyEntryAccess } from '../web/src/settings/access.ts';
-import { keyReady, providerKeyEnv, sharedKeyWith, trimKey, type Config } from '../web/src/settings/model.ts';
+import { keyEnvUnsafe, keyReady, providerKeyEnv, sharedKeyWith, trimKey, type Config } from '../web/src/settings/model.ts';
 
 // 段 9f: 設定の「プロバイダ」の節の API キーの欄の、画面を使わない部分
 
@@ -87,5 +87,32 @@ test('鍵の API の失敗は、コードから画面の言語の文になる（
   ] as const) {
     assert.match(errorBodyText({ code, params }, 'ja')!, ja_, code);
     assert.match(errorBodyText({ code, params }, 'en')!, en_, code);
+  }
+});
+
+test('鍵の名前として使えない環境変数名（KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL のどれも含まない）のときは、鍵の欄を出さずに注意を出す（keyEnvUnsafe）', () => {
+  const c = config();
+  for (const id of ['remote', 'local', 'claude', 'my-llm']) assert.equal(keyEnvUnsafe(c, id), undefined, id);
+  assert.equal(keyEnvUnsafe(c, 'nope'), undefined, '設定に無いプロバイダ');
+  const providers = c.providers as Array<Record<string, unknown>>;
+  providers[1]!.apiKeyEnv = 'PATH';
+  assert.equal(keyEnvUnsafe(c, 'remote'), 'PATH');
+  for (const ok of ['MY_CREDENTIALS', 'SVC_TOKEN', 'DB_PASSWORD', 'X_SECRET', 'FOO_KEY']) { providers[1]!.apiKeyEnv = ok; assert.equal(keyEnvUnsafe(c, 'remote'), undefined, ok); }
+  providers[1]!.apiKeyEnv = 'NODE_OPTIONS';
+  assert.equal(keyEnvUnsafe(c, 'remote'), 'NODE_OPTIONS');
+  providers[0]!.apiKeyEnv = 'HOME';
+  assert.equal(keyEnvUnsafe(c, 'local'), 'HOME', '名前を付けたあとのプロバイダ');
+});
+
+test('辞書: 鍵の名前として使えないときの注意は、使える言葉を 5 つ並べ、詳しい設定の欄を指す。サーバーの 409 の文にも CREDENTIAL が入る', () => {
+  for (const [dict, name] of [[ja, 'ja'], [en, 'en']] as const) {
+    const text = (dict['settings.key.unsafeEnv'] as (n: string) => string)('PATH');
+    assert.match(text, /PATH/u, name);
+    for (const word of ['KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL']) assert.match(text, new RegExp(word, 'u'), `${name}: ${word}`);
+    assert.match(text, name === 'ja' ? /詳しい設定/u : /Advanced/u, `${name}: 詳しい設定を指す`);
+    assert.equal(typeof dict['settings.key.openAdvanced'], 'string');
+  }
+  for (const [lang, pattern] of [['ja', /CREDENTIAL/u], ['en', /CREDENTIAL/u]] as const) {
+    assert.match(errorBodyText({ code: 'http.key_env_unsafe', params: { env: 'PATH' } }, lang)!, pattern, lang);
   }
 });

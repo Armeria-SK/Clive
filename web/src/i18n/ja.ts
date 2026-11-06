@@ -624,6 +624,8 @@ export const ja = {
   'settings.key.loadFailed': 'キーの状態を読み込めませんでした。',
   'settings.key.confirmTitle': 'このキーは、この PC の外へ送られます',
   'settings.key.confirmOk': '送ってよいので保存する',
+  'settings.key.unsafeEnv': (name: string) => `環境変数「${name}」は、API キーの名前として使えません（PATH など、動き方を変える環境変数を壊さないため）。名前に KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL のどれかを含めてください。下の「詳しい設定」の「API キーの環境変数名」で直せます。`,
+  'settings.key.openAdvanced': '詳しい設定を開く',
   'settings.key.howNow': 'プロバイダの節の「API キー」の欄から入れることもできます。',
   'settings.keys.none': 'API キーの環境変数を使うプロバイダがありません。',
   'settings.keys.unused': '使っていません',
