@@ -165,6 +165,8 @@ const BASH_HIDING_ROWS = [
   'if [[ -n x ]]; then pwn ]] ; fi', 'if [[ -n x ]] then pwn; fi', 'echo $[1 # $(pwn)]', 'echo "$[1 # $(pwn)]"', '(( ls # )); pwn',
   '[[ >(pwn) = a ]]', '[[ <(pwn) = a ]]', '[[ -n <(pwn) ]]', '[[ a == b || <(pwn) ]]', '[[ x == a<(pwn) ]]', '[[ x =~ >(pwn) ]]',
   'cat <(true)#; pwn', 'cat <(true)# & pwn', 'cat <(true)##& { pwn; }', 'echo >(cat)#; pwn', 't<(rue &x)##& { pwn; }',
+  '>&2# echo a | pwn', 'echo hi >&2#x; pwn', 'echo hi 2>&1# ; pwn', 'ech=()#o } a | pwn', 'x=(a)#c; pwn', 'export x=(a)#; pwn',
+  'echo "$\\\n(pwn)"', 'echo "x" "$\\\n(\npwn\n)"', 'echo "$((1))$\\\n(pwn)"',
 ];
 
 test('bash: 文を隠せた形（$( ) の中のコメント・case の )・$(( の部分シェル・[[ ]] のコメントと閉じ方・$[ ]・(( ））は、本物の bash では pwn が動く。字句の読み取りは止めるか、pwn を文として読む', { skip: !bashPath && 'bash が無い' }, t => {
@@ -181,6 +183,14 @@ test('bash: 文を隠せた形（$( ) の中のコメント・case の )・$(( �
   }
   assert.deepEqual(notRun, [], '前提: 本物の bash では pwn が動く');
   assert.deepEqual(hidden, [], '字句の読み取りが pwn を文として見ないまま、読めたことにした');
+});
+
+test('bash: "$\\<改行>HOME" は本物の bash では $HOME に展開される（\\ 改行が $ と名前をつなぐ）。字句の読み取りは止める', { skip: !bashPath && 'bash が無い' }, t => {
+  const dir = scratch(t);
+  const real = viaFile(dir, 'echo "[$\\\nHOME]"');
+  assert.match(real.stdout, /^\[.+\]\n$/u, '前提: $HOME の値が出る');
+  assert.doesNotMatch(real.stdout, /HOME/u);
+  assert.equal(lexShell('echo "[$\\\nHOME]"', 'bash').ok, false);
 });
 
 test('bash: 止めない形（語の途中の #・$#・引用符の中の #・算術）は、本物の bash でも普通に動き、字句の読み取りも読める', { skip: !bashPath && 'bash が無い' }, t => {

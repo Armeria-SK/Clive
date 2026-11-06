@@ -298,6 +298,31 @@ test('字句 11.2.3: bash の [[ … ]] の中の <( … ) と >( … ) も、�
 
 // 同じく乱数の試験で見つけた: <( … ) >( … ) の閉じ ) のすぐあとに続く文字は、bash では同じ語の続き（# はコメントでなく語の一部）。
 // 字句の読み取りは、置換を 1 つの語として閉じてしまい、続きの # を語の頭のコメントと読んで、あとの文を隠していた（cat <(true)#; pwn）
+// 同じく乱数の試験で見つけた: >&2# の # は、本物の bash では語 2# の一部で（>&語 は、語が数字でなければ 2# というファイルへの書き込み）、コメントでない。字句の読み取りは >&2 を fd の複製と読んで、続きの # をコメントと読み、あとの文を隠していた。
+// NAME=( … ) の配列の代入も同じ: ech=()#o の # は語の一部（コメントでない）
+test('字句 11.2.3: bash の >&N のすぐあとに語の文字が続く形と、NAME=( … ) の配列の代入は、# の読み方がずれるので止める', () => {
+  for (const command of ['>&2# echo a | pwn', 'echo hi >&2#x; pwn', 'echo hi >&2x', 'echo hi 2>&1# ; pwn', 'echo hi >&-x', 'cat <&0# ; pwn', 'echo hi >&2.txt']) {
+    for (const shell of ['bash', 'sh'] as const) assert.equal(failure(command, shell), 'fd', `${shell}: ${JSON.stringify(command)}`);
+  }
+  for (const command of ['ech=()#o } a | pwn', 'x=(1 2 3)', 'x+=(a)', 'export x=(a)#; pwn', 'declare -a x=(a b); pwn', 'local x=(a)', 'readonly x=(a)#c; pwn']) {
+    for (const shell of ['bash', 'sh'] as const) assert.equal(failure(command, shell), 'unexpected', `${shell}: ${JSON.stringify(command)}`);
+  }
+  for (const command of ['echo hi >&2', 'echo hi 2>&1 | cat', 'echo hi >&2; pwn', 'echo hi >&2 # c', 'echo hi 1>&2>/dev/null', 'cat <&- | cat', 'echo hi >&2&', 'x=1; y=$(echo a)', 'f() { :; }; f']) {
+    assert.equal(failure(command, 'bash'), null, `${JSON.stringify(command)} は読める`);
+  }
+  assert.ok(read('echo hi >&2; pwn', 'bash').some(s => s.words[0]?.text === 'pwn'));
+});
+
+// 同じく乱数の試験で見つけた: "…" の中の \ 改行は消えるので、"$\<改行>(pwn)" は "$(pwn)" で置換として動く（"$\<改行>HOME" は $HOME）。字句の読み取りは $ を文字、\ 改行を読み飛ばして、(pwn) を文字と読んでいた
+test('字句 11.2.3: bash の "…" の中の $ のすぐあとの \\ 改行は、$ と次の文字をつなぐので止める。ほかの \\ 改行は今までどおり', () => {
+  for (const command of ['echo "$\\\n(pwn)"', 'echo "$\\\nHOME"', 'echo "a$\\\n{x}"', 'echo "$\\\n$(pwn)"', 'echo "x" "$\\\n(\npwn\n)"']) {
+    for (const shell of ['bash', 'sh'] as const) assert.equal(failure(command, shell), 'backslash', `${shell}: ${JSON.stringify(command)}`);
+  }
+  assert.deepEqual(read('echo "a\\\nb"', 'bash')[0]!.words.map(w => w.text), ['echo', 'ab']);
+  assert.deepEqual(read('echo "$HOME\\\nx"', 'bash')[0]!.words.map(w => w.text), ['echo', '$HOMEx']);
+  assert.deepEqual(read('echo "\\\n$HOME"', 'bash')[0]!.words.map(w => w.text), ['echo', '$HOME']);
+});
+
 test('字句 11.2.3: bash の <( … ) >( … ) のすぐあとの文字は同じ語の続き。# はコメントでなく、あとの文を隠さない', () => {
   for (const command of ['cat <(true)#; pwn', 'cat <(true)# & pwn', 'cat <(true)##& { pwn; }', 'echo >(cat)#; pwn', 'cat <(true)x#y; pwn', 'cat <(true)"a"#; pwn', 't<(rue &x)##& { pwn; }']) {
     const seen = read(command, 'bash').map(s => s.words[0]?.text);

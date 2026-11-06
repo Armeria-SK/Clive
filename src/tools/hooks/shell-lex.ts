@@ -319,6 +319,8 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
     if (next === "'" || (next === '"' && !inQuote)) return fail('ansi_c');
     // $[ … ] は古い算術展開。中は式として読まれ（# はコメントでない）、$( … ) も展開される
     if (next === '[') return fail('dollar_form', '$[…]');
+    // "…" の中の \ 改行は消えて、$ と次の文字（( { 名前）をつなぐ（"$\<改行>(pwn)" は "$(pwn)"）
+    if (inQuote && next === '\\' && src[i + 2] === '\n') return fail('backslash');
     if (next === '(') {
       if (src[i + 2] === '(') {
         // 算術になるのは、2 つ目の ( に対応する ) のすぐ次がまた ) のときだけ。そうでなければ bash は $( の中の ( … ) の部分シェルとして読み、中の文を動かす（$((true)<改行>/path/cmd))）
@@ -470,6 +472,8 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
         if (ch === '(' && cur.words.length > 0 && !/\s/u.test(src[i - 1] ?? ' ')) cur.shapes.push('function');
         // (( … )) は算術のコマンド。中は式として読まれ、# はコメントでない（(( ls # )); pwn は pwn も動かす）
         if (ch === '(' && src[i + 1] === '(') return fail('unexpected', '((');
+        // NAME=( … ) は配列の代入。閉じ ) のあとに続く # もコメントでなく語の一部（ech=()#o } a | pwn）
+        if (ch === '(' && src[i - 1] === '=') return fail('unexpected', '=(');
         i++;
         end(false);
         continue;
@@ -537,6 +541,9 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
         const to = dup[2]!;
         const from = fd || (dup[1] === '<' ? '0' : '1');
         if (!((from === '2' && to === '1') || (from === '1' && to === '2') || to === '-')) return fail('fd', rest.slice(0, 4));
+        // >&2# のように語の文字が続くと、bash は fd の複製でなく、その語（2#）というファイルへの書き込みと読む。# もコメントでなく語の一部
+        const after = rest[dup[0].length];
+        if (after !== undefined && !' \t\n;&|()<>'.includes(after)) return fail('fd', rest.slice(0, dup[0].length + 1));
         i += dup[0].length;
         cur.redirects.push({ op: `${dup[1]}&`, fd: from, target: null });
         continue;
