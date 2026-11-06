@@ -129,10 +129,11 @@ export function parseConfig(raw: unknown): AppConfig {
   return config;
 }
 
-export function atomicWriteFile(path: string, content: string): void {
+// mode: 作る一時ファイルの権限（POSIX。.env のような秘密のファイルを 0600 にするため）。置き換えたあとのファイルがそのまま持つ
+export function atomicWriteFile(path: string, content: string, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx' });
+  writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx', ...(mode === undefined ? {} : { mode }) });
   for (let attempt = 0; ; attempt++) {
     try { renameSync(tmp, path); return; }
     catch (error) {

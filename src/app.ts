@@ -68,6 +68,8 @@ export interface AppOptions {
 
 export class App {
   readonly paths: AppPaths;
+  // 提供元が鍵を読む環境変数（ふだんは process.env）。画面から入れた鍵はここにも入れ、起動し直さなくても効かせる
+  readonly env: Record<string, string | undefined>;
   readonly configStore: ConfigStore;
   readonly db: DatabaseSync;
   readonly conversations: Conversations;
@@ -95,6 +97,7 @@ export class App {
 
   constructor(options: AppOptions) {
     this.paths = options.paths;
+    this.env = (options.env ?? process.env) as Record<string, string | undefined>;
     this.log = options.log ?? (line => process.stdout.write(`${line}\n`));
     this.configStore = new ConfigStore(this.paths.config);
     const config = this.configStore.load();
@@ -109,7 +112,7 @@ export class App {
     const dangling = this.runs.closeDangling(engineText(languageOf(config), 'run.restart_interrupted'));
     if (dangling) this.log(`[INFO] 前回の終了時に途中だった実行 ${dangling} 件を中断扱いにしました`);
     this.registry = new ProviderRegistry({
-      env: options.env ?? process.env,
+      env: this.env,
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.adapterOverride ? { override: options.adapterOverride } : {}),
     });

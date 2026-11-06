@@ -12,6 +12,8 @@ export interface AppPaths {
   backups: string;
   uploads: string;
   workspace: string;
+  // API キーを書く .env（起動で読み込むものと同じ。画面から入れた鍵もここに書く）
+  env: string;
   templates: string;
   webDist: string;
 }
@@ -25,6 +27,7 @@ export function resolvePaths(dataDir = process.env.CLIVE_DATA_DIR): AppPaths {
     backups: join(data, 'backups'),
     uploads: join(data, 'uploads'),
     workspace: join(data, 'workspace'),
+    env: join(APP_ROOT, '.env'),
     templates: join(APP_ROOT, 'templates'),
     webDist: join(APP_ROOT, 'web', 'dist'),
   };

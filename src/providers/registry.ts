@@ -28,4 +28,10 @@ export class ProviderRegistry {
   }
 
   get(providerId: string): ProviderAdapter | undefined { return this.#adapters.get(providerId); }
+
+  // いま環境に入っている API キーの値。ログや実行の記録に書く文から、鍵そのものを伏せるために使う（相手のサーバーが鍵をそのまま返してきても、残さない）
+  secrets(): string[] {
+    const values = [...this.#adapters.values()].map(a => a.provider).map(p => this.#env[p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : '')]?.trim());
+    return [...new Set(values.filter((v): v is string => Boolean(v)))];
+  }
 }

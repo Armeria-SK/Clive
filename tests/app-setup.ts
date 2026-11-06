@@ -1,5 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
 import { resolvePaths } from '../src/paths.ts';
@@ -12,9 +13,10 @@ export function fakeModel(id: string, over: Partial<ModelConfig> = {}): ModelCon
 }
 
 // 本物の App と Web サーバーを、偽のモデルの提供元で立ち上げる（ランダムなポート）。api() は Origin つきで呼ぶ
-export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void } = {}) {
+export async function startApp(t: { after: (fn: () => void | Promise<void>) => void }, options: { models?: ModelConfig[]; tools?: ToolDef[]; configure?: (config: ReturnType<typeof testConfig>) => void; env?: Record<string, string | undefined> } = {}) {
   const dir = tempDir(t);
-  const paths = resolvePaths(dir);
+  // .env は、本物の置き場所（製品のフォルダ）ではなく、この試験の一時フォルダに置く
+  const paths = { ...resolvePaths(dir), env: join(dir, '.env') };
   mkdirSync(paths.data, { recursive: true });
   const config = testConfig();
   config.providers = [{ id: 'fake', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'FAKE_KEY', maxParallel: 1, timeoutMs: 10_000 }];
@@ -23,8 +25,9 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
   options.configure?.(config);
   writeFileSync(paths.config, JSON.stringify(config));
   const adapters = new Map<string, FakeAdapter>();
+  const logs: string[] = [];
   const app = new App({
-    paths, databasePath: ':memory:', log: () => undefined, workerTimers: false,
+    paths, databasePath: ':memory:', log: line => { logs.push(line); }, workerTimers: false, ...(options.env ? { env: options.env } : {}),
     adapterOverride: provider => { const made = new FakeAdapter(provider); adapters.set(provider.id, made); return made; },
     ...(options.tools ? { tools: options.tools } : {}),
   });
@@ -42,7 +45,7 @@ export async function startApp(t: { after: (fn: () => void | Promise<void>) => v
     const res = await api(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: res.status, body: await res.json().catch(() => ({})) as any };
   };
-  return { app, web, adapter: () => adapters.get('fake')!, adapters, origin, api, json, paths };
+  return { app, web, adapter: () => adapters.get('fake')!, adapters, origin, api, json, paths, logs };
 }
 
 export const CONVERSATION = 'aaaaaaaa-0000-4000-8000-000000000001';

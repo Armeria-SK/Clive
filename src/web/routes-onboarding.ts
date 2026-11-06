@@ -113,7 +113,7 @@ export function registerOnboardingRoutes(router: Router, app: App): void {
   router.add('POST', '/api/onboarding/reload-env', async ({ req, res }) => {
     const body = requireObject(await readJson(req));
     const asked = Array.isArray(body.env) ? body.env.find((k): k is string => typeof k === 'string' && ENV_NAME.test(k)) : undefined;
-    const { loaded, notApplied } = reloadEnvFile();
+    const { loaded, notApplied } = reloadEnvFile(app.paths.env);
     const config = app.config();
     const names = [...new Set([...config.providers.map(p => p.apiKeyEnv ?? (p.kind === 'anthropic' ? 'ANTHROPIC_API_KEY' : undefined)).filter((k): k is string => Boolean(k)), ...(asked ? [asked] : [])])];
     sendJson(res, 200, { loaded, apiKeys: Object.fromEntries(names.map(k => [k, Boolean(process.env[k]?.trim())])), notApplied: notApplied.filter(k => names.includes(k)) });
