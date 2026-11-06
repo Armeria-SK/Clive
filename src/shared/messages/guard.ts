@@ -198,7 +198,7 @@ const ja = {
   'pipeline.auto_no_reason': '理由は書かれていません',
   'pipeline.auto_asked': '自動承認の判定役が「確かめる」と判断しました: {reason}',
   'pipeline.auto_failed': '自動承認の判定役が答えられなかったので、確認します',
-  'pipeline.auto_egress': '自動承認で許可フォルダの外を読んだあとなので、外への送信は確認します',
+  'pipeline.auto_egress': '自動承認で許可フォルダの外を読んだあとなので、この返事のあいだのコマンドの実行と外への送信は毎回確認します',
 
   'hook.failed': 'フック「{name}」が失敗しました（{reason}）',
   'hook.spawn': '起動できません: {detail}',
@@ -406,7 +406,7 @@ const en: Record<keyof typeof ja, string> = {
   'pipeline.auto_no_reason': 'No reason was given',
   'pipeline.auto_asked': 'The auto-approve checker decided this needs your approval: {reason}',
   'pipeline.auto_failed': 'The auto-approve checker could not give an answer, so this is checked with you',
-  'pipeline.auto_egress': 'Auto-approve has read something outside the allowed folders in this run, so sending anything out is checked with you',
+  'pipeline.auto_egress': 'Auto-approve has read something outside the allowed folders in this run, so every command and anything sent out is checked with you for the rest of it',
 
   'hook.failed': 'The hook "{name}" failed ({reason})',
   'hook.spawn': 'Cannot start it: {detail}',
