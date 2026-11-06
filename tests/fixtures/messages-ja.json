@@ -582,7 +582,7 @@
     "key_padded": "API キーの前か後ろに空白が入っています。取り除いてもう一度入れてください",
     "key_too_long": "API キーが長すぎます（{max} 文字まで）",
     "key_unsupported": "この API キーの文字の並びは、.env に安全に書けません",
-    "key_env_unsafe": "環境変数「{env}」は API キーの名前として使えません（KEY・TOKEN・SECRET・PASSWORD のどれかを含む名前にしてください）",
+    "key_env_unsafe": "環境変数「{env}」は API キーの名前として使えません（KEY・TOKEN・SECRET・PASSWORD・CREDENTIAL のどれかを含む名前にしてください）",
     "env_unwritable": ".env に書けなかったので、API キーは保存していません（{reason}）",
     "internal": "内部エラーが発生しました（ログを確認してください）"
   },
