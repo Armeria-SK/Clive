@@ -4,7 +4,7 @@ import type { ChatMessage, StopReason, ToolCall } from '../engine/types.ts';
 import { OLLAMA_DEFAULT_URL } from '../config/store.ts';
 import { contextHint, errorProbeText, evaluateContext, probeText } from './context.ts';
 import {
-  checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, readLines, readSnippet, requireApiKey, withTimeout,
+  checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, providerSecrets, readLines, readSnippet, requireApiKey, withTimeout,
 } from './http.ts';
 import { ProviderError, providerError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
@@ -61,6 +61,8 @@ export class OllamaAdapter implements ProviderAdapter {
     return checked.url;
   }
 
+  #secrets(): string[] { return providerSecrets(this.provider, this.#env); }
+
   #headers(): Record<string, string> {
     const key = requireApiKey(this.provider, this.#env);
     return { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) };
@@ -90,7 +92,7 @@ export class OllamaAdapter implements ProviderAdapter {
     try {
       response = await this.#fetch(joinUrl(base, 'api/chat'), { method: 'POST', headers, body: JSON.stringify(body), signal, redirect: 'error' });
     } catch (error) { throw classifyFetchError(error, req.signal, timeout); }
-    if (!response.ok || !response.body) throw classifyHttpFailure(response.status, await readSnippet(response), response.headers);
+    if (!response.ok || !response.body) throw classifyHttpFailure(response.status, await readSnippet(response, this.#secrets()), response.headers, this.#secrets());
 
     const calls: ToolCall[] = [];
     let stop: StopReason = 'other';
@@ -99,7 +101,7 @@ export class OllamaAdapter implements ProviderAdapter {
         if (!line.trim()) continue;
         let chunk: any;
         try { chunk = JSON.parse(line); } catch { continue; }
-        if (chunk?.error) throw classifyHttpFailure(500, String(chunk.error));
+        if (chunk?.error) throw classifyHttpFailure(500, String(chunk.error), undefined, this.#secrets());
         const message = chunk?.message;
         if (typeof message?.thinking === 'string' && message.thinking) yield { type: 'reasoning', delta: message.thinking };
         if (typeof message?.content === 'string' && message.content) yield { type: 'text', delta: message.content };
@@ -141,7 +143,7 @@ export class OllamaAdapter implements ProviderAdapter {
       if (response.status === 404) {
         return { ...facts, status: 'not_found', ...probeText(language, 'probe.ollama_not_found', { model: model.model }), checkedAt: Date.now() };
       }
-      if (!response.ok) throw classifyHttpFailure(response.status, await readSnippet(response));
+      if (!response.ok) throw classifyHttpFailure(response.status, await readSnippet(response, this.#secrets()), undefined, this.#secrets());
       const show = await response.json() as any;
       const capabilities = Array.isArray(show?.capabilities) ? show.capabilities.filter((c: unknown) => typeof c === 'string') as string[] : undefined;
       if (model.contextLength === undefined) {

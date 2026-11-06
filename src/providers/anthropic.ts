@@ -3,7 +3,7 @@ import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig 
 import type { ChatMessage, StopReason } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { contextHint, errorProbeText, evaluateContext } from './context.ts';
-import { classifyHttpFailure, parseRetryAfter, requireApiKey } from './http.ts';
+import { classifyHttpFailure, parseRetryAfter, providerSecrets, requireApiKey, UPSTREAM_KEEP } from './http.ts';
 import { ProviderError, providerError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
 type Block = Anthropic.ContentBlockParam;
@@ -52,7 +52,7 @@ function mapStop(reason: string | null | undefined): StopReason {
   return 'other';
 }
 
-export function classifyAnthropicError(error: unknown, signal: AbortSignal): ProviderError {
+export function classifyAnthropicError(error: unknown, signal: AbortSignal, secrets: readonly string[] = []): ProviderError {
   if (error instanceof ProviderError) return error;
   if (error instanceof Anthropic.APIUserAbortError || signal.aborted) return providerError('cancelled', 'cancelled', {}, { retryable: false });
   if (error instanceof Anthropic.APIConnectionTimeoutError) return providerError('timeout', 'anthropic.timeout');
@@ -64,9 +64,9 @@ export function classifyAnthropicError(error: unknown, signal: AbortSignal): Pro
       const retryAfterMs = parseRetryAfter(error.headers?.get('retry-after'));
       return providerError('provider_error', 'anthropic.busy', {}, { retryable: true, status: error.status, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
     }
-    return classifyHttpFailure(error.status, message, error.headers);
+    return classifyHttpFailure(error.status, message, error.headers, secrets);
   }
-  return providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets(String((error as Error)?.message ?? error)).slice(0, 200) });
+  return providerError('internal', 'unexpected', {}, { retryable: false, upstream: redactSecrets(String((error as Error)?.message ?? error), secrets).slice(0, UPSTREAM_KEEP) });
 }
 
 export class AnthropicAdapter implements ProviderAdapter {
@@ -78,6 +78,8 @@ export class AnthropicAdapter implements ProviderAdapter {
   constructor(provider: ProviderConfig, env: Env, fetchImpl?: FetchLike) {
     this.provider = provider; this.#env = env; this.#fetch = fetchImpl;
   }
+
+  #secrets(): string[] { return providerSecrets(this.provider, this.#env); }
 
   #clientFor(): Anthropic {
     const key = requireApiKey({ ...this.provider, apiKeyEnv: this.provider.apiKeyEnv ?? 'ANTHROPIC_API_KEY' }, this.#env);
@@ -96,7 +98,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   async *stream(req: ModelRequest): AsyncGenerator<StreamEvent> {
     let client: Anthropic;
-    try { client = this.#clientFor(); } catch (error) { throw classifyAnthropicError(error, req.signal); }
+    try { client = this.#clientFor(); } catch (error) { throw classifyAnthropicError(error, req.signal, this.#secrets()); }
     const system: Anthropic.TextBlockParam[] = [];
     if (req.system.frozen) system.push({ type: 'text', text: req.system.frozen, cache_control: EPHEMERAL });
     if (req.system.dynamic) system.push({ type: 'text', text: req.system.dynamic });
@@ -152,7 +154,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           default: break;
         }
       }
-    } catch (error) { throw classifyAnthropicError(error, req.signal); }
+    } catch (error) { throw classifyAnthropicError(error, req.signal, this.#secrets()); }
     yield { type: 'done', stop };
   }
 
@@ -163,7 +165,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       const modelMax = typeof info.max_input_tokens === 'number' ? info.max_input_tokens : undefined;
       return evaluateContext({ ...facts, modelMax, hint: contextHint(language, 'hosted', required), unmeasuredNote: modelMax === undefined ? 'probe.note.max_unavailable' : undefined });
     } catch (error) {
-      const e = classifyAnthropicError(error, new AbortController().signal);
+      const e = classifyAnthropicError(error, new AbortController().signal, this.#secrets());
       const status = e.kind === 'auth' ? 'no_api_key' : e.status === 404 ? 'not_found' : e.status === undefined ? 'unreachable' : 'error';
       return { ...facts, status, ...errorProbeText(e, language), checkedAt: Date.now() };
     }

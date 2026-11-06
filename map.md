@@ -66,7 +66,7 @@
 
 ### モデルの提供元 — `src/providers`
 - Anthropic・OpenAI 互換・Ollama の 3 つが、共通の窓口（`ProviderAdapter`、`types.ts`）を実装する（`anthropic.ts` `openai-compatible.ts` `ollama.ts`）。返事をストリーミングで受け取ることと、`probe`（サーバーから実際のコンテキスト長を確かめる）を受け持つ。OpenAI 互換は、`/v1/models` の項目の `supported_reasoning_efforts` を、サーバーの種類を問わず `ProbeResult.efforts` に読み（読めない・無いときは付けない。確認の結果は変えない）、`ModelRequest.effort` があれば `reasoning_effort` を送る。
-- ほか: `context.ts`（長さの判定と直し方の文）、`http.ts`（URL・API キー・エラーの分類）、`limiter.ts`（提供元ごとの同時実行の上限）、`registry.ts`（設定から窓口を作る。`secrets()` は今の API キーの値の一覧で、実行の記録・モデルの確認の失敗の文・ログから鍵そのものを伏せるのに使う: 相手のサーバーが鍵をそのまま返してきても残さない）。
+- ほか: `context.ts`（長さの判定と直し方の文）、`http.ts`（URL・API キー・エラーの分類。相手の失敗の本文は、鍵を伏せてから 2,000 文字まで持たせ〔`readSnippet` `classifyHttpFailure` は提供元自身の鍵を `providerSecrets` で受けて、切る前に伏せる〕、実行の記録に書くとき `upstreamText` が、全部の鍵を伏せてから空白を 1 つにそろえて 200 文字に切る。鍵の途中の空白は、2 つ以上・改行など並びが変わっていても同じ鍵として伏せる〔`shared/redaction.ts` の `redactExact`〕）、`limiter.ts`（提供元ごとの同時実行の上限）、`registry.ts`（設定から窓口を作る。`secrets()` は今の API キーの値の一覧で、実行の記録・モデルの確認の失敗の文・ログから鍵そのものを伏せるのに使う: 相手のサーバーが鍵をそのまま返してきても残さない）。
 - 入口: `src/providers/registry.ts`（`ProviderRegistry`）
 - 使うもの: `config`（型と `OLLAMA_DEFAULT_URL`）、`src/shared`（`url` `redaction`）、`@anthropic-ai/sdk`、`fetch`
 

@@ -4,7 +4,7 @@ import type { ChatMessage, StopReason, ToolCall } from '../engine/types.ts';
 import { contextHint, errorProbeText, evaluateContext, probeText } from './context.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import {
-  checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, readSnippet, readSseData, requireApiKey, withTimeout,
+  checkBaseUrl, classifyFetchError, classifyHttpFailure, joinUrl, providerSecrets, readSnippet, readSseData, requireApiKey, withTimeout,
 } from './http.ts';
 import { ProviderError, type Env, type FetchLike, type ModelRequest, type ProbeResult, type ProviderAdapter, type StreamEvent } from './types.ts';
 
@@ -80,6 +80,8 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     return checked.url;
   }
 
+  #secrets(): string[] { return providerSecrets(this.provider, this.#env); }
+
   #headers(): Record<string, string> {
     const key = requireApiKey(this.provider, this.#env);
     return { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...(key ? { Authorization: `Bearer ${key}` } : {}) };
@@ -107,7 +109,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     try {
       response = await this.#fetch(joinUrl(base, 'chat/completions'), { method: 'POST', headers, body: JSON.stringify(body), signal, redirect: 'error' });
     } catch (error) { throw classifyFetchError(error, req.signal, timeout); }
-    if (!response.ok || !response.body) throw classifyHttpFailure(response.status, await readSnippet(response), response.headers);
+    if (!response.ok || !response.body) throw classifyHttpFailure(response.status, await readSnippet(response, this.#secrets()), response.headers, this.#secrets());
 
     const tools = new ToolCallAssembler();
     let stop: StopReason = 'other';
@@ -118,7 +120,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
         try { chunk = JSON.parse(data); } catch { continue; }
         if (chunk?.error) {
           const message = typeof chunk.error === 'string' ? chunk.error : String(chunk.error.message ?? 'error');
-          throw classifyHttpFailure(Number(chunk.error.code) || 500, message);
+          throw classifyHttpFailure(Number(chunk.error.code) || 500, message, undefined, this.#secrets());
         }
         const choice = chunk?.choices?.[0];
         const delta = choice?.delta;
@@ -178,7 +180,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     delete headers['Accept'];
     const getJson = async (url: URL): Promise<any> => {
       const response = await this.#fetch(url, { headers, signal: AbortSignal.timeout(10_000), redirect: 'error' });
-      if (!response.ok) throw classifyHttpFailure(response.status, await readSnippet(response));
+      if (!response.ok) throw classifyHttpFailure(response.status, await readSnippet(response, this.#secrets()), undefined, this.#secrets());
       return response.json();
     };
     const origin = new URL(base).origin;
