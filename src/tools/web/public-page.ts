@@ -1,8 +1,9 @@
 import { lookup } from 'node:dns/promises';
-import { get as httpGet } from 'node:http';
+import { get as httpGet, type ClientRequest, type IncomingMessage } from 'node:http';
 import { get as httpsGet } from 'node:https';
 import { isIPv4 } from 'node:net';
 import type { Language } from '../../config/schema.ts';
+import { IMAGE_MAX_BYTES } from '../../shared/image-info.ts';
 import type { MessageParams } from '../../shared/messages/define.ts';
 import { toolText, type ToolMessageKey } from '../../shared/messages/tools.ts';
 
@@ -39,6 +40,7 @@ export function mediaTypeOf(contentType: string): string | undefined {
 const typeShown = (contentType: string) => mediaTypeOf(contentType) ?? toolText('ja', 'fetch.type_unknown');
 
 const MAX_BYTES = 512 * 1024;
+export const IMAGE_TYPES = /^image\/(png|jpeg|gif|webp)(;|$)/iu;
 const PAGE_TYPES = /^(text\/(html|plain|xml|markdown|csv)|application\/(json|xml|rss\+xml|atom\+xml|xhtml\+xml))(;|$)/iu;
 const USER_AGENT = 'Clive/0.1 (personal agent; public page reader)';
 
@@ -72,17 +74,29 @@ export function pageUrl(input: string): URL {
   return url;
 }
 
+// Host と SNI は元の URL のまま、つなぐ先は確かめたアドレスに固定する。プロキシと使い回しの接続は使わない。
+// Accept-Encoding は送らない（圧縮されずに返ってくる）。ページの読み取りとダウンロードが同じ接続を使う
+function pinnedGet(url: URL, address: string, signal: AbortSignal, accept: string, extraHeaders: Record<string, string>, onResponse: (response: IncomingMessage) => void, onError: (error: Error) => void): ClientRequest {
+  const request = (url.protocol === 'https:' ? httpsGet : httpGet)(url, {
+    agent: false, signal, family: 4,
+    lookup: (_host, _options, callback) => callback(null, address, 4),
+    headers: { accept, 'user-agent': USER_AGENT, ...extraHeaders },
+  }, onResponse);
+  request.on('error', onError);
+  return request;
+}
+
+const resolveIPv4 = async (host: string): Promise<string[]> => (await lookup(host, { family: 4, all: true })).map(item => item.address);
+
+function statusFailure(status: number): RetrievalFailure {
+  return failure(status === 404 ? 'not_found' : [401, 403, 429].includes(status) ? 'refused' : 'http_failure', 'fetch.http_status', { status }, status);
+}
+
 export function networkFor(accept: string, types: RegExp, maxBytes = MAX_BYTES, extraHeaders: Record<string, string> = { 'accept-language': 'ja,en;q=0.8' }): PageNetwork {
   return {
-    resolve: async host => (await lookup(host, { family: 4, all: true })).map(item => item.address),
+    resolve: resolveIPv4,
     get: (url, address, signal) => new Promise((resolve, reject) => {
-      // Host と SNI は元の URL のまま、つなぐ先は確かめたアドレスに固定する。プロキシと使い回しの接続は使わない
-      const request = (url.protocol === 'https:' ? httpsGet : httpGet)(url, {
-        agent: false, signal, family: 4,
-        lookup: (_host, _options, callback) => callback(null, address, 4),
-        // Accept-Encoding は送らない（圧縮されずに返ってくる）
-        headers: { accept, 'user-agent': USER_AGENT, ...extraHeaders },
-      }, response => {
+      pinnedGet(url, address, signal, accept, extraHeaders, response => {
         const status = response.statusCode ?? 0;
         const contentType = response.headers['content-type'] ?? '';
         const location = response.headers.location;
@@ -91,9 +105,7 @@ export function networkFor(accept: string, types: RegExp, maxBytes = MAX_BYTES, 
         }
         if (status !== 200 || !types.test(contentType) || (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity')) {
           response.destroy();
-          reject(status !== 200
-            ? failure(status === 404 ? 'not_found' : [401, 403, 429].includes(status) ? 'refused' : 'http_failure', 'fetch.http_status', { status }, status)
-            : failure('invalid_response', 'fetch.type', { type: typeShown(contentType) }, status));
+          reject(status !== 200 ? statusFailure(status) : failure('invalid_response', 'fetch.type', { type: typeShown(contentType) }, status));
           return;
         }
         const chunks: Buffer[] = [];
@@ -108,13 +120,14 @@ export function networkFor(accept: string, types: RegExp, maxBytes = MAX_BYTES, 
         });
         response.on('error', reject);
         response.on('end', () => resolve({ status, contentType, body: Buffer.concat(chunks) }));
-      });
-      request.on('error', reject);
+      }, reject);
     }),
   };
 }
 
 export const searchNetwork = networkFor('*/*', PAGE_TYPES, MAX_BYTES, {});
+
+export const imageNetwork: PageNetwork = networkFor('image/png,image/jpeg,image/gif,image/webp', IMAGE_TYPES, IMAGE_MAX_BYTES + 1, {});
 
 export const defaultNetwork = networkFor('text/html,application/xhtml+xml,text/plain,text/markdown,text/csv,application/json,application/xml,application/rss+xml,application/atom+xml,text/xml', PAGE_TYPES);
 
@@ -133,35 +146,175 @@ export async function publicAddress(host: string, signal: AbortSignal, resolveHo
 
 export interface FetchedPage { url: string; contentType: string; body: Buffer; truncated: boolean }
 
-export async function fetchPublic(input: string, signal: AbortSignal | undefined, transport: PageNetwork = defaultNetwork, timeoutMs = 20_000): Promise<FetchedPage> {
-  const cancellation = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
+const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
+
+// ページの読み取り（fetchPublic）とダウンロード（downloadPublic）が通る、転送のたどりの全部。
+// 行き先ごとに URL の形・名前を引いた先のアドレスを確かめ直し、https から http への下がりを断り、5 回までで止める。
+// 最後の（転送でない）応答はそのまま返す。転送の応答と、たどりの途中で失敗したときの応答は discard で後始末する
+async function followPublic<R extends { status: number; location?: string | undefined }>(
+  input: string, signal: AbortSignal, resolveHost: PageNetwork['resolve'],
+  send: (url: URL, address: string) => Promise<R>, discard: (response: R) => void,
+): Promise<{ url: URL; response: R }> {
   let url = pageUrl(input);
-  try {
-    for (let redirects = 0; redirects <= 5; redirects++) {
-      cancellation.throwIfAborted();
-      const address = await publicAddress(url.hostname, cancellation, transport.resolve);
-      const response = await transport.get(url, address, cancellation);
-      cancellation.throwIfAborted();
-      if ([301, 302, 303, 307, 308].includes(response.status) && response.location) {
-        if (redirects === 5) throw failure('invalid_response', 'fetch.redirects');
-        const next = pageUrl(new URL(response.location, url).href);
-        if (url.protocol === 'https:' && next.protocol === 'http:') throw failure('policy_blocked', 'fetch.redirect_downgrade');
-        url = next;
-        continue;
-      }
-      if (response.status !== 200) throw failure(response.status === 404 ? 'not_found' : 'http_failure', 'fetch.http_status', { status: response.status }, response.status);
-      if (!PAGE_TYPES.test(response.contentType) || /[\r\n]/u.test(response.contentType)) throw failure('invalid_response', 'fetch.type', { type: typeShown(response.contentType) });
-      return { url: url.href, contentType: response.contentType, body: response.body, truncated: Boolean(response.truncated) };
-    }
-  } catch (error) {
-    if (error instanceof RetrievalFailure) throw error;
-    if (cancellation.aborted) throw signal?.aborted ? failure('aborted', 'fetch.aborted') : failure('aborted', 'fetch.timeout', { seconds: timeoutMs / 1000 });
-    throw failure('http_failure', 'fetch.connect', { detail: clip((error as Error).message, 200) });
+  for (let redirects = 0; ; redirects++) {
+    signal.throwIfAborted();
+    const address = await publicAddress(url.hostname, signal, resolveHost);
+    const response = await send(url, address);
+    try { signal.throwIfAborted(); } catch (error) { discard(response); throw error; }
+    if (!REDIRECT_STATUSES.includes(response.status) || !response.location) return { url, response };
+    discard(response);
+    if (redirects === 5) throw failure('invalid_response', 'fetch.redirects');
+    const next = pageUrl(new URL(response.location, url).href);
+    if (url.protocol === 'https:' && next.protocol === 'http:') throw failure('policy_blocked', 'fetch.redirect_downgrade');
+    url = next;
   }
-  throw failure('invalid_response', 'fetch.redirects');
 }
 
-const CHARSET_META = /<meta\s[^>]*?charset\s*=\s*["']?\s*([\w:.-]+)/iu;
+function transferFailure(error: unknown, cancellation: AbortSignal, signal: AbortSignal | undefined, timeoutMs: number): RetrievalFailure {
+  if (error instanceof RetrievalFailure) return error;
+  if (cancellation.aborted) return signal?.aborted ? failure('aborted', 'fetch.aborted') : failure('aborted', 'fetch.timeout', { seconds: timeoutMs / 1000 });
+  return failure('http_failure', 'fetch.connect', { detail: clip((error as Error).message, 200) });
+}
+
+export async function fetchPublic(input: string, signal: AbortSignal | undefined, transport: PageNetwork = defaultNetwork, timeoutMs = 20_000, types: RegExp = PAGE_TYPES): Promise<FetchedPage> {
+  const cancellation = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
+  try {
+    const { url, response } = await followPublic(input, cancellation, transport.resolve, (next, address) => transport.get(next, address, cancellation), () => undefined);
+    if (response.status !== 200) throw failure(response.status === 404 ? 'not_found' : 'http_failure', 'fetch.http_status', { status: response.status }, response.status);
+    if (!types.test(response.contentType) || /[\r\n]/u.test(response.contentType)) throw failure('invalid_response', 'fetch.type', { type: typeShown(response.contentType) });
+    return { url: url.href, contentType: response.contentType, body: response.body, truncated: Boolean(response.truncated) };
+  } catch (error) {
+    throw transferFailure(error, cancellation, signal, timeoutMs);
+  }
+}
+
+export interface DownloadResponse {
+  status: number;
+  location?: string;
+  contentType: string;
+  contentDisposition?: string;
+  contentEncoding?: string;
+  body: AsyncIterable<Uint8Array>;
+  close(): void;
+}
+
+export interface DownloadNetwork {
+  resolve: PageNetwork['resolve'];
+  open(url: URL, address: string, signal: AbortSignal): Promise<DownloadResponse>;
+}
+
+// ページの読み取りと同じ接続（アドレス固定・プロキシなし・Accept-Encoding なし）で、本文を溜めずに渡す
+export const defaultDownloadNetwork: DownloadNetwork = {
+  resolve: resolveIPv4,
+  open: (url, address, signal) => new Promise((resolve, reject) => {
+    const request = pinnedGet(url, address, signal, '*/*', {}, response => {
+      const header = (name: 'location' | 'content-type' | 'content-disposition' | 'content-encoding') => response.headers[name];
+      const location = header('location');
+      const contentDisposition = header('content-disposition');
+      const contentEncoding = header('content-encoding');
+      resolve({
+        status: response.statusCode ?? 0,
+        contentType: header('content-type') ?? '',
+        ...(location ? { location } : {}),
+        ...(contentDisposition ? { contentDisposition } : {}),
+        ...(contentEncoding ? { contentEncoding } : {}),
+        body: response,
+        close: () => { response.destroy(); request.destroy(); },
+      });
+    }, reject);
+  }),
+};
+
+export interface DownloadLimits {
+  // 最後のかたまりから、これだけ何も届かなければ止める
+  idleMs: number;
+  // 保存先の空きがこれを切ったら止める
+  minFreeBytes: number;
+  // 書いた量がこれだけ増えるごとに、空きを見る
+  freeCheckBytes: number;
+}
+
+export const DOWNLOAD_LIMITS: DownloadLimits = Object.freeze({ idleMs: 60_000, minFreeBytes: 1024 ** 3, freeCheckBytes: 8 * 1024 * 1024 });
+
+export interface DownloadSink {
+  write(chunk: Uint8Array): Promise<void>;
+  freeBytes(): number;
+}
+
+export interface Downloaded { url: string; contentType: string; contentDisposition: string | undefined; bytes: number }
+
+// 接続して最初の応答（転送をたどった先）が届くまでの時間。本文の受け取りには総時間の上限を置かない
+const CONNECT_MS = 20_000;
+
+// promise を待つ。signal が取り消されたら、待たずに signal の理由で投げる。idleMs があれば、それだけ待っても終わらないとき idle() で投げる
+function waitFor<T>(pending: Promise<T>, signal: AbortSignal, idleMs: number | undefined, idle: () => Error): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const done = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); };
+    const onAbort = () => { done(); reject(signal.reason ?? new Error('aborted')); };
+    if (signal.aborted) { onAbort(); return; }
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (idleMs !== undefined) timer = setTimeout(() => { done(); reject(idle()); }, idleMs);
+    pending.then(value => { done(); resolve(value); }, error => { done(); reject(error); });
+  });
+}
+
+// 本文を 1 かたまりずつ sink へ渡して保存先へ流す（メモリに溜めない）。LAN を断る・転送ごとの確かめ直し・https から http への下がりを
+// 断る決まりは fetchPublic と同じ followPublic。どの失敗でも応答を close() する。この関数が戻る（投げる）ときには、sink の呼び出しは
+// 1 つも進行中でない（書きかけを消す側が、書き込みと取り合わない）
+export async function downloadPublic(
+  input: string, signal: AbortSignal, sink: DownloadSink,
+  options: { network?: DownloadNetwork; limits?: Partial<DownloadLimits> } = {},
+): Promise<Downloaded> {
+  const network = options.network ?? defaultDownloadNetwork;
+  const limits: DownloadLimits = { ...DOWNLOAD_LIMITS, ...options.limits };
+  // 呼び出し元の取り消しと、接続までの時間切れの両方で止める。本文の受け取りが始まったら、時間切れの方は外す
+  const link = new AbortController();
+  const forward = () => link.abort(signal.reason);
+  if (signal.aborted) forward(); else signal.addEventListener('abort', forward, { once: true });
+  const connectTimer = setTimeout(() => link.abort(), CONNECT_MS);
+  let opened: DownloadResponse | undefined;
+  let sinkFault: { error: unknown } | undefined;
+  const viaSink = async <T>(work: () => T | Promise<T>): Promise<T> => {
+    try { return await work(); } catch (error) { sinkFault = { error }; throw error; }
+  };
+  try {
+    const { url, response } = await followPublic(input, link.signal, network.resolve, (next, address) => network.open(next, address, link.signal), found => found.close());
+    opened = response;
+    clearTimeout(connectTimer);
+    if (response.status !== 200) throw statusFailure(response.status);
+    if (/[\r\n]/u.test(response.contentType)) throw failure('invalid_response', 'fetch.type', { type: typeShown(response.contentType) });
+    const encoding = response.contentEncoding?.trim().toLowerCase();
+    if (encoding && encoding !== 'identity') throw failure('invalid_response', 'download.encoded', { encoding: clip(encoding, 40) });
+    const iterator = response.body[Symbol.asyncIterator]();
+    let bytes = 0;
+    let sinceCheck = 0;
+    for (;;) {
+      const step = await waitFor(iterator.next(), link.signal, limits.idleMs, () => failure('http_failure', 'download.idle', { seconds: limits.idleMs / 1000 }));
+      if (step.done) break;
+      const chunk = step.value;
+      if (!chunk.length) continue;
+      await viaSink(() => sink.write(chunk));
+      link.signal.throwIfAborted();
+      bytes += chunk.length; sinceCheck += chunk.length;
+      if (sinceCheck >= limits.freeCheckBytes) {
+        sinceCheck = 0;
+        const free = await viaSink(() => sink.freeBytes());
+        if (free < limits.minFreeBytes) throw failure('http_failure', 'download.disk_low', { free });
+      }
+    }
+    return { url: url.href, contentType: response.contentType, contentDisposition: response.contentDisposition, bytes };
+  } catch (error) {
+    if (sinkFault && sinkFault.error === error && !link.signal.aborted && !(error instanceof RetrievalFailure)) throw error;
+    throw transferFailure(error, link.signal, signal, CONNECT_MS);
+  } finally {
+    clearTimeout(connectTimer);
+    signal.removeEventListener('abort', forward);
+    opened?.close();
+  }
+}
+
+const CHARSET_META =/<meta\s[^>]*?charset\s*=\s*["']?\s*([\w:.-]+)/iu;
 
 export function decodeText(body: Buffer, contentType: string): string {
   const html = /^text\/html(?:;|$)/iu.test(contentType);
