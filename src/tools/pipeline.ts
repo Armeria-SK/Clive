@@ -24,8 +24,18 @@ export const REVIEW_FORBIDDEN: ReadonlySet<ToolDef['effect']> = new Set(['write'
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
 
-// 計画モードで使える道具の効果: 読む道具（read）と Web の読み取り（network）。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、これを使う
+// 計画モードで使える道具の効果: 読む道具（read）と Web の読み取り（network）。ただしファイルも書く道具（writesFiles）は除く。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、planAllows を通す
 export const PLAN_EFFECTS: ReadonlySet<ToolDef['effect']> = new Set(['read', 'network']);
+
+export function planAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles'>): boolean {
+  return PLAN_EFFECTS.has(tool.effect) && tool.writesFiles !== true;
+}
+
+// この呼び出しが外へ出るか（効果が network でない道具の networkCall）。投げたら、迷ったので外へ出るとみなす（印を付ける・毎回確かめる向きにしか倒れない）
+function callsNetwork(tool: ToolDef, args: unknown): boolean {
+  if (!tool.networkCall) return false;
+  try { return tool.networkCall(args) !== false; } catch { return true; }
+}
 
 export interface PipelineDeps {
   registry: ToolRegistry;
@@ -137,13 +147,15 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const policy = policyFor(tool.name, ctx, deps);
   if (policy === 'block') return refuse('deny', 'policy', toolText(language, 'pipeline.policy_blocked', { name: tool.name }));
   // 計画モードでは、読む道具と Web の読み取りのほかは使わせない（モデルに渡す一覧からも外している。二重の拒否）
-  if (effectiveMode(ctx, deps) === 'plan' && !PLAN_EFFECTS.has(tool.effect)) return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
+  if (effectiveMode(ctx, deps) === 'plan' && !planAllows(tool)) return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
   if (call.arguments === undefined) return refuse('deny', 'validation', toolText(language, 'pipeline.bad_json', { raw: (call.raw ?? '').slice(0, 300) }), true);
   const args = Value.Default(tool.input, Value.Clone(call.arguments));
   if (!Value.Check(tool.input, args)) {
     const errors = [...Value.Errors(tool.input, args)].slice(0, 5).map(e => `${e.path || '/'}: ${e.message}`);
     return refuse('deny', 'validation', toolText(language, 'pipeline.bad_args', { errors: errors.join('\n- ') }), true);
   }
+  // この呼び出しが外へ出るか（効果が network、または networkCall がそう答えた）。外から読んだ印と、自動承認で外を読んだ会話の毎回の確かめだけがこれを使う
+  const network = tool.effect === 'network' || callsNetwork(tool, args);
 
   // ── 実行前フック ──
   let decision: Decision = 'allow';
@@ -165,7 +177,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     }
   }
   // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる（自動承認が、外を読んだあとのものを判定役に回さないため）。拒否は拒否のまま
-  if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint) && decision !== 'deny') {
+  if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint || tool.writesFiles === true) && decision !== 'deny') {
     decision = worst(decision, 'ask');
     askKinds.add('taint');
     reasons.push(guardText(language, 'pipeline.taint', { sources: ctx.taint.sources.slice(0, 3).join(guardText(language, 'pipeline.taint_sep')) }));
@@ -183,7 +195,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   }
   // 自動承認で許可フォルダの外を読んだ会話では、その実行の残りも、あとの実行も、通信の道具とシェルのコマンドはすべて毎回確かめる（外で読んだ中身は会話の履歴に残るので、確かめなしに外へ送らせない。
   // 許可の一覧にある curl・Invoke-WebRequest も、URL の後ろの文字で外へ送れるので、取得かどうかで分けない。モードをふつうに戻しても変わらない）
-  const afterAutoRead = (tool.effect === 'network' || tool.effect === 'exec') && decision !== 'deny' && (ctx.autoReadOutside === true || conversationAutoRead(deps));
+  const afterAutoRead = (network || tool.effect === 'exec') && decision !== 'deny' && (ctx.autoReadOutside === true || conversationAutoRead(deps));
   if (afterAutoRead) {
     decision = worst(decision, 'ask');
     askKinds.add('egress');
@@ -227,7 +239,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     }
     // 判定役を待つあいだにモードが替わっていたら、答えは使わない: ふつうに戻したら、いつもの札。計画にしたら、計画モードが禁じる道具は札にもせず断る
     const modeNow = effectiveMode(ctx, deps);
-    if (modeNow === 'plan' && !PLAN_EFFECTS.has(tool.effect)) {
+    if (modeNow === 'plan' && !planAllows(tool)) {
       autoEvent('asked');
       return refuse('deny', 'mode', toolText(language, 'pipeline.mode_plan', { name: tool.name }));
     }
@@ -286,7 +298,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   // 事前の判定が「外とやり取りする」確かめ（種類 egress。git push・curl の送信など）にして、持ち主が通した（札・会話の許可）呼び出しも、動かしたら付ける。
   // 自動承認で外を読んだ会話の毎回の確かめ（afterAutoRead）は、ここで言う egress ではない（事前の判定の種類だけを見る）
   const approvedEgress = first?.decision === 'ask' && first.askKinds?.includes('egress') === true;
-  if ((tool.effect === 'network' && !(output.isError && output.noRemoteContent)) || first?.fetched === true || approvedEgress) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
+  // 結果が外の中身を持ち込んだと自分で言ったとき（output.fetched。実行してみないと分からない道具）も付ける。付ける向きにしか働かない。
+  if ((network && !(output.isError && output.noRemoteContent)) || first?.fetched === true || output.fetched === true || approvedEgress) { ctx.taint.tainted = true; ctx.taint.sources.push(tool.name); }
 
   // ── 実行後フック（記録用。結果は変えない） ──
   for (const hook of ctx.config.tools.hooks.postToolUse) {

@@ -33,6 +33,8 @@ export interface ToolOutput {
   isError?: boolean;
   fullRef?: string;
   noRemoteContent?: boolean;
+  // この結果が外の中身を持ち込んだ（実行の結果を見てからでないと分からないとき。file_search が downloads/ の下の行を返したときなど）。パイプラインは「外から読んだ」印を付ける。印を付ける向きにしか働かない（付けない・外す効果は無い）
+  fetched?: boolean;
 }
 
 export interface PreCheck {
@@ -52,7 +54,7 @@ export interface PreCheck {
   bind?: string;
   // シェル: コマンドの git がすべて、設定に core.hooksPath の無い 1 つのリポジトリのもので、そのリポジトリ自身のフックの置き場所。許されたときだけ、git のフックをここに向ける
   ownHooksDir?: string;
-  // シェル: コマンドのどれかが外から取得する・外の中身を持ち込む（git の fetch・pull・clone、パッケージの導入を含む）。実行したら、パイプラインは「外から読んだ」印を付ける（通信の道具と同じ）
+  // 事前の判定: この呼び出しが外の中身を持ち込む（シェルの取得・doc_read・downloads/ の下を読む道具など。シェルは git の fetch・pull・clone、パッケージの導入を含む）。実行したら、パイプラインは「外から読んだ」印を付ける（通信の道具と同じ）
   fetched?: boolean;
 }
 
@@ -121,6 +123,10 @@ export interface ToolDef<I = any> {
   escalateOnTaint?: boolean;
   // 書き込み先のフォルダ単位で、外から読んだ内容のあとの確かめ（理由の種類が taint だけ）を、その実行のあいだ許せる道具（file_write / file_edit）。事前の判定が書き込み先のパスを 1 つ返すこと
   folderGrant?: boolean;
+  // 効果は network のまま、ファイルも書く道具（web_download）。計画モードでは書き込みと同じに断り（planAllows）、外から読んだ内容のあとは書き込みと同じに確かめる。振り返りは effect network で既に断られる
+  writesFiles?: true;
+  // この呼び出し（引数の確かめを通ったあと）が外へ出るか。true なら、効果が network でなくても、外から読んだ印（動かしたら付く）と、自動承認で外を読んだ会話の毎回の確かめを network と同じにする。効果・計画モード・振り返りの扱いは変えない。投げる・false 以外を返すときは外へ出るとみなす
+  networkCall?: (input: I) => boolean;
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;
 }

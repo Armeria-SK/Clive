@@ -14,7 +14,7 @@ import { renderBooks, type MemoryStore } from '../memory/store.ts';
 import type { ApprovalBroker } from '../tools/approvals.ts';
 import { TruncatedReply, USER_REQUEST_LIMIT, type ClassifierPrompt } from '../tools/auto-approve.ts';
 import { checklistInjects, checklistSection, readChecklist } from '../tools/builtin/checklist-core.ts';
-import { PLAN_EFFECTS, REVIEW_FORBIDDEN, runToolCall } from '../tools/pipeline.ts';
+import { planAllows, REVIEW_FORBIDDEN, runToolCall } from '../tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../tools/policy.ts';
 import { ToolRegistry } from '../tools/registry.ts';
 import { effectivePolicy } from '../tools/tool-policy.ts';
@@ -530,7 +530,7 @@ export class ChatEngine {
     if (!this.#d.tools || model.maxTools === 0) return [];
     const config = this.#d.config();
     const exclude = (t: ToolDef) => (kind === 'review' && REVIEW_FORBIDDEN.has(t.effect)) || forbid?.has(t.name) === true || effectivePolicy(t.name, config, started) === 'block'
-      || (mode === 'plan' && !PLAN_EFFECTS.has(t.effect));
+      || (mode === 'plan' && !planAllows(t));
     return this.#d.tools.registry.forRun(kind, { limit: model.maxTools, exclude });
   }
 
