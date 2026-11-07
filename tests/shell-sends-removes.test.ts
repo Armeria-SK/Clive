@@ -91,18 +91,6 @@ test('sends / removes (bash): every send channel is a send, every delete channel
     ['git clean -fd', null, true],
     ['git stash drop', false, true],
     ['git branch -D x', false, true],
-    ['echo x > a.txt', false, true],
-    ['echo x >> a.txt', false, null],
-    ['cp b.txt a.txt', false, true],
-    ['mv b.txt a.txt', false, true],
-    ['echo x | tee a.txt', false, true],
-    ['sed -i s/a/b/ a.txt', false, true],
-    ['cp -r d d2', false, true],
-    ['cp -r d/. d2', false, true],
-    ['mv a.txt t1.txt && echo y > t1.txt', false, true],
-    ['mv a.txt t1.txt; mv b.txt t1.txt', false, true],
-    ['cp -rT d d2', false, true],
-    ['echo x > *.txt', false, true],
     ['echo x > $UNSET_VAR/y', true, true],
     ['cd $UNSET_VAR && echo x > new.txt', true, true],
     ['cd - && echo x > new.txt', true, true],
@@ -167,16 +155,6 @@ test('sends / removes (PowerShell): every send channel is a send, every delete c
     ['git clean -fd', null, true],
     ['git stash drop', false, true],
     ['git branch -D x', false, true],
-    ['echo x > a.txt', false, true],
-    ['Set-Content a.txt x', false, true],
-    ['Out-File a.txt', false, true],
-    ['Clear-Content a.txt', false, true],
-    ['Copy-Item b.txt a.txt', false, true],
-    ['Move-Item b.txt a.txt', false, true],
-    ['cp b.txt a.txt', false, true],
-    ['mv b.txt a.txt', false, true],
-    ['Move-Item a.txt t1.txt; Set-Content t1.txt y', false, true],
-    ['Set-Content *.txt x', false, true],
     ['tree -o a.txt', true, true],
     ['tree /F', false, false],
     ['New-Item -Path . -Name $n -ItemType File', null, true],
@@ -191,6 +169,56 @@ test('sends / removes (PowerShell): every send channel is a send, every delete c
     ['mv a.txt moved.txt', false, false],
     ['Rename-Item a.txt renamed.txt', false, false],
     ['Set-Content new.txt x', false, false],
+  ];
+  expectRows(f.run, 'powershell', rows);
+});
+
+test('sends / removes (bash): overwriting an existing file is not a remove, a real delete next to it still is', t => {
+  const f = fixture(t);
+  const rows: Row[] = [
+    ['echo x > a.txt', false, false],
+    ['echo x >> a.txt', false, false],
+    ['ls > a.txt', false, false],
+    ['cat b.txt > a.txt', false, false],
+    ['cp b.txt a.txt', false, false],
+    ['cp -f b.txt a.txt', false, false],
+    ['mv b.txt a.txt', false, false],
+    ['echo x | tee a.txt', false, false],
+    ['echo x | tee -a a.txt', false, false],
+    ['sed -i s/a/b/ a.txt', false, false],
+    ['mv a.txt t1.txt && echo y > t1.txt', false, false],
+    ['mv a.txt t1.txt; mv b.txt t1.txt', false, false],
+    ['mv a.txt t1.txt; echo y > t1.txt', false, false],
+    ['cp -r d d2', false, false],
+    ['cp -r d/. d2', false, false],
+    ['cp -rT d d2', false, false],
+    ['echo x > *.txt', false, false],
+    ['cp b.txt a.txt && rm c.txt', false, true],
+    ['echo x > a.txt; rm b.txt', false, true],
+    ['sed -i s/a/b/ a.txt && git clean -fd', null, true],
+    ['rm a.txt', false, true],
+  ];
+  expectRows(f.run, 'bash', rows);
+});
+
+test('sends / removes (PowerShell): overwriting an existing file is not a remove, a real delete next to it still is', t => {
+  const f = fixture(t);
+  const rows: Row[] = [
+    ['echo x > a.txt', false, false],
+    ['echo x >> a.txt', false, false],
+    ['Set-Content a.txt x', false, false],
+    ['Add-Content a.txt x', false, false],
+    ['Out-File a.txt', false, false],
+    ['Clear-Content a.txt', false, null],
+    ['Copy-Item b.txt a.txt', false, false],
+    ['Copy-Item -Recurse d d2', false, false],
+    ['Move-Item b.txt a.txt', false, false],
+    ['cp b.txt a.txt', false, false],
+    ['mv b.txt a.txt', false, false],
+    ['Move-Item a.txt t1.txt; Set-Content t1.txt y', false, false],
+    ['Set-Content *.txt x', false, false],
+    ['Set-Content a.txt x; Remove-Item b.txt', false, true],
+    ['Remove-Item a.txt', false, true],
   ];
   expectRows(f.run, 'powershell', rows);
 });

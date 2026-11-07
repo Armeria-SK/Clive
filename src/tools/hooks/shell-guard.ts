@@ -1,4 +1,3 @@
-import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
@@ -63,7 +62,7 @@ export interface ShellVerdict {
   fetched: boolean;
   // 外へ送りうる: 取得・送信・持ち込み（fetched）、確かめの種類 egress、表が中身を知らない形（一覧に無い・形が分からない・持ち主の許可で外した確かめ）。自動承認が判定役に回さない材料なので、迷ったら true
   sends: boolean;
-  // 消す・上書きしうる: rm など、今あるファイルへの書き込み、確かめの種類 git_write、表が中身を知らない形（sends と同じ）。迷ったら true
+  // 消しうる: rm など、確かめの種類 git_write、表が中身を知らない形（sends と同じ）。ファイルの上書き（> cp mv tee sed -i など）は消すに入れない（持ち主の決め）。迷ったら true
   removes: boolean;
 }
 
@@ -84,14 +83,6 @@ const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.wri
 const CWD_CMDS = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir']);
 // 表の理由のうち、効果が他の印（fetch・deletes・書き込み先の調べ）で足りているもの。これ以外の理由は何をするか分からないので、送る・消すの両方とみなす
 const KNOWN_EFFECT_REASONS: ReadonlySet<string> = new Set(['list.ps_write', 'list.download', 'list.redirect', 'list.url_glob', 'list.header', 'code.loopback']);
-
-// 今あるファイルか（フォルダでないもの）。調べられないとき（ENOENT・ENOTDIR 以外）は「ある」とみなす
-function isExistingFile(abs: string): boolean {
-  try { return !statSync(abs).isDirectory(); } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code !== 'ENOENT' && code !== 'ENOTDIR';
-  }
-}
 
 function isCriticalTarget(abs: string, policy: ScopePolicy): boolean {
   const root = parsePath(abs).root;
@@ -182,10 +173,6 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   let sends = false;
   let removes = false;
   const unknownEffect = (): void => { sends = true; removes = true; };
-  // 前の文が書く先と、いまの文が書く先（文が終わったら前の文の分に足す）。前の文が作った・動かしたファイルを後の文が上書きするのも、消す
-  const staged = new Set<string>();
-  const pending = new Set<string>();
-  const pathKey = (abs: string): string => (windows ? abs.toLowerCase() : abs);
   // ask の理由には種類を付ける。付けなければ precheck（細かい種類なし）で、自動承認の判定役には回らない
   const add = (d: Decision, reason: string, kind: AskKind = 'precheck') => {
     decision = worst(decision, d);
@@ -295,15 +282,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   // 1 つの絶対パスを、書く・読む・消すものとして調べる
   // intentWrite: 確かめの種類を決めるためだけの「書くための参照か」。ワイルドカードの手前のフォルダは write = false で調べるが、書く参照なら外の確かめは outside_write にする
   // secrets: 名前だけを出すコマンドは 'files'（secrets・secret のフォルダだけでは止めない）、依存パッケージの中で見つけた分は 'none'（別に今回だけの確かめにする）
-  // clobber: この参照が書き込み先の中身を置き換えうるか（既定は write。cp・mv の元は、書く参照でも動かすだけなので false）
-  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write, secrets: SecretScope = 'all', clobber: boolean = write): void => {
+  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write, secrets: SecretScope = 'all'): void => {
     const placement = placePath(abs, opts.policy, secrets);
     if (primary) paths.push({ input, path: abs, placement, write });
     if (placement.kind === 'deny') { add('deny', placement.reason); return; }
-    if (clobber) {
-      if (staged.has(pathKey(abs)) || isExistingFile(abs)) removes = true;
-      pending.add(pathKey(abs));
-    }
     if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', text('guard.irreversible', { path: abs })); return; }
     // ツールの設定ファイルは、許可フォルダの外（ホームが許可フォルダの外なのが既定）でも、ふつうの確かめではなく今回だけ。外の確かめで戻る前に調べる
     if (write && isToolConfigPath(abs, env)) addCode(text('list.tool_config', { path: abs }));
@@ -321,9 +303,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   };
   const dotfiles = isPowerShell(shell);
 
-  const checkPath = (ref: PathRef, deletes: boolean, moved = false): void => {
+  const checkPath = (ref: PathRef, deletes: boolean): void => {
     const write = ref.mode === 'write';
-    const clobber = write && !moved;
     const input = ref.word.text;
     const relative = !ref.word.dynamic && !ref.word.home && !/^(?:[~/\\$%]|[A-Za-z]:)/u.test(input);
     if (relative && !cwdKnown) {
@@ -350,16 +331,16 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       const globbing = ref.word.glob && !ref.word.dynamic;
       // ワイルドカードの手前のフォルダは、書く・消す対象ではない（当たるものだけが対象）。外・禁止のパスかどうかだけ見る
       const scope: SecretScope = ref.names ? 'files' : 'all';
-      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary, write, scope, globbing ? false : clobber);
+      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary, write, scope);
       if (globbing) {
         // ワイルドカード: 今あるもののうち当たるものを全部調べる。列挙しきれないときは、手前のフォルダを調べて確かめる
         const globbed = expandGlob(patternOf(ref.word, base, windows), dotfiles, scope);
         // 列挙しきれないときも、列挙した分と、上限を超えた分から探した秘密のパスは調べる（秘密があれば止める）
         for (const match of globbed.matches) {
-          evalAbs(match, match, write, deletes, false, write, scope, clobber);
+          evalAbs(match, match, write, deletes, false, write, scope);
           if (write && (ref.recursive || deletes) && isDirectory(match)) rangeCheck(match);
         }
-        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false, write, scope, clobber);
+        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false, write, scope);
         if (!globbed.complete) {
           if (write) { unknownEffect(); rangeCheck(globbed.prefix); }
           else add('ask', text('list.wild_many', { input }), 'opaque');
@@ -444,15 +425,11 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         for (const name of names) {
           const target = join(dest, name);
           evalAbs(target, target, true, false, false);
-          if (use.recursive && isDirectory(target)) removes = true;
         }
-        if (unknownNames || (use.recursive && names.length === 0)) {
-          if (isDirectory(dest)) removes = true;
-          rangeCheck(dest);
-        }
+        if (unknownNames || (use.recursive && names.length === 0)) rangeCheck(dest);
       } else {
         evalAbs(dest, dest, true, false, false);
-        if (use.recursive && isDirectory(dest)) { removes = true; rangeCheck(dest); }
+        if (use.recursive && isDirectory(dest)) rangeCheck(dest);
       }
     }
   };
@@ -502,8 +479,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const asked = matchesPrefix(words, opts.ask);
     if (asked && !allowedByConfig) add('ask', text('guard.needs_approval', { reason: asked }), 'owner');
 
-    const moved = new Set<Word>(result.copies.flatMap(use => use.sources));
-    for (const ref of result.paths) checkPath(ref, result.deletes, moved.has(ref.word));
+    for (const ref of result.paths) checkPath(ref, result.deletes);
     for (const use of result.copies) checkCopy(use);
     for (const remote of result.remoteNames) checkRemoteName(remote.url, remote.dir);
     if (result.level === 'once' || result.level === 'deny') {
@@ -514,9 +490,6 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if (placement.kind === 'deny') add('deny', placement.reason);
       }
     }
-
-    for (const key of pending) staged.add(key);
-    pending.clear();
 
     if (result.cwd) {
       const track: CwdTrack = { cwd, cwds, known: cwdKnown };

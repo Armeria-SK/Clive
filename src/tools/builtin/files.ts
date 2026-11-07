@@ -87,7 +87,7 @@ export const fileWrite: ToolDef<{ path: string; content: string; mode?: 'overwri
   effect: 'write',
   folderGrant: true,
   allowedIn: ['chat', 'task'],
-  preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
+  preCheck: (input, ctx) => ({ ...checkFilePath(input.path, 'write', ctx).check, removes: false }),
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_write', { path: input.path }), body: input.content.slice(0, 4000) }),
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'write', ctx);
@@ -113,7 +113,7 @@ export const fileEdit: ToolDef<{ path: string; old: string; new: string; all?: b
   effect: 'write',
   folderGrant: true,
   allowedIn: ['chat', 'task'],
-  preCheck: (input, ctx) => checkFilePath(input.path, 'write', ctx).check,
+  preCheck: (input, ctx) => ({ ...checkFilePath(input.path, 'write', ctx).check, removes: false }),
   summarize: (input, language) => ({ title: toolText(language, 'summary.file_edit', { path: input.path }), body: `- ${input.old.slice(0, 2000)}\n+ ${input.new.slice(0, 2000)}` }),
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'write', ctx);

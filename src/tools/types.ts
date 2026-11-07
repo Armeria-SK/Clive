@@ -58,7 +58,7 @@ export interface PreCheck {
   ownHooksDir?: string;
   // 事前の判定: この呼び出しが外の中身を持ち込む（シェルの取得・doc_read・downloads/ の下を読む道具など。シェルは git の fetch・pull・clone、パッケージの導入を含む）。実行したら、パイプラインは「外から読んだ」印を付ける（通信の道具と同じ）
   fetched?: boolean;
-  // 事前の判定: この呼び出しが外へ送りうる / 消す・上書きしうる。自動承認が判定役に回すかの材料で、false とはっきり言わなければ true とみなす（迷ったら人）。シェルは checkShellCommand の sends / removes
+  // 事前の判定: この呼び出しが外へ送りうる / 消しうる（ファイルの上書きは消すに入れない）。自動承認が判定役に回すかの材料で、false とはっきり言わなければ true とみなす（迷ったら人）。シェルは checkShellCommand の sends / removes。file_write・file_edit・table_write は removes: false と言う
   sends?: boolean;
   removes?: boolean;
 }

@@ -73,6 +73,7 @@ export const memoryForget: ToolDef<{ id: number | string; reason: string }> = {
   effect: 'meta',
   allowedIn: ['chat', 'task', 'review'],
   escalateOnTaint: true,
+  removes: true,
   async execute(input, ctx) {
     try {
       const s = services(ctx);
