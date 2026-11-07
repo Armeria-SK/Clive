@@ -4,6 +4,7 @@
 import { join } from 'node:path';
 import { isInside, realish } from '../hooks/scope.ts';
 import { hasToolConfigName } from '../hooks/tool-config.ts';
+import { CONTROL, stripHidden } from '../../shared/plain-text.ts';
 
 export const DOWNLOADS_DIR = 'downloads';
 
@@ -15,8 +16,9 @@ export function isUnderDownloads(abs: string, workspace: string): boolean {
   return isInside(realish(downloadsDir(workspace)), realish(abs));
 }
 
-// 落とす文字: 制御文字・DEL・C1 制御・< > : " / バックスラッシュ | ? *・向きの印・幅の無い文字
-const DROP_RE = /[\u0000-\u001F\u007F-\u009F<>"\/\\:|?*]|[\u200E\u200F\u202A-\u202E\u2066-\u2069\u200B-\u200D\uFEFF]/gu;
+// 落とす文字: < > : " / バックスラッシュ | ? *・行区切り（U+2028 U+2029。改行と同じく落とす）。
+// 制御文字と、向きの印・幅の無い文字・見えない文字・タグの文字は、plain-text.ts の分類（CONTROL と stripHidden）で落とす
+const DROP_RE = /[<>"\/\\:|?*\u2028\u2029]/gu;
 
 // 最初の . の前の部分（末尾の空白と . は除く。nul.tar.gz も「CON .txt」も予約名として扱われる）が Windows の予約名（デバイス名）か。大文字小文字を問わない
 const RESERVED_BASE = /^(?:con|prn|aux|nul|conin\$|conout\$|com(?:[0-9]|[\u00B9\u00B2\u00B3])|lpt(?:[0-9]|[\u00B9\u00B2\u00B3]))$/iu;
@@ -26,7 +28,7 @@ const DANGEROUS_NAMES = new Set(['desktop.ini', 'autorun.inf', 'folder.htt']);
 // 危険な拡張子（. を含む、小文字）
 const DANGEROUS_EXTS = new Set([
   '.lnk', '.url', '.scf', '.appref-ms', '.library-ms', '.searchconnector-ms', '.search-ms',
-  '.theme', '.themepack', '.desktopthemepackfile', '.settingcontent-ms', '.website',
+  '.theme', '.themepack', '.desktopthemepackfile', '.settingcontent-ms', '.website', '.pif',
 ]);
 
 const MAX_NAME = 150;
@@ -38,7 +40,7 @@ export function safeDownloadName(candidate: string): { name: string; renamed: bo
   const lastSlash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'));
   if (lastSlash >= 0) name = name.slice(lastSlash + 1);
   // 落とす文字
-  name = name.replace(DROP_RE, '');
+  name = stripHidden(name).replace(CONTROL, '').replace(DROP_RE, '');
   // 前後の空白と . を落とす
   name = name.replace(/^[\s.]+/u, '').replace(/[\s.]+$/u, '');
   if (name === '') return undefined;
@@ -46,11 +48,14 @@ export function safeDownloadName(candidate: string): { name: string; renamed: bo
   const dot = name.indexOf('.');
   const base = (dot >= 0 ? name.slice(0, dot) : name).replace(/[\s.]+$/u, '');
   if (RESERVED_BASE.test(base)) name = '_' + name;
-  // 長さは 150 文字まで。最後の . から 10 文字までの拡張子は残して前を切り、拡張子が長すぎるときは名前全体を切る（切ったあとの末尾の空白と . は落とす）
-  if (name.length > MAX_NAME) {
-    const dot2 = name.lastIndexOf('.');
-    const ext = dot2 > 0 ? name.slice(dot2) : '';
-    name = ext !== '' && ext.length <= MAX_EXT ? name.slice(0, MAX_NAME - ext.length) + ext : name.slice(0, MAX_NAME).replace(/[\s.]+$/u, '');
+  // 長さは 150 文字（コードポイント。2 単位の文字を割らない）まで。最後の . から 10 文字までの拡張子は残して前を切り、拡張子が長すぎるときは名前全体を切る（切ったあとの末尾の空白と . は落とす）
+  const chars = Array.from(name);
+  if (chars.length > MAX_NAME) {
+    const dot2 = chars.lastIndexOf('.');
+    const ext = dot2 > 0 ? chars.slice(dot2) : [];
+    name = ext.length > 0 && ext.length <= MAX_EXT
+      ? chars.slice(0, MAX_NAME - ext.length).join('') + ext.join('')
+      : chars.slice(0, MAX_NAME).join('').replace(/[\s.]+$/u, '');
   }
   // 危険な名前・拡張子・設定の名前なら .download を足す
   const lower = name.toLowerCase();
@@ -67,7 +72,7 @@ const MAX_HEADER = 2000;
 export function contentDispositionName(header: string | undefined): string | undefined {
   if (header === undefined || header.length > MAX_HEADER) return undefined;
   // filename*= を先に見る（UTF-8'' の後ろを decodeURIComponent。投げたら無視して filename= に戻る）
-  const star = header.match(/filename\*\s*=\s*([^;]+)/iu);
+  const star = header.match(/(?:^|;)\s*filename\*\s*=\s*([^;]+)/iu);
   const starValue = star?.[1];
   if (starValue !== undefined) {
     const raw = starValue.trim();
@@ -78,7 +83,7 @@ export function contentDispositionName(header: string | undefined): string | und
     }
   }
   // filename=（" で囲んだ値は中の \" を " に。囲まない値は ; まで）
-  const m = header.match(/filename\s*=\s*(.*)$/iu);
+  const m = header.match(/(?:^|;)\s*filename\s*=\s*(.*)$/iu);
   const captured = m?.[1];
   if (captured === undefined) return undefined;
   let value = captured;

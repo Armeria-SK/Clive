@@ -271,6 +271,54 @@ test('上書きしない: コピーに切り替えた先で EEXIST 以外の失�
   assert.deepEqual(s.listing(), [], '書きかけの保存先も、隠した書きかけも残らない');
 });
 
+const GiB = 1024 ** 3;
+
+test('上書きしない: コピーに切り替える前に、空きが「ファイルの大きさ + 1GiB」に足りなければ download.disk_low で断り、コピーを始めず、何も残さない', async t => {
+  const w = world({ [URL_PDF]: { body: () => chunksOf('payload') } });
+  const s = setup(t, undefined, w.network);
+  patchFs(t, 'linkSync', () => () => { throw withError('EPERM', 'EPERM: operation not permitted, link'); });
+  let calls = 0;
+  patchFs(t, 'statfsSync', () => (() => ({ bavail: ++calls === 1 ? 10 * GiB : GiB + 'payload'.length - 1, bsize: 1 })) as never);
+  const copy = mock.method(fsPromises, 'copyFile');
+  syncBuiltinESMExports();
+  t.after(() => { copy.mock.restore(); syncBuiltinESMExports(); });
+  const out = await s.call({ url: URL_PDF });
+  assert.equal(calls, 2, '最初の確かめのあとに、コピーの前にも空きを見た');
+  assert.equal(copy.mock.callCount(), 0, 'コピーを始めていない');
+  assert.equal(out.output.isError, true);
+  assert.match(out.output.content, /空きが少なくなった/u);
+  assert.match(out.output.content, new RegExp(`残り ${GiB + 6} バイト`, 'u'));
+  assert.deepEqual(s.listing(), [], '保存先も、隠した書きかけも残らない');
+  assert.equal(s.ctx.taint.tainted, false, '決まった文だけの失敗');
+});
+
+test('上書きしない: コピーに切り替えるとき、空きが「ファイルの大きさ + 1GiB」ちょうどならコピーする', async t => {
+  const w = world({ [URL_PDF]: { body: () => chunksOf('payload') } });
+  const s = setup(t, undefined, w.network);
+  patchFs(t, 'linkSync', () => () => { throw withError('EPERM', 'EPERM: operation not permitted, link'); });
+  let calls = 0;
+  patchFs(t, 'statfsSync', () => (() => ({ bavail: ++calls === 1 ? 10 * GiB : GiB + 'payload'.length, bsize: 1 })) as never);
+  const copy = mock.method(fsPromises, 'copyFile');
+  syncBuiltinESMExports();
+  t.after(() => { copy.mock.restore(); syncBuiltinESMExports(); });
+  const out = await s.call({ url: URL_PDF });
+  assert.ok(!out.output.isError, out.output.content);
+  assert.equal(copy.mock.callCount(), 1);
+  assert.deepEqual(s.listing(), ['report.pdf']);
+  assert.equal(readFileSync(join(s.downloads, 'report.pdf'), 'utf8'), 'payload');
+});
+
+test('上書きしない: ハードリンクが使えるときは、コピーしないので空きを見直さない', async t => {
+  const w = world({ [URL_PDF]: { body: () => chunksOf('payload') } });
+  const s = setup(t, undefined, w.network);
+  let calls = 0;
+  patchFs(t, 'statfsSync', () => (() => ({ bavail: ++calls === 1 ? 10 * GiB : 5, bsize: 1 })) as never);
+  const out = await s.call({ url: URL_PDF });
+  assert.ok(!out.output.isError, out.output.content);
+  assert.equal(calls, 1, '空きを見たのは最初の 1 回だけ');
+  assert.deepEqual(s.listing(), ['report.pdf']);
+});
+
 test('書きかけの掃除: 前の実行が残した .<uuid>.part だけを、次のダウンロードの前に消す（ほかの名前は触らない）', async t => {
   const w = world({ [URL_PDF]: { body: () => chunksOf('x') } });
   const s = setup(t, undefined, w.network);

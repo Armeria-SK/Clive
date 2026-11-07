@@ -106,8 +106,49 @@ test('ダウンロード: safeDownloadName は切ったあとの末尾の . と�
   assert.ok(lnk!.name.endsWith('.LNK.download'));
 });
 
+// 孤立したサロゲートがあれば、UTF-8 に直して戻すと文字が変わる
+const wellFormed = (text: string): boolean => Buffer.from(text, 'utf8').toString('utf8') === text;
+
+test('ダウンロード: safeDownloadName は 150 文字をコードポイントで数え、2 単位の文字（絵文字）を割らない', () => {
+  const noExt = safeDownloadName('a'.repeat(149) + '\u{1F600}' + 'b'.repeat(5));
+  assert.deepEqual(noExt, { name: 'a'.repeat(149) + '\u{1F600}', renamed: false });
+  assert.ok(wellFormed(noExt!.name));
+  assert.equal(Array.from(noExt!.name).length, 150);
+
+  const withExt = safeDownloadName('a'.repeat(145) + '\u{1F600}' + 'b'.repeat(20) + '.txt');
+  assert.deepEqual(withExt, { name: 'a'.repeat(145) + '\u{1F600}' + '.txt', renamed: false });
+  assert.ok(wellFormed(withExt!.name));
+  assert.equal(Array.from(withExt!.name).length, 150);
+
+  const longExt = safeDownloadName('a'.repeat(147) + '\u{1F600}' + 'b'.repeat(5) + '.' + 'c'.repeat(20));
+  assert.deepEqual(longExt, { name: 'a'.repeat(147) + '\u{1F600}' + 'bb', renamed: false });
+  assert.ok(wellFormed(longExt!.name));
+  assert.equal(Array.from(longExt!.name).length, 150);
+});
+
+test('ダウンロード: safeDownloadName は絵文字のそばで切ったあとも、末尾の空白と . を落とす', () => {
+  const r = safeDownloadName('a'.repeat(147) + '\u{1F600}' + '. ' + 'b'.repeat(20));
+  assert.deepEqual(r, { name: 'a'.repeat(147) + '\u{1F600}', renamed: false });
+  const r2 = safeDownloadName('a'.repeat(148) + '\u{1F600}' + ' ' + '.' + 'b'.repeat(20));
+  assert.deepEqual(r2, { name: 'a'.repeat(148) + '\u{1F600}', renamed: false });
+  assert.ok(wellFormed(r2!.name));
+});
+
+test('ダウンロード: safeDownloadName は plain-text.ts と同じ見えない文字（タグの文字・行区切り・ソフトハイフンなど）を落とす', () => {
+  assert.deepEqual(safeDownloadName('a\u{E0041}b.txt'), { name: 'ab.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('a\u2028b.txt'), { name: 'ab.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('a\u2029b.txt'), { name: 'ab.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('a\u00ADb\u2060c\u2800d\u3164e.txt'), { name: 'abcde.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('a\u{E0001}\u{E007F}b.txt'), { name: 'ab.txt', renamed: false });
+});
+
+test('ダウンロード: safeDownloadName は見えない文字を落としたあとの名前で、予約名・危険な拡張子を見分ける', () => {
+  assert.deepEqual(safeDownloadName('c\u{E0041}on.txt'), { name: '_con.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('x.l\u2028nk'), { name: 'x.lnk.download', renamed: true });
+});
+
 test('ダウンロード: safeDownloadName はエクスプローラーが開くと動く拡張子（大文字小文字を問わない）に .download を付ける', () => {
-  const exts = ['.lnk', '.url', '.scf', '.appref-ms', '.library-ms', '.searchconnector-ms', '.search-ms', '.theme', '.themepack', '.desktopthemepackfile', '.settingcontent-ms', '.website'];
+  const exts = ['.lnk', '.url', '.scf', '.appref-ms', '.library-ms', '.searchconnector-ms', '.search-ms', '.theme', '.themepack', '.desktopthemepackfile', '.settingcontent-ms', '.website', '.pif'];
   for (const ext of exts) {
     assert.deepEqual(safeDownloadName(`x${ext}`), { name: `x${ext}.download`, renamed: true }, ext);
     const upper = ext.toUpperCase();
@@ -134,6 +175,18 @@ test('ダウンロード: contentDispositionName は filename*= を優先する'
 
 test('ダウンロード: contentDispositionName は壊れた filename*= を無視して filename= に戻る', () => {
   assert.equal(contentDispositionName("attachment; filename*=UTF-8''%E8%A1; filename=\"x.xlsx\""), 'x.xlsx');
+});
+
+test('ダウンロード: contentDispositionName は別の名前の中の filename= を拾わず、パラメーターの頭（先頭か ; の後）だけを見る', () => {
+  assert.equal(contentDispositionName('attachment; xfilename=evil.txt'), undefined);
+  assert.equal(contentDispositionName('attachment; xfilename="evil.txt"; filename="good.txt"'), 'good.txt');
+  assert.equal(contentDispositionName('attachment;xfilename=evil.txt;filename=good.txt'), 'good.txt');
+  assert.equal(contentDispositionName('attachment; my_filename=evil.txt'), undefined);
+  assert.equal(contentDispositionName("attachment; xfilename*=UTF-8''evil.txt; filename=\"good.txt\""), 'good.txt');
+  assert.equal(contentDispositionName("attachment; xfilename*=UTF-8''evil.txt"), undefined);
+  assert.equal(contentDispositionName('filename=start.txt'), 'start.txt');
+  assert.equal(contentDispositionName('attachment ;   FILENAME = "spaced.txt"'), 'spaced.txt');
+  assert.equal(contentDispositionName("attachment;FILENAME*=UTF-8''%E8%A1%A8.xlsx"), '表.xlsx');
 });
 
 test('ダウンロード: contentDispositionName は長いヘッダーを undefined', () => {

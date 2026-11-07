@@ -65,8 +65,9 @@ function partSink(fd: number, dir: string): DownloadSink {
   };
 }
 
-async function place(part: string, dir: string, name: string): Promise<string | undefined> {
+async function place(part: string, dir: string, name: string, size: number): Promise<string | undefined> {
   let linkable = true;
+  let spaceChecked = false;
   for (let n = 0; n <= MAX_NUMBER; n++) {
     const candidate = n === 0 ? name : numberedName(name, n);
     const target = join(dir, candidate);
@@ -77,6 +78,12 @@ async function place(part: string, dir: string, name: string): Promise<string | 
           if (code === undefined || !LINK_UNSUPPORTED.has(code)) throw error;
           linkable = false;
         }
+      }
+      if (!spaceChecked) {
+        // コピーは書きかけとは別に、ファイルの大きさ分を新しく使う。足りなければコピーを始めない
+        spaceChecked = true;
+        const free = freeBytesOf(dir);
+        if (free < size + DOWNLOAD_LIMITS.minFreeBytes) throw new RetrievalFailure('http_failure', toolText('ja', 'download.disk_low', { free }), undefined, 'download.disk_low', { free });
       }
       try {
         await copyFile(part, target, constants.COPYFILE_EXCL);
@@ -157,7 +164,7 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
       }
       picked ??= { name: 'download', renamed: false };
 
-      const placed = await place(part, dir, picked.name);
+      const placed = await place(part, dir, picked.name, downloaded.bytes);
       if (placed === undefined) return { content: toolText(language, 'download.name_taken', { name: picked.name }), isError: true };
 
       let zoneFailed: string | undefined;
