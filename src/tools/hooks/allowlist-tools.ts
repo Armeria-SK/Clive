@@ -345,6 +345,7 @@ function archiveFile(value: Word, acc: Acc, write: boolean, ctx: MatchCtx): void
 }
 const ABSOLUTE = /^(?:[A-Za-z]:)?[\\/]/u;
 const TAR_BUNDLE = /^[ctxvzjJ]*[fC]$/u;
+const TAR_LONG_UNBOUND = ['create', 'file', 'directory', 'extract', 'get'];
 const joinPath = (dir: string, name: string): string => `${dir.replace(/[\\/]+$/u, '')}/${name}`;
 register(['tar'], (words, acc, ctx) => {
   const args = words.slice(1);
@@ -369,6 +370,8 @@ register(['tar'], (words, acc, ctx) => {
     if (!bundle && (!literal(w) || !text.startsWith('-') || text === '-')) { pos.push(w); baseOf.set(w, cdir); continue; }
     if (text.startsWith('--')) {
       if (/^--exclude=/u.test(text)) continue;
+      const name = text.slice(2).split('=')[0]!;
+      if (name !== '' && TAR_LONG_UNBOUND.some(l => l.startsWith(name))) formOnce(acc, 'tar', text, false);
       acc.add('once', 'list.flag', { cmd: 'tar', flag: text.split('=')[0]! }, true);
       continue;
     }
@@ -383,11 +386,15 @@ register(['tar'], (words, acc, ctx) => {
         if (ch === 'f') file = v;
         else { dirs.push(v); cdir = cdir && !v.dynamic && !cdir.dynamic && !ABSOLUTE.test(v.text) ? { ...v, text: joinPath(cdir.text, v.text) } : v; }
         break;
-      } else if (ch === 'x') { acc.add('once', 'list.expand', { cmd: 'tar' }, false); expand = true; break; } else { acc.add('once', 'list.flag', { cmd: 'tar', flag: `-${ch}` }, true); break; }
+      } else if (ch === 'x') { acc.add('once', 'list.expand', { cmd: 'tar' }, false); expand = true; break; } else {
+        acc.add('once', 'list.flag', { cmd: 'tar', flag: `-${ch}` }, true);
+        if (/[fC]/u.test(text.slice(j + 1))) formOnce(acc, 'tar', text, false);
+        break;
+      }
     }
   }
   if (expand) return;
-  if (modes.size !== 1) { formOnce(acc, 'tar', args.map(w => w.text).join(' ')); return; }
+  if (modes.size !== 1) { formOnce(acc, 'tar', args.map(w => w.text).join(' '), !file && dirs.length === 0); return; }
   const create = modes.has('c');
   if (file) archiveFile(file, acc, create, ctx);
   for (const d of dirs) checkValue('path-r', d, acc, 'tar', '-C', ctx);
