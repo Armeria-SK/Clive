@@ -180,7 +180,7 @@ writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force'
 // 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数
 writer('mkdir md', 'Path:path-w Name:s Force', 'path', joinName);
 writer('set-content add-content ac', `Path:path-w LiteralPath:path-w Value:s Encoding:${ENC} NoNewline Force`, 'path value…');
-// 中身を空にする = 中身を消す（上書きと違い、元の中身は何も残らない）。消す印（deletes）を立てる
+// Clear-Content は「このファイルを空にする」と名指しするコマンドなので、消す印（deletes）を立てる。リダイレクトや sed で空にする書き方は、上書きとして扱う（持ち主の決め: 上書きは消すに入れない）
 writer('clear-content clc', 'Path:path-w LiteralPath:path-w Force', 'path', (_p, acc) => { acc.deletes = true; });
 writer('out-file', `FilePath:path-w LiteralPath:path-w Encoding:${ENC} Append NoNewline Width:n InputObject:s`, 'filepath');
 writer('tee-object tee', 'FilePath:path-w LiteralPath:path-w Append Variable:var', 'filepath');

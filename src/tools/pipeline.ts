@@ -261,7 +261,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     if (modeNow !== 'auto') {
       autoEvent('asked');
     } else if (verdict.decision === 'allow') {
-      // 2 つ目の関所: 判定役が許すと答えたら、材料（道具の定義・事前の判定）を読み直して、もう一度見る。送る・消す・分からないなら、判定役が許していても札にする
+      // 2 つ目の関所: 判定役が許すと答えたら、humanOnlyOf をもう一度呼んで見る（事前の判定 preCheck は走らせ直さない）。送る・消す・分からないなら、判定役が許していても札にする。
+      // 判定役を待つあいだに材料（道具の定義・通信かどうか・事前の判定の結果）が変わっても、この先に 1 つ目の関所を通らない道ができても、判定役の「許す」だけでは通さないための二重の守り
       const late = humanOnlyNow();
       if (late !== undefined) {
         reasons.push(humanOnlyReason(late));

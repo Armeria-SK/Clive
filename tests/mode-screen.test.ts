@@ -57,6 +57,7 @@ test('自動承認の説明（画面と README）は、いま効く範囲を書�
   assert.match(ja['mode.autoDesc'], /この会話では許可/u);
   assert.match(ja['mode.autoDesc'], /止める/u);
   assert.match(ja['mode.autoDesc'], /秘密のファイル/u);
+  assert.match(ja['mode.autoDesc'], /Web のページを読む道具は別で、URL に少しの文字を載せて外へ出せます/u, '送る操作は必ず聞く、の例外（Web を読む道具は URL で少し外へ出せる）を隠さない');
   assert.match(en['mode.autoDesc'], /text that came from elsewhere/u);
   assert.match(en['mode.autoDesc'], /web pages/iu);
   assert.match(en['mode.autoDesc'], /attachments/iu);
@@ -66,6 +67,7 @@ test('自動承認の説明（画面と README）は、いま効く範囲を書�
   assert.match(en['mode.autoDesc'], /Allow in this chat/u);
   assert.match(en['mode.autoDesc'], /Block/u);
   assert.match(en['mode.autoDesc'], /Secret files/u);
+  assert.match(en['mode.autoDesc'], /tools that read web pages are the exception: they can send out a few characters in a URL/u, 'always-asked has an exception (web-reading tools can leak a little via a URL); do not hide it');
   for (const [name, value] of [['ja', ja['mode.autoDesc']], ['en', en['mode.autoDesc']]] as const) {
     assert.doesNotMatch(value, /外を読んだ|外から読んだ|外の内容|outside content/iu, `${name}: 分かりにくい言い回しを画面に出さない`);
     assert.doesNotMatch(value, /毎回あなたに聞きます|asked of you every time/u, `${name}: 「読んだことのある会話は毎回聞く」という古い決まりを書かない`);
@@ -80,6 +82,7 @@ test('自動承認の説明（画面と README）は、いま効く範囲を書�
   assert.match(line, /この会話では許可/u);
   assert.doesNotMatch(line, /一度でも Web・添付|判断のモデルを使わず、毎回あなたに確かめる/u, 'よそから来た文を読んだ会話は判断のモデルを使わない、という古い決まりを書かない');
   assert.match(line, /自動承認の残る危険/u);
+  assert.match(line, /`Clear-Content`（「このファイルを空にする」と名指しするので消す扱い。`>` や `sed -i` で空にする書き方は上書き）/u, 'Clear-Content は消す、リダイレクトや sed で空にするのは上書き、と書く');
   assert.match(line, /`web_fetch` `web_search`/u, '残る危険: Web の読み取りは読んだあとも確かめなしで動き、URL で少し外へ出せる');
   assert.match(line, /`package\.json`/u, '残る危険: 判断のモデルがだまされると、あとで動くファイルも書き換えられる');
 });
