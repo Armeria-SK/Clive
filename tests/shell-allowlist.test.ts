@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { classifyStatements, noRepo, type Level, type MatchCtx, type RepoInfo } from '../src/tools/hooks/allowlist.ts';
 import { sedScriptOk } from '../src/tools/hooks/allowlist-tools.ts';
+import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
+import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import type { ShellKind } from '../src/tools/hooks/shell-lex.ts';
+import { tempDir } from './helpers.ts';
 
 const isPs = (shell: ShellKind): boolean => shell === 'powershell' || shell === 'pwsh';
 const ctxFor = (shell: ShellKind, over: Partial<MatchCtx> = {}): MatchCtx => ({ shell, windows: isPs(shell), repo: noRepo, selfHosts: [], ...over });
@@ -545,4 +550,82 @@ test('Invoke-WebRequest・Invoke-RestMethod（5.1 の curl・wget も）: 転送
   const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0', 'curl https://e.example/ -MaximumRedirection 0'];
   assert.deepEqual(allow.filter(c => levelOf(c, 'powershell') !== 'allow'), []);
   assert.equal(levelOf('iwr https://e.example/ -MaximumRedirection 0 -Method Post -Body x', 'powershell'), 'ask', '送る形は、これまでどおりふつうの確かめ');
+});
+
+// ── 穴 3・5（clive-shell-holes）: 本物の判定（checkShellCommand）で確かめる。読み取り専用の場所と、守る場所（SOUL.md）を持つ作業場 ──
+function holeFixture(t: { after: (fn: () => void) => void }) {
+  const base = tempDir(t);
+  const ws = join(base, 'workspace');
+  const ro = join(base, 'reference');
+  mkdirSync(join(ws, 'sub'), { recursive: true });
+  mkdirSync(ro, { recursive: true });
+  writeFileSync(join(ws, 'SOUL.md'), 'persona');
+  const policy: ScopePolicy = {
+    roots: [{ path: realish(ws), mode: 'write' }, { path: realish(ro), mode: 'read' }],
+    deny: [],
+    askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md'), join(ws, 'skills')],
+    skillsDir: join(ws, 'skills'),
+  };
+  const guard = (command: string, shell: 'bash' | 'powershell' = 'bash', allow?: string[]) =>
+    checkShellCommand(command, realish(ws), { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell', ...(allow ? { allow } : {}) });
+  return { ro: ro.split('\\').join('/'), guard };
+}
+type GuardVerdict = ReturnType<ReturnType<typeof holeFixture>['guard']>;
+const whyOf = (v: GuardVerdict): string => `${v.decision} once=${v.onceOnly} sends=${v.sends} removes=${v.removes} :: ${v.reasons.join(' / ').slice(0, 140)}`;
+// 毎回確かめ（今回だけ）。理由は KNOWN_EFFECT_REASONS の外なので、送る・消すの両方が付く（Q16）
+const expectOnce = (v: GuardVerdict, label: string): void => assert.deepEqual([v.decision, v.onceOnly, v.sends, v.removes], ['ask', true, true, true], `${label} → ${whyOf(v)}`);
+
+// ループの変数は代入と同じ。bash の for NAME in … と PowerShell の foreach ($v in …) は、NAME・$v に代入する
+const LOOP_ASK: ReadonlyArray<readonly ['bash' | 'powershell', string]> = [
+  ['bash', 'for PATH in .; do ls; done'],
+  ['bash', 'for IFS in x; do echo a; done'],
+  ['bash', 'for F in a b; do echo $F; done'],
+  ['powershell', "foreach ($env:PATH in '.') { ls }"],
+  ['powershell', "foreach ($PSHOME in '.') { Get-ChildItem }"],
+  ['powershell', 'foreach ($_ in 1) { ls }'],
+];
+
+test('穴 3: ループの変数にも代入と同じ変数名の決まり（C8）をかける。PATH・IFS・$env:・予約の変数は毎回の確かめで、持ち主の許可でも外せない', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  for (const [shell, command] of LOOP_ASK) {
+    const plain = f.guard(command, shell);
+    // 持ち主の許可の一覧に、ループの名前・変数の名前・中のコマンドを入れても、この確かめは外れない
+    const allowed = f.guard(command, shell, ['for', 'foreach', 'PATH', 'IFS', 'F', '$PSHOME', '$_', 'ls', 'echo', 'Get-ChildItem']);
+    for (const [label, v] of [['', plain], ['（許可の一覧つき）', allowed]] as const) {
+      if (!(v.decision === 'ask' && v.onceOnly && v.sends && v.removes)) wrong.push(`${shell}: ${command}${label} → ${whyOf(v)}`);
+    }
+    const loopReasons = classify(command, shell).results.flatMap(r => r.reasons).filter(r => r.key === 'list.env');
+    if (loopReasons.length !== 1 || !loopReasons.every(r => r.level === 'once' && !r.exempt)) wrong.push(`${shell}: ${command} の list.env は外せない今回だけが 1 つのはず（${loopReasons.map(r => `${r.level}/${r.exempt}`).join(',')}）`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 3 の回帰: 普通のループ変数は確かめなし。ほかの変数の入り口（select・C 形式の for・read・alias・function・-OutVariable など）は今のまま止まる', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly ['bash' | 'powershell', string, 'allow' | 'ask' | 'deny']> = [
+    ['bash', 'for f in a b; do echo $f; done', 'allow'],
+    ['bash', 'for HOME in /tmp; do cat ~/.ssh/id_rsa; done', 'deny'],
+    ['bash', 'select PATH in .; do ls; done', 'deny'],
+    ['bash', 'for ((i=0;i<1;i++)); do ls; done', 'deny'],
+    ['bash', 'while read PATH; do ls; done', 'ask'],
+    ['bash', 'read PATH', 'ask'],
+    ['bash', 'alias ls=cat', 'ask'],
+    ['powershell', 'foreach ($f in 1,2) { echo $f }', 'allow'],
+    ['powershell', 'foreach ($f in Get-ChildItem) { $f.Name }', 'allow'],
+    ['powershell', 'for ($PATH=0;;) { ls }', 'ask'],
+    ['powershell', 'function ls { cat notes.md }', 'ask'],
+    ['powershell', 'filter ls { cat notes.md }', 'ask'],
+    ['powershell', 'Set-Alias ls cat', 'ask'],
+    ['powershell', 'sal ls cat', 'ask'],
+    ['powershell', 'New-Alias ls cat', 'ask'],
+    ['powershell', 'Get-ChildItem -PipelineVariable PATH', 'ask'],
+    ['powershell', 'Get-ChildItem -ov PATH', 'ask'],
+    ['powershell', 'Get-ChildItem -OutVariable PSDefaultParameterValues', 'ask'],
+  ];
+  const wrong = rows.flatMap(([shell, command, want]) => {
+    const v = f.guard(command, shell);
+    return v.decision === want ? [] : [`${shell}: ${command} → ${whyOf(v)} (want ${want})`];
+  });
+  assert.deepEqual(wrong, []);
 });
