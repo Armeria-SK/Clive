@@ -584,6 +584,9 @@ function langInfo(name: string, words: Word[], acc: Acc): void {
     ? literal(args[0]) && INSTALL_SUBS.has(args[0]!.text)
     : args.some(w => literal(w) && INSTALL_SUBS.has(w.text));
   if (PACKAGE_TOOLS.includes(name) && installing) { acc.add('once', 'list.install', { cmd: name }, false); return; }
+  // npm と pip は、ls・list・freeze・--version のようにローカルしか見ない形でも、外へ送りうるものに数える（fetched になり、送る操作として扱い、動かしたあとに「よそから来た文を読んだ」印を付ける）。
+  // レジストリ・インデックスの宛先は作業フォルダの設定（.npmrc・pip.conf・pip.ini など）から読まれ、だまされた判定役がモデルにそれを書かせていたら、どの形でもその宛先へ問い合わせが出うる。形からは設定の中身が分からないので、形では分けない
+  if ((name === 'npm' || /^pip3?$/u.test(name)) && args.length > 0) acc.fetch = true;
   const info = INFO_FORMS.find(([re]) => re.test(name));
   if (info && exactForm(words, info[1])) return;
   if (name === 'npm' && exactForm(words, [['--version'], ['-v']])) return;
@@ -591,15 +594,11 @@ function langInfo(name: string, words: Word[], acc: Acc): void {
   if (/^pip3?$/u.test(name) && args.length > 0) { pipForms(words, acc); return; }
   formOnce(acc, name, rest);
 }
-// レジストリに問い合わせて、相手の書いた文字（説明・版・作者の文）を読む形。形が一覧の外でも、札で許して動かせば同じなので、検査より先に印を付ける
-const NPM_REGISTRY_READS = new Set(['view', 'info', 'show', 'v', 'outdated', 'search', 's', 'audit']);
-const PIP_REGISTRY_READS = new Set(['download', 'index', 'search']);
 function npmForms(words: Word[], acc: Acc): void {
   const args = words.slice(1);
   const sub = args[0];
   const rest = args.slice(1);
   const bad = (): void => formOnce(acc, 'npm', args.map(w => w.text).join(' '));
-  if (sub && literal(sub) && NPM_REGISTRY_READS.has(sub.text)) acc.fetch = true;
   if (!sub || !literal(sub) || !rest.every(literal)) { bad(); return; }
   const flags = (allowed: RegExp): boolean => rest.filter(isFlagLike).every(w => allowed.test(w.text));
   if (/^(?:ls|list)$/u.test(sub.text)) { if (!(flags(/^(?:--depth=[0-9]+|--all|--json|--prod|--omit=dev)$/u) && rest.every(isFlagLike))) bad(); return; }
@@ -616,7 +615,6 @@ function pipForms(words: Word[], acc: Acc): void {
   const sub = args[0];
   const rest = args.slice(1);
   const bad = (): void => formOnce(acc, words[0]!.text, args.map(w => w.text).join(' '));
-  if (sub && literal(sub) && (PIP_REGISTRY_READS.has(sub.text) || (sub.text === 'list' && rest.some(w => literal(w) && w.text === '--outdated')))) acc.fetch = true;
   if (!sub || !literal(sub) || !rest.every(literal)) { bad(); return; }
   if (sub.text === '--version' && rest.length === 0) return;
   if (sub.text === 'list') { if (!rest.every(w => w.text === '--outdated' || w.text === '--format=json')) bad(); return; }

@@ -176,13 +176,13 @@ test('shell: 外から取得するコマンドは、確かめの結果にかか�
   assert.equal(verdict('', 'bash').fetched, false, '空のコマンドの早い戻りでも fetched は決まっている');
 });
 
-test('shell: 外の中身を持ち込むコマンド（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）も fetched になる。持ち込まないもの（init・worktree・npm ls）はならない。持ち主の許可の一覧に入れても fetched', t => {
+test('shell: 外の中身を持ち込むコマンド（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）も fetched になる。持ち込まないもの（init・worktree・status）はならない。持ち主の許可の一覧に入れても fetched', t => {
   const f = fixture(t);
   const verdict = (command: string, allow: string[] = []) => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell: 'bash', windows: false, allow });
   const probes: Array<[string, boolean]> = [
     ['git clone https://example.com/x.git', true], ['git fetch origin', true], ['git pull', true], ['git ls-remote https://example.com/x.git', true], ['git submodule update --init', true],
     ['npm install left-pad', true], ['npm i', true], ['pip install requests', true], ['yarn add x', true], ['cargo install x', true],
-    ['git init', false], ['git worktree add ../w', false], ['git status', false], ['npm ls', false], ['npm --version', false], ['pip list', false],
+    ['git init', false], ['git worktree add ../w', false], ['git status', false], ['node --version', false],
   ];
   for (const [command, fetched] of probes) {
     const v = verdict(command);
@@ -194,14 +194,18 @@ test('shell: 外の中身を持ち込むコマンド（git の fetch・pull・cl
   assert.equal(verdict('git clone https://example.com/x.git; bash x/run.sh').decision, 'ask', 'clone のあとにシェルで動かす形を、新しく止めたりしない（curl とは別。今まで通り確かめ）');
 });
 
-// 許可の一覧にある形のうち、外のレジストリに問い合わせて、相手の書いた文字（説明・版・作者の文）を読むもの。確かめなしで動くが、動かしたら「外から読んだ」印を付ける
-test('shell: レジストリに問い合わせる形（npm view・npm outdated・pip list --outdated）も fetched になる。ローカルだけを見る形・言語の道具の --version はならない', t => {
+// 許可の一覧にある npm・pip の形は、確かめなしで動くが、どの形でも fetched にして、動かしたら「よそから来た文を読んだ」印を付ける（レジストリ・インデックスの宛先を作業フォルダの設定が決めるため。ローカルしか見ない ls・list・freeze・--version も同じ）
+test('shell: npm と pip の形はどれも fetched になる（npm view・npm outdated・pip list --outdated のほか、ローカルしか見ない npm ls・pip list・pip freeze・--version も）。言語の道具の --version はならない', t => {
   const f = fixture(t);
   const verdict = (command: string, shell: 'bash' | 'powershell' = 'bash') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
   const reads: Array<[string, 'bash' | 'powershell', Decision]> = [
     ['npm view left-pad', 'bash', 'allow'], ['npm view left-pad --json', 'bash', 'allow'], ['npm outdated', 'bash', 'allow'], ['npm outdated --json', 'bash', 'allow'],
     ['pip list --outdated', 'bash', 'allow'], ['pip3 list --outdated --format=json', 'bash', 'allow'],
     ['npm view left-pad', 'powershell', 'allow'], ['npm outdated', 'powershell', 'allow'], ['pip list --outdated', 'powershell', 'allow'],
+    // ローカルしか見ない形も、宛先を設定が決めるので同じ
+    ['npm ls', 'bash', 'allow'], ['npm ls --json', 'bash', 'allow'], ['npm list --depth=1', 'bash', 'allow'], ['npm --version', 'bash', 'allow'], ['npm -v', 'bash', 'allow'],
+    ['pip list', 'bash', 'allow'], ['pip list --format=json', 'bash', 'allow'], ['pip show requests', 'bash', 'allow'], ['pip freeze', 'bash', 'allow'], ['pip3 freeze', 'bash', 'allow'], ['pip --version', 'bash', 'allow'],
+    ['npm ls', 'powershell', 'allow'], ['npm --version', 'powershell', 'allow'], ['pip list', 'powershell', 'allow'], ['pip freeze', 'powershell', 'allow'],
     // 一覧の形でない問い合わせも、札で許して動かせば同じ（相手の文字を読む）
     ['npm info left-pad', 'bash', 'ask'], ['npm show left-pad', 'bash', 'ask'], ['npm search left-pad', 'bash', 'ask'], ['npm audit', 'bash', 'ask'],
     ['npm view left-pad --registry=https://example.com', 'bash', 'ask'], ['npm outdated $X', 'bash', 'ask'],
@@ -212,13 +216,13 @@ test('shell: レジストリに問い合わせる形（npm view・npm outdated�
     assert.deepEqual([v.decision, v.fetched], [decision, true], `${shell}: ${command} → ${v.reasons.join(' / ')}`);
   }
   const local: Array<[string, 'bash' | 'powershell']> = [
-    ['npm ls', 'bash'], ['npm ls --json', 'bash'], ['npm --version', 'bash'], ['pip list', 'bash'], ['pip list --format=json', 'bash'], ['pip show requests', 'bash'], ['pip freeze', 'bash'], ['pip --version', 'bash'],
     ['node --version', 'bash'], ['python --version', 'bash'], ['tsc --version', 'bash'], ['deno --version', 'bash'], ['bun --version', 'bash'],
-    ['npm ls', 'powershell'], ['pip list', 'powershell'], ['node --version', 'powershell'],
+    ['node --version', 'powershell'],
   ];
   for (const [command, shell] of local) assert.equal(verdict(command, shell).fetched, false, `${shell}: ${command}`);
   // curl と同じく、問い合わせた文字をそのままシェル・インタプリタへ流す形は止める
   assert.equal(verdict('npm view left-pad | bash').decision, 'deny');
+  assert.equal(verdict('npm ls | bash').decision, 'deny', 'npm ls も fetched なので、流し込む形は止める');
 });
 
 test('shell: outsideRoots=deny なら外は止める。allow は「一覧に無い」確かめだけを外し、拒否は外せない', t => {
