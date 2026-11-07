@@ -194,7 +194,7 @@ const ja = {
   'web.searxng_unset': 'tools.web.searxngUrl が設定されていません',
 
   'pipeline.precheck_failed': '実行前の判定に失敗しました: {detail}',
-  'pipeline.taint': 'Web や添付の内容（{sources}）を読んだ後なので、念のため確認します',
+  'pipeline.taint': 'Web のページや添付など、よそから来た文（{sources}）を読んだあとなので、念のため確認します',
   'pipeline.taint_sep': '、',
   'pipeline.policy_ask': '道具「{name}」は、設定で「承認を求める」にしてあるので、毎回確認します',
   'pipeline.policy_review': '道具「{name}」は「承認を求める」にしてありますが、振り返り（裏の作業）では承認する人がいないので使えません',
@@ -405,7 +405,7 @@ const en: Record<keyof typeof ja, string> = {
   'web.searxng_unset': 'tools.web.searxngUrl is not set',
 
   'pipeline.precheck_failed': 'The check before running failed: {detail}',
-  'pipeline.taint': 'You have just read content from the web or an attachment ({sources}), so this is checked with you to be safe',
+  'pipeline.taint': 'You have just read text that came from somewhere else, such as the web or an attachment ({sources}), so this is checked with you to be safe',
   'pipeline.taint_sep': ', ',
   'pipeline.policy_ask': 'The tool "{name}" is set to "ask for approval" in the settings, so it is checked with you every time',
   'pipeline.policy_review': 'The tool "{name}" is set to "ask for approval", but a review (background work) has nobody to approve it, so it cannot be used',

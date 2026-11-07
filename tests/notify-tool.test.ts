@@ -91,7 +91,7 @@ test('notify_owner: 外を読んだあとでは題に印が付く', async t => {
   await s.call({ title: '区切り' });
   const first = s.sent[0];
   assert.ok(first);
-  assert.ok(first.title.startsWith('Clive より（外の内容を読んだあと）: '), `題 ${JSON.stringify(first.title)} が印付きで始まらない`);
+  assert.ok(first.title.startsWith('Clive より（よそから来た文を読んだあと）: '), `題 ${JSON.stringify(first.title)} が印付きで始まらない`);
 });
 
 test('notify_owner: 題の改行と向き替え文字が落ち、本文の改行は残り向き替え文字は落ちる', async t => {

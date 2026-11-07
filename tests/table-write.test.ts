@@ -353,7 +353,7 @@ test('table_write: 外から読んだあとは、作業フォルダの中でも�
   const args = { path: 'a.csv', rows: [['=cmd', 'x'], ['ok', 1]] };
   const denied = s.call(args, ctx);
   const request = await decideNext(s, 'deny');
-  assert.match(request.reasons.join(), /Web や添付/u);
+  assert.match(request.reasons.join(), /よそから来た文/u);
   assert.equal(request.title, '表のファイルを書く: a.csv（2 行）');
   assert.equal(request.body, "'=cmd,x\r\nok,1\r\n");
   assert.equal((await denied).output.isError, true);

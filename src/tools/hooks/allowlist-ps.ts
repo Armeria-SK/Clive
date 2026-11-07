@@ -291,6 +291,7 @@ export function runPsSimple(name: string, words: Word[], acc: Acc, ctx: MatchCtx
   if (name === 'tree.com' || name === 'tree') {
     for (const w of args) {
       if (/^\/[FA]$/iu.test(w.text) && literal(w)) continue;
+      if (isFlagLike(w)) { acc.add('once', 'list.flag', { cmd: 'tree', flag: w.text }, true); continue; }
       checkValue('path-n', w, acc, 'tree', '', ctx);
     }
     return true;

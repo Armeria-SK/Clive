@@ -118,8 +118,8 @@ for (const language of ['ja', 'en'] as const) {
     const edit = tainted.call('file_write', { path: 'b.md', content: 'x' });
     const askRequest = await decideNext(tainted.approvals, 'deny');
     assert.deepEqual(askRequest.reasons, [pick(language,
-      'Web や添付の内容（A、B）を読んだ後なので、念のため確認します',
-      'You have just read content from the web or an attachment (A, B), so this is checked with you to be safe')]);
+      'Web のページや添付など、よそから来た文（A、B）を読んだあとなので、念のため確認します',
+      'You have just read text that came from somewhere else, such as the web or an attachment (A, B), so this is checked with you to be safe')]);
     await edit;
 
     const outsideRead = setup(t, language);

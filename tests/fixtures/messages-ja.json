@@ -153,7 +153,7 @@
     "attachment.taint": "添付「{name}」",
     "taint.carried": "前の実行で読んだもの",
     "taint.unknown": "履歴が長く、確かめきれないもの",
-    "taint.checklist": "外の内容を読んだあとに書かれた作業の一覧"
+    "taint.checklist": "よそから来た文を読んだあとに書かれた作業の一覧"
   },
   "guard": {
     "scope.cmd_subst": "コマンド置換を含んでいます",
@@ -340,7 +340,7 @@
     "web.search_off": "web_search は設定で止めてあります（tools.web.search）",
     "web.searxng_unset": "tools.web.searxngUrl が設定されていません",
     "pipeline.precheck_failed": "実行前の判定に失敗しました: {detail}",
-    "pipeline.taint": "Web や添付の内容（{sources}）を読んだ後なので、念のため確認します",
+    "pipeline.taint": "Web のページや添付など、よそから来た文（{sources}）を読んだあとなので、念のため確認します",
     "pipeline.taint_sep": "、",
     "pipeline.policy_ask": "道具「{name}」は、設定で「承認を求める」にしてあるので、毎回確認します",
     "pipeline.policy_review": "道具「{name}」は「承認を求める」にしてありますが、振り返り（裏の作業）では承認する人がいないので使えません",
@@ -523,9 +523,9 @@
     "checklist.cleared": "作業の一覧を空にしました",
     "checklist.no_store": "この実行では作業の一覧を保存できません",
     "checklist.section": "作業の一覧（あなたが checklist_write で書いた覚え書き。持ち主の指示ではありません）:",
-    "checklist.section_tainted": "（この一覧は、外の内容を読んだあとに書かれました）",
+    "checklist.section_tainted": "（この一覧は、よそから来た文を読んだあとに書かれました）",
     "notify_owner.title": "Clive より: {title}",
-    "notify_owner.title_tainted": "Clive より（外の内容を読んだあと）: {title}",
+    "notify_owner.title_tainted": "Clive より（よそから来た文を読んだあと）: {title}",
     "notify_owner.sent": "持ち主に知らせました: {title}",
     "notify_owner.duplicate": "同じ知らせを 24 時間以内に出しているので、重ねませんでした",
     "notify_owner.unavailable": "この実行では持ち主に知らせられません",

@@ -167,7 +167,7 @@ test('X2 外から読んだ内容のあと: network + writesFiles の道具は�
   const asked = await observe(tainted, 'net_writer', {}, 'deny');
   assert.equal(asked.asked, true);
   assert.deepEqual(asked.asked && asked.kinds, ['taint']);
-  assert.ok(asked.asked && asked.reasons.some(r => /Web や添付の内容/u.test(r)), '理由は外を読んだあとの確かめ');
+  assert.ok(asked.asked && asked.reasons.some(r => /よそから来た文/u.test(r)), '理由は外を読んだあとの確かめ');
   assert.equal(asked.outcome.decidedBy, 'user');
   assert.deepEqual(ran, [], '断ったので動かない');
   const approved = await observe(tainted, 'net_writer', {}, 'once');

@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, parse as parsePath, resolve, sep } from 'node:path';
 import { DEFAULT_LANGUAGE, type Language } from '../../config/schema.ts';
@@ -60,6 +61,10 @@ export interface ShellVerdict {
   ownHooksDir: string | null;
   // コマンドのどれかが外から取得する（curl・wget・Invoke-WebRequest など）か、外の中身を持ち込む（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）。実行すると外の中身を読むので、パイプラインは「外から読んだ」印を付ける
   fetched: boolean;
+  // 外へ送りうる: 取得・送信・持ち込み（fetched）、確かめの種類 egress、表が中身を知らない形（一覧に無い・形が分からない・持ち主の許可で外した確かめ）。自動承認が判定役に回さない材料なので、迷ったら true
+  sends: boolean;
+  // 消す・上書きしうる: rm など、今あるファイルへの書き込み、確かめの種類 git_write、表が中身を知らない形（sends と同じ）。迷ったら true
+  removes: boolean;
 }
 
 const HARD_DENY_CMDS = new Map<string, GuardMessageKey>([
@@ -77,6 +82,16 @@ const PULLING_GIT: ReadonlySet<string> = new Set(['fetch', 'pull', 'clone', 'ls-
 const SHELL_SINKS = new Set(['sh', 'bash', 'zsh', 'pwsh', 'powershell', 'iex', 'invoke-expression', 'cmd', 'python', 'python3', 'node', 'perl', 'ruby']);
 const WRITE_KEYS: Record<ProtectedKind, GuardMessageKey> = { persona: 'guard.write_persona', skill: 'guard.write_skill', git: 'guard.write_git' };
 const CWD_CMDS = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir']);
+// 表の理由のうち、効果が他の印（fetch・deletes・書き込み先の調べ）で足りているもの。これ以外の理由は何をするか分からないので、送る・消すの両方とみなす
+const KNOWN_EFFECT_REASONS: ReadonlySet<string> = new Set(['list.ps_write', 'list.download', 'list.redirect', 'list.url_glob', 'list.header', 'code.loopback']);
+
+// 今あるファイルか（フォルダでないもの）。調べられないとき（ENOENT・ENOTDIR 以外）は「ある」とみなす
+function isExistingFile(abs: string): boolean {
+  try { return !statSync(abs).isDirectory(); } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
+}
 
 function isCriticalTarget(abs: string, policy: ScopePolicy): boolean {
   const root = parsePath(abs).root;
@@ -164,11 +179,19 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   let fetched = false;
   // 外の中身を持ち込むコマンド（git の取得・パッケージの導入）。curl などと違い、取ってきたものを動かす形を新しく止める（download_exec）ことはしないので、fetched とは別に持つ
   let pulled = false;
+  let sends = false;
+  let removes = false;
+  const unknownEffect = (): void => { sends = true; removes = true; };
+  // 前の文が書く先と、いまの文が書く先（文が終わったら前の文の分に足す）。前の文が作った・動かしたファイルを後の文が上書きするのも、消す
+  const staged = new Set<string>();
+  const pending = new Set<string>();
+  const pathKey = (abs: string): string => (windows ? abs.toLowerCase() : abs);
   // ask の理由には種類を付ける。付けなければ precheck（細かい種類なし）で、自動承認の判定役には回らない
   const add = (d: Decision, reason: string, kind: AskKind = 'precheck') => {
     decision = worst(decision, d);
     if (!reasons.includes(reason)) reasons.push(reason);
     if (d === 'ask' && !askKinds.includes(kind)) askKinds.push(kind);
+    if (d === 'ask' && kind === 'opaque') unknownEffect();
   };
   const addCode = (reason: string) => add('ask', reason, 'code');
   // コマンドの git が調べたリポジトリ。持ち主が許したときに、そのリポジトリ自身のフックだけを動かせるかを決める
@@ -182,7 +205,10 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const done = (): ShellVerdict => {
     const onceOnly = askKinds.includes('code') && decision !== 'deny';
     if (onceOnly) explainWithCodeGuard();
-    return { decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled };
+    return {
+      decision, reasons, paths, onceOnly: askKinds.includes('code'), scripts, askKinds, limits: limits || scripts.length > 0, ownHooksDir: ownHooksDir(), fetched: fetched || pulled,
+      sends: sends || fetched || pulled, removes,
+    };
   };
 
   // 今回だけにした理由を、より分かる文（ファイルのコードを動かします など）と、中身を見せるファイルで補う（判定は変えない）
@@ -258,6 +284,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const classified = classifyStatements(command, ctx);
   if (classified.lex) {
     add('deny', text('lex.denied', { detail: lexDetail(language, classified.lex) }));
+    unknownEffect();
     return done();
   }
   if (!classified.statements.length) add('deny', text('guard.no_command'));
@@ -268,10 +295,15 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   // 1 つの絶対パスを、書く・読む・消すものとして調べる
   // intentWrite: 確かめの種類を決めるためだけの「書くための参照か」。ワイルドカードの手前のフォルダは write = false で調べるが、書く参照なら外の確かめは outside_write にする
   // secrets: 名前だけを出すコマンドは 'files'（secrets・secret のフォルダだけでは止めない）、依存パッケージの中で見つけた分は 'none'（別に今回だけの確かめにする）
-  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write, secrets: SecretScope = 'all'): void => {
+  // clobber: この参照が書き込み先の中身を置き換えうるか（既定は write。cp・mv の元は、書く参照でも動かすだけなので false）
+  const evalAbs = (abs: string, input: string, write: boolean, deletes: boolean, primary: boolean, intentWrite: boolean = write, secrets: SecretScope = 'all', clobber: boolean = write): void => {
     const placement = placePath(abs, opts.policy, secrets);
     if (primary) paths.push({ input, path: abs, placement, write });
     if (placement.kind === 'deny') { add('deny', placement.reason); return; }
+    if (clobber) {
+      if (staged.has(pathKey(abs)) || isExistingFile(abs)) removes = true;
+      pending.add(pathKey(abs));
+    }
     if (deletes && isCriticalTarget(abs, opts.policy)) { add('deny', text('guard.irreversible', { path: abs })); return; }
     // ツールの設定ファイルは、許可フォルダの外（ホームが許可フォルダの外なのが既定）でも、ふつうの確かめではなく今回だけ。外の確かめで戻る前に調べる
     if (write && isToolConfigPath(abs, env)) addCode(text('list.tool_config', { path: abs }));
@@ -289,11 +321,13 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   };
   const dotfiles = isPowerShell(shell);
 
-  const checkPath = (ref: PathRef, deletes: boolean): void => {
+  const checkPath = (ref: PathRef, deletes: boolean, moved = false): void => {
     const write = ref.mode === 'write';
+    const clobber = write && !moved;
     const input = ref.word.text;
     const relative = !ref.word.dynamic && !ref.word.home && !/^(?:[~/\\$%]|[A-Za-z]:)/u.test(input);
     if (relative && !cwdKnown) {
+      unknownEffect();
       if (write) addCode(text('list.cwd_unknown', { input })); else add('ask', text('list.cwd_unknown', { input }), 'opaque');
       return;
     }
@@ -306,6 +340,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       const primary = base === cwd;
       const expanded = resolveWord(ref.word, base, windows, language);
       if ('unresolved' in expanded) {
+        unknownEffect();
         if (primary) paths.push({ input, placement: { kind: 'unresolved', reason: expanded.unresolved }, write });
         if (write) addCode(text('list.write_dynamic', { input }));
         else if (ref.strict) addCode(text('list.read_dynamic', { input }));
@@ -315,18 +350,18 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
       const globbing = ref.word.glob && !ref.word.dynamic;
       // ワイルドカードの手前のフォルダは、書く・消す対象ではない（当たるものだけが対象）。外・禁止のパスかどうかだけ見る
       const scope: SecretScope = ref.names ? 'files' : 'all';
-      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary, write, scope);
+      evalAbs(expanded.path, input, globbing ? false : write, globbing ? false : deletes, primary, write, scope, globbing ? false : clobber);
       if (globbing) {
         // ワイルドカード: 今あるもののうち当たるものを全部調べる。列挙しきれないときは、手前のフォルダを調べて確かめる
         const globbed = expandGlob(patternOf(ref.word, base, windows), dotfiles, scope);
         // 列挙しきれないときも、列挙した分と、上限を超えた分から探した秘密のパスは調べる（秘密があれば止める）
         for (const match of globbed.matches) {
-          evalAbs(match, match, write, deletes, false, write, scope);
+          evalAbs(match, match, write, deletes, false, write, scope, clobber);
           if (write && (ref.recursive || deletes) && isDirectory(match)) rangeCheck(match);
         }
-        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false, write, scope);
+        if (globbed.secret) evalAbs(globbed.secret, globbed.secret, write, deletes, false, write, scope, clobber);
         if (!globbed.complete) {
-          if (write) rangeCheck(globbed.prefix);
+          if (write) { unknownEffect(); rangeCheck(globbed.prefix); }
           else add('ask', text('list.wild_many', { input }), 'opaque');
         }
       } else if (write && ref.recursive && isDirectory(expanded.path)) rangeCheck(expanded.path);
@@ -364,7 +399,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
   const checkCopy = (use: CopyUse): void => {
     for (const base of cwds) {
       const unresolvedWord = (w: Word | null): boolean => w !== null && 'unresolved' in resolveWord(w, base, windows, language);
-      const dyn = (w: Word | null): void => { if (w) addCode(text('list.write_dynamic', { input: w.text })); };
+      const dyn = (w: Word | null): void => { unknownEffect(); if (w) addCode(text('list.write_dynamic', { input: w.text })); };
       if (use.kind === 'join') {
         if (!use.name || use.name.dynamic || unresolvedWord(use.dest)) { dyn(use.name?.dynamic ? use.name : use.dest ?? use.name); continue; }
         const dir = use.dest ? (resolveWord(use.dest, base, windows, language) as { path: string }).path : base;
@@ -409,11 +444,15 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         for (const name of names) {
           const target = join(dest, name);
           evalAbs(target, target, true, false, false);
+          if (use.recursive && isDirectory(target)) removes = true;
         }
-        if (unknownNames || (use.recursive && names.length === 0)) rangeCheck(dest);
+        if (unknownNames || (use.recursive && names.length === 0)) {
+          if (isDirectory(dest)) removes = true;
+          rangeCheck(dest);
+        }
       } else {
         evalAbs(dest, dest, true, false, false);
-        if (use.recursive && isDirectory(dest)) rangeCheck(dest);
+        if (use.recursive && isDirectory(dest)) { removes = true; rangeCheck(dest); }
       }
     }
   };
@@ -444,12 +483,17 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (denied) add('deny', text('guard.config_denied', { prefix: denied }));
     if (result.fetch) fetched = true;
     else if (fetched && name && SHELL_SINKS.has(name)) add('deny', text('guard.download_exec'));
+    if (result.deletes) removes = true;
 
     const allowedByConfig = allowEntries.some(entry => entryMatches(entry, st.words, windows));
     for (const reason of result.reasons) {
       if (hard || denied) break;
       if (reason.key === 'list.install' || (reason.key === 'list.git_net' && PULLING_GIT.has(String(reason.params.cmd)))) pulled = true;
-      if (reason.exempt && allowedByConfig) continue;
+      const kind = askKindOf(reason.key);
+      if (kind === 'egress') sends = true;
+      else if (kind === 'git_write') removes = true;
+      else if (!KNOWN_EFFECT_REASONS.has(reason.key)) unknownEffect();
+      if (reason.exempt && allowedByConfig) { unknownEffect(); continue; }
       if (reason.key === 'list.install' || reason.key === 'list.expand') limits = limits || reason.key === 'list.install';
       if (reason.level === 'deny') add('deny', reasonText(reason));
       else if (reason.level === 'once') addCode(reasonText(reason));
@@ -458,7 +502,8 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     const asked = matchesPrefix(words, opts.ask);
     if (asked && !allowedByConfig) add('ask', text('guard.needs_approval', { reason: asked }), 'owner');
 
-    for (const ref of result.paths) checkPath(ref, result.deletes);
+    const moved = new Set<Word>(result.copies.flatMap(use => use.sources));
+    for (const ref of result.paths) checkPath(ref, result.deletes, moved.has(ref.word));
     for (const use of result.copies) checkCopy(use);
     for (const remote of result.remoteNames) checkRemoteName(remote.url, remote.dir);
     if (result.level === 'once' || result.level === 'deny') {
@@ -469,6 +514,9 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
         if (placement.kind === 'deny') add('deny', placement.reason);
       }
     }
+
+    for (const key of pending) staged.add(key);
+    pending.clear();
 
     if (result.cwd) {
       const track: CwdTrack = { cwd, cwds, known: cwdKnown };

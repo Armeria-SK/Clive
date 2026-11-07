@@ -415,7 +415,7 @@ test('外から読んだ内容のあと（taint）は、判定役に回さない
   const tainted: ToolContext = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
   const seen = await askedKinds(s, 'shell_run', { command: s.readOutside }, tainted);
   assert.deepEqual(seen.kinds, ['outside_read', 'taint'], '外を読むだけの確かめに、taint が重なる');
-  assert.ok(seen.reasons.some(r => /Web や添付の内容/u.test(r)), 'taint の理由が札に載る');
+  assert.ok(seen.reasons.some(r => /よそから来た文/u.test(r)), 'taint の理由が札に載る');
   assert.equal(s.prompts.length, 0);
   // taint だけの確かめも回さない
   assert.deepEqual((await askedKinds(s, 'file_write', { path: 'a.md', content: 'x' }, tainted)).kinds, ['taint']);

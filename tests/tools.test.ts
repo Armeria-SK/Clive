@@ -484,7 +484,7 @@ test('taint: Web や添付の内容を読んだ後は、書き込みも承認制
   const ctx = { ...s.ctx, taint: { tainted: true, sources: ['web_fetch'] } };
   const pending = s.call('file_write', { path: 'a.md', content: 'x' }, ctx);
   const request = await decideNext(s, 'deny');
-  assert.match(request.reasons.join(), /Web や添付/u);
+  assert.match(request.reasons.join(), /よそから来た文/u);
   assert.equal((await pending).output.isError, true);
 });
 

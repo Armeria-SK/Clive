@@ -86,7 +86,7 @@ test('taintedなら汚染の文が入る', () => {
     tainted: true,
     updatedAt: 1,
   }, 'ja');
-  assert.match(section, /外の内容を読んだあとに書かれました/);
+  assert.match(section, /よそから来た文を読んだあとに書かれました/);
 });
 
 test('英語の文に日本語の文字が入らない', () => {
