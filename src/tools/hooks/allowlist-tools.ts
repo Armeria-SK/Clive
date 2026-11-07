@@ -344,6 +344,7 @@ function archiveFile(value: Word, acc: Acc, write: boolean, ctx: MatchCtx): void
   checkValue(write ? 'path-w' : 'path-r', value, acc, 'tar', '-f', ctx);
 }
 const ABSOLUTE = /^(?:[A-Za-z]:)?[\\/]/u;
+const TAR_BUNDLE = /^[ctxvzjJ]*[fC]$/u;
 const joinPath = (dir: string, name: string): string => `${dir.replace(/[\\/]+$/u, '')}/${name}`;
 register(['tar'], (words, acc, ctx) => {
   const args = words.slice(1);
@@ -361,7 +362,10 @@ register(['tar'], (words, acc, ctx) => {
     const w = args[i]!;
     let text = w.text;
     const bundle = i === 0 && literal(w) && !text.startsWith('-') && /^[A-Za-z]+$/u.test(text);
-    if (bundle) text = `-${text}`;
+    if (bundle) {
+      if (!TAR_BUNDLE.test(text)) formOnce(acc, 'tar', text, false);
+      text = `-${text}`;
+    }
     if (!bundle && (!literal(w) || !text.startsWith('-') || text === '-')) { pos.push(w); baseOf.set(w, cdir); continue; }
     if (text.startsWith('--')) {
       if (/^--exclude=/u.test(text)) continue;

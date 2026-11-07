@@ -629,3 +629,60 @@ test('穴 3 の回帰: 普通のループ変数は確かめなし。ほかの変
   });
   assert.deepEqual(wrong, []);
 });
+
+// 穴 5: tar の最初の引数がダッシュなしの文字の束（tar cfC …）のとき、本物の tar は値を取る文字（f・C・T …）に、あとの引数を文字の順に 1 つずつ結び付ける。
+// 見張りは束を -cfC と同じに読んで、f の後ろの残りを書き込み先と取っていた。値を取る文字が 1 つでも、f の後ろに別の文字があれば同じ（cfz・cfv・cfP）。
+// 受け入れるのは「f か C が 1 つだけ、最後の文字で、ほかが c t x v z j J」の束だけ。それ以外は読み違えうるので、持ち主の許可でも外せない今回だけの確かめにする
+const TAR_SKEWED = [
+  'tar cfC SOUL.md sub b.txt', 'tar cCf sub SOUL.md b.txt', 'tar cfT SOUL.md list.txt',
+  'tar cfC RO/x.tar sub b.txt', 'tar cCf sub RO/x.tar b.txt', 'tar cfT RO/x.tar list.txt', 'tar cfz RO/x.tar sub', 'tar cfv RO/x.tar sub', 'tar cfP RO/x.tar sub',
+  'tar fc out.tar', 'tar cpf out.tar sub', 'tar c sub', 'tar cff a.tar b.tar', 'tar tfC a.tar sub', 'tar cvfz RO/x.tar sub',
+] as const;
+
+test('穴 5: ダッシュなしの tar の束は、f か C が 1 つだけ最後にある形以外なら毎回の確かめ。持ち主の許可の tar でも外せない', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  for (const row of TAR_SKEWED) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    for (const shell of ['bash', 'powershell'] as const) {
+      for (const allow of [undefined, ['tar']]) {
+        const v = f.guard(command, shell, allow);
+        if (!(v.decision === 'ask' && v.onceOnly && v.sends && v.removes)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${row} → ${whyOf(v)}`);
+      }
+    }
+    const bundleReasons = classify(command).results.flatMap(r => r.reasons).filter(r => r.key === 'list.form' && r.level === 'once' && !r.exempt);
+    if (bundleReasons.length === 0) wrong.push(`${row}: 外せない list.form が付いていない`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5: 持ち主の許可の tar が外すのは、束とは別の「一覧に無い引数」の確かめだけ（同じ許可で束の読み違えは外れない）', t => {
+  const f = holeFixture(t);
+  assert.equal(f.guard('tar -cf out.tar -p b.txt').decision, 'ask', '前提: 一覧に無い -p は確かめ');
+  assert.equal(f.guard('tar -cf out.tar -p b.txt', 'bash', ['tar']).decision, 'allow', '前提: 持ち主が tar を許可していれば、-p の確かめは外れる');
+  const bundle = classify('tar cpf out.tar sub').results[0]!.reasons;
+  assert.ok(bundle.some(r => r.key === 'list.flag' && r.exempt), '束の p は、今までどおり外せる確かめ');
+  assert.ok(bundle.some(r => r.key === 'list.form' && !r.exempt), 'それとは別に、束の読み違えは外せない確かめ');
+  assert.equal(f.guard('tar cpf out.tar sub', 'bash', ['tar']).decision, 'ask');
+});
+
+test('穴 5 の回帰: 受け入れる束（f か C が 1 つ最後・ほかは c t x v z j J）は、ダッシュ付きと同じに読む', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly [string, 'allow' | 'ask']> = [
+    ['tar cf out.tar b.txt', 'allow'], ['tar czf out.tgz sub', 'allow'], ['tar cvzf out.tgz sub', 'allow'], ['tar cJf out.txz sub', 'allow'], ['tar cjf out.tbz sub', 'allow'],
+    ['tar tf a.tar', 'allow'], ['tar tvf a.tar', 'allow'], ['tar tzf a.tgz', 'allow'], ['tar cC sub b.txt', 'allow'], ['tar tC sub', 'allow'],
+    ['tar -cf out.tar b.txt', 'allow'], ['tar -czvf out.tgz sub', 'allow'], ['tar -C sub -cf out.tar b.txt', 'allow'],
+    ['tar xf a.tar', 'ask'], ['tar xzf a.tgz', 'ask'], ['tar xvf a.tar', 'ask'], ['tar -cf SOUL.md b.txt', 'ask'], ['tar cf SOUL.md b.txt', 'ask'],
+  ];
+  const wrong = rows.flatMap(([command, want]) => {
+    const v = f.guard(command);
+    return v.decision === want ? [] : [`${command} → ${whyOf(v)} (want ${want})`];
+  });
+  assert.deepEqual(wrong, []);
+  // 束と、その束にダッシュを付けた形は、理由もパスも同じ
+  const shape = (command: string) => classify(command).results.map(r => ({ reasons: r.reasons.map(x => `${x.level}:${x.key}:${x.exempt}`), paths: r.paths.map(p => `${p.word.text}:${p.mode}`) }));
+  for (const [bundle, rest] of [['cf', 'out.tar sub'], ['czf', 'out.tgz sub'], ['cvzf', 'out.tgz sub'], ['cJf', 'out.txz sub'], ['tf', 'a.tar'], ['tvf', 'a.tar'], ['xf', 'a.tar'], ['xzf', 'a.tgz'], ['cC', 'sub b.txt'], ['tC', 'sub']] as const) {
+    assert.deepEqual(shape(`tar ${bundle} ${rest}`), shape(`tar -${bundle} ${rest}`), `tar ${bundle} ${rest}`);
+  }
+  assert.deepEqual(classify('tar cf out.tar b.txt').results[0]!.paths.slice(0, 1).map(p => [p.word.text, p.mode]), [['out.tar', 'write']], '書き込み先は out.tar');
+});
