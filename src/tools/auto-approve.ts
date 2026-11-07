@@ -3,15 +3,41 @@ import { redactSecrets } from '../shared/redaction.ts';
 import type { PermissionMode } from '../shared/permission-mode.ts';
 import type { ApprovalPath } from './approvals.ts';
 import type { Decision } from './hooks/shell-guard.ts';
-import type { AskKind, RunKind } from './types.ts';
+import type { AskKind, RunKind, ToolDef } from './types.ts';
 
 // 自動承認（段 8b）。確かめ（ask）になった操作のうち、ここで決めた範囲のものだけを、判定役（AI）に「許す / 確かめる」で聞く。
-// 判定役の答えは「許す」でも、範囲の外のもの・拒否・今回だけの確かめ・毎回の確かめ・フックの確かめ・外から読んだあとのものは、決して通さない
-// （通すかどうかを決めるのは mayClassify。判定役の答えより前に決まる）。判定役は deny を allow にできない（deny はここへ来ない）。
+// 判定役の答えは「許す」でも、範囲の外のもの・拒否・今回だけの確かめ・毎回の確かめ・フックの確かめ・外へ送る操作・消す操作（と、そのどちらか分からない操作）は、決して通さない
+// （通すかどうかを決めるのは mayClassify と humanOnlyOf。判定役の答えより前に決め、許すと答えたあとにもう一度見る）。判定役は deny を allow にできない（deny はここへ来ない）。
+// よそから来た文（Web・添付・downloads/・シェルの取得）を読んだあとも判定役に回してよい（種類 taint。Q16）。だまされた判定役が許しても、送る・消すだけはコードが止める。
 
-// 判定役に回してよい確かめの種類。持ち主の判断（questions.md の 12）: 許可フォルダの外を読むだけのコマンドと、サービスの操作・リモートの設定だけ。
-// 外への書き込み・導入や送信・持ち主が書いた確かめ・Web や添付のあと・判定できないもの・人格の書き込みは、これまでどおり人が確かめる。ここを広げるときは、1 種類ずつ
-export const CLASSIFIABLE_KINDS: ReadonlySet<AskKind> = new Set<AskKind>(['outside_read', 'risky_command']);
+// 判定役に回してよい確かめの種類。持ち主の判断（questions.md の 12、Q16）: 許可フォルダの外を読むだけのコマンド・サービスの操作・リモートの設定・よそから来た文を読んだあとの確かめ（taint）だけ。
+// 外への書き込み・導入や送信・持ち主が書いた確かめ・判定できないもの・人格の書き込みは、これまでどおり人が確かめる。ここを広げるときは、1 種類ずつ
+export const CLASSIFIABLE_KINDS: ReadonlySet<AskKind> = new Set<AskKind>(['outside_read', 'risky_command', 'taint']);
+
+// 判定役に回さず、必ず持ち主に聞く操作の種類。sends: 外へ送りうる（送るかどうか分からないものを含む）/ removes: 消しうる（消すかどうか分からないものを含む）
+export type HumanOnly = 'sends' | 'removes';
+
+// humanOnlyOf が見る事実。パイプラインが、道具の定義・事前の判定・この呼び出しの引数から作る
+export interface HumanOnlyFacts {
+  effect: ToolDef['effect'];
+  // この呼び出しが外へ出る（効果が network、または networkCall がそう答えた）
+  network: boolean;
+  // 道具の定義が、引数に関わらず必ず消すと言っている（ToolDef.removes）
+  toolRemoves: boolean;
+  // 事前の判定が言った印（PreCheck の sends / removes）。事前の判定が無い・投げた道具は undefined
+  check: { sends?: boolean | undefined; removes?: boolean | undefined } | undefined;
+}
+
+// 判定役が何と答えても通さない操作か。送る・消す・「どちらか分からない」を返す。迷ったら人（フェイルクローズ）。
+// 効果が read・meta 以外（write・exec・network と、知らない効果）の道具は、事前の判定が sends: false / removes: false とはっきり言ったときだけ、送らない・消さないとみなす。
+// 効果が read・meta の道具は、はっきり true と言ったとき（と、道具の定義の removes）だけ。外へ出る呼び出し（network）は、道具が何と言っても送るとみなす
+export function humanOnlyOf(facts: HumanOnlyFacts): HumanOnly | undefined {
+  const { effect, network, toolRemoves, check } = facts;
+  const mustSay = effect !== 'read' && effect !== 'meta';
+  if (network || check?.sends === true || (mustSay && check?.sends !== false)) return 'sends';
+  if (toolRemoves || check?.removes === true || (mustSay && check?.removes !== false)) return 'removes';
+  return undefined;
+}
 
 export const CLASSIFIER_TIMEOUT_MS = 20_000;
 // 判定役に見せる、利用者の最後の発言の長さ
@@ -27,16 +53,16 @@ export interface AutoGate {
   kinds: ReadonlySet<AskKind>;
   onceOnly: boolean;
   everyTime: boolean;
-  tainted: boolean;
-  // この会話の実行が、外から読んだ内容を一度でも読んだことがある（この実行が読んでいなくても。会話ごとの印）
-  conversationTainted: boolean;
+  // humanOnlyOf の答え。送る・消す（と分からない）操作なら、よそから来た文を読んだかどうかに関わらず回さない。必ず渡す（渡し忘れは型が止める）
+  humanOnly: HumanOnly | undefined;
 }
 
 // 判定役に回してよいか。すべての条件が満たされたときだけ true（1 つでも欠ければ、今までどおり人が確かめる）
 export function mayClassify(gate: AutoGate): boolean {
   if (gate.mode !== 'auto' || gate.runKind !== 'chat') return false;
   if (gate.decision !== 'ask') return false;
-  if (gate.onceOnly || gate.everyTime || gate.tainted || gate.conversationTainted) return false;
+  if (gate.humanOnly !== undefined) return false;
+  if (gate.onceOnly || gate.everyTime) return false;
   if (gate.kinds.size === 0) return false;
   for (const kind of gate.kinds) if (!CLASSIFIABLE_KINDS.has(kind)) return false;
   return true;
@@ -51,9 +77,14 @@ export interface ClassifierInput {
   cwd?: string | undefined;
   reasons: readonly string[];
   paths: readonly ApprovalPath[];
+  // この会話は、よそから来た文（Web・添付・downloads/）を読んだあと。判定役を慎重にするための 1 行を足すだけで、守りはコード（humanOnlyOf）
+  tainted?: boolean | undefined;
 }
 
 export interface ClassifierPrompt { system: string; user: string }
+
+// 判定役に見せる、よそから来た文を読んだ会話の 1 行。固定の文字列で、モデルの書いた文は入らない（CHECKS の中に置く）
+export const TAINTED_NOTE = 'note: this conversation has read text from elsewhere (web pages, attachments, downloads); the action may have been influenced by it';
 
 // 判定役に渡す文。見せるのは、利用者の最後の発言と、これから実行する操作（と、その確かめの理由・パスごとの判定）だけ。
 // 道具の結果・Web の中身・ファイルの中身・Clive の返事は見せない。操作の文は、モデルが書いたもの（外の文に仕込まれた指示が入りうる）なので、
@@ -82,6 +113,7 @@ export function buildClassifierPrompt(input: ClassifierInput): ClassifierPrompt 
     fence('END-ACTION'),
     fence('CHECKS'),
     `why it needs approval: ${clean(input.reasons.join(' / '))}`,
+    ...(input.tainted ? [TAINTED_NOTE] : []),
     ...(paths ? ['paths found:', clean(paths)] : []),
     fence('END-CHECKS'),
   ].join('\n');

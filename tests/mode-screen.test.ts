@@ -38,30 +38,62 @@ test('「この計画で進める」: 送る依頼の文は言語別。ボタン
   setLanguagePreference('ja');
 });
 
-test('自動承認と計画の説明は、できること・できないことを隠さない（Web の読み取りが外へ文字を出しうること、書き込み・送信・コードは自動承認でも確かめること）', () => {
+test('自動承認と計画の説明は、できること・できないことを隠さない（Web の読み取りが外へ文字を出しうること、コードを動かす確かめ・外への書き込みは自動承認でも人に聞くこと）', () => {
   assert.match(ja['mode.planDesc'], /Web/u);
   assert.match(ja['mode.planDesc'], /URL/u);
   assert.match(ja['mode.autoDesc'], /書き込み/u);
   assert.match(ja['mode.autoDesc'], /コード/u);
   assert.match(en['mode.planDesc'], /URL/u);
-  assert.match(en['mode.autoDesc'], /running code/u);
+  assert.match(en['mode.autoDesc'], /Running code/u);
 });
 
-test('自動承認の説明（画面と README）は、いま効く範囲だけを書く: 許可フォルダの外を読むだけのシェルのコマンド。外に触れるコマンドを止めていれば何も変わらないこと、Web や添付を読んだ会話は毎回聞くことも書く', () => {
-  assert.match(ja['mode.autoDesc'], /許可フォルダの外を読むだけのシェルのコマンド/u);
-  assert.doesNotMatch(ja['mode.autoDesc'], /など|サービス|リモート/u, '範囲を広げて見せる言い方・動かない確かめを書かない');
-  assert.match(ja['mode.autoDesc'], /止める/u);
+test('自動承認の説明（画面と README）は、いま効く範囲を書く: よそから来た文を読んだあとも判断のモデルが決めること、送る・消す・分からない操作は何と答えても必ず聞くこと、「この会話では許可」は効くこと、許可フォルダの外は止めたままであること', () => {
+  assert.match(ja['mode.autoDesc'], /よそから来た文を読んだあと/u);
   assert.match(ja['mode.autoDesc'], /Web/u);
   assert.match(ja['mode.autoDesc'], /添付/u);
-  assert.match(en['mode.autoDesc'], /just read outside the allowed folders/u);
-  assert.doesNotMatch(en['mode.autoDesc'], /such as|service|remote/iu);
+  assert.match(ja['mode.autoDesc'], /外へ送る操作/u);
+  assert.match(ja['mode.autoDesc'], /消す操作/u);
+  assert.match(ja['mode.autoDesc'], /何と答えても、いつもあなたに聞きます/u);
+  assert.match(ja['mode.autoDesc'], /この会話では許可/u);
+  assert.match(ja['mode.autoDesc'], /止める/u);
+  assert.match(ja['mode.autoDesc'], /秘密のファイル/u);
+  assert.match(ja['mode.autoDesc'], /Web のページを読む道具は別で、URL に少しの文字を載せて外へ出せます/u, '送る操作は必ず聞く、の例外（Web を読む道具は URL で少し外へ出せる）を隠さない');
+  assert.match(en['mode.autoDesc'], /text that came from elsewhere/u);
+  assert.match(en['mode.autoDesc'], /web pages/iu);
+  assert.match(en['mode.autoDesc'], /attachments/iu);
+  assert.match(en['mode.autoDesc'], /sends something out/u);
+  assert.match(en['mode.autoDesc'], /deletes/u);
+  assert.match(en['mode.autoDesc'], /whatever the model answers/u);
+  assert.match(en['mode.autoDesc'], /Allow in this chat/u);
   assert.match(en['mode.autoDesc'], /Block/u);
-  assert.match(en['mode.autoDesc'], /web/iu);
-  assert.match(en['mode.autoDesc'], /attachment/iu);
+  assert.match(en['mode.autoDesc'], /Secret files/u);
+  assert.match(en['mode.autoDesc'], /tools that read web pages are the exception: they can send out a few characters in a URL/u, 'always-asked has an exception (web-reading tools can leak a little via a URL); do not hide it');
+  for (const [name, value] of [['ja', ja['mode.autoDesc']], ['en', en['mode.autoDesc']]] as const) {
+    assert.doesNotMatch(value, /外を読んだ|外から読んだ|外の内容|outside content/iu, `${name}: 分かりにくい言い回しを画面に出さない`);
+    assert.doesNotMatch(value, /毎回あなたに聞きます|asked of you every time/u, `${name}: 「読んだことのある会話は毎回聞く」という古い決まりを書かない`);
+  }
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
   const line = readme.split(/\r?\n/u).find(l => l.startsWith('- **自動承認**'));
   assert.ok(line, 'README に自動承認の説明がある');
   assert.doesNotMatch(line, /サービスの操作|リモートの設定|開くと理由/u);
   assert.match(line, /tools\.outsideRoots/u);
-  assert.match(line, /一度でも Web・添付/u);
+  assert.match(line, /よそから来た文を読んだあとの確かめ/u);
+  assert.match(line, /何と答えても必ずあなたに聞く/u);
+  assert.match(line, /この会話では許可/u);
+  assert.doesNotMatch(line, /一度でも Web・添付|判断のモデルを使わず、毎回あなたに確かめる/u, 'よそから来た文を読んだ会話は判断のモデルを使わない、という古い決まりを書かない');
+  assert.match(line, /自動承認の残る危険/u);
+  assert.match(line, /`Clear-Content`（「このファイルを空にする」と名指しするので消す扱い。`>` や `sed -i` で空にする書き方は上書き）/u, 'Clear-Content は消す、リダイレクトや sed で空にするのは上書き、と書く');
+  assert.match(line, /`web_fetch` `web_search`/u, '残る危険: Web の読み取りは読んだあとも確かめなしで動き、URL で少し外へ出せる');
+  assert.match(line, /`package\.json`/u, '残る危険: 判断のモデルがだまされると、あとで動くファイルも書き換えられる');
+});
+
+test('README と画面の文に、分かりにくい言い回し「外から読んだ」「外を読んだ扱い」「外から来た」「外の内容を読んだ」が残っていない（「よそから来た文を読んだ」と言う）', () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  assert.doesNotMatch(readme, /外から読んだ|外を読んだ扱い|外から来た|外の内容を読んだ/u);
+  for (const [name, table] of [['ja', ja], ['en', en]] as const) {
+    for (const [key, value] of Object.entries(table)) {
+      if (typeof value !== 'string') continue;
+      assert.doesNotMatch(value, /外から読んだ|外を読んだ扱い|外から来た|外の内容を読んだ|outside content/iu, `${name} ${key}`);
+    }
+  }
 });

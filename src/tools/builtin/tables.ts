@@ -78,7 +78,7 @@ export const tableWrite: ToolDef<{ path: string; rows: Array<Array<string | numb
     if (check.decision === 'deny') return check;
     if (!formatOf(abs)) return { decision: 'deny', reasons: [toolText(language, 'table.bad_ext', { path: input.path })] };
     const problem = sizeProblem(input.rows, language);
-    return problem ? { decision: 'deny', reasons: [problem] } : check;
+    return problem ? { decision: 'deny', reasons: [problem] } : { ...check, sends: false, removes: false };
   },
   summarize: (input, language) => ({
     title: toolText(language, 'summary.table_write', { path: input.path, rows: input.rows.length }),

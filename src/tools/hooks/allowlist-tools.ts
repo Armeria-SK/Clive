@@ -584,6 +584,9 @@ function langInfo(name: string, words: Word[], acc: Acc): void {
     ? literal(args[0]) && INSTALL_SUBS.has(args[0]!.text)
     : args.some(w => literal(w) && INSTALL_SUBS.has(w.text));
   if (PACKAGE_TOOLS.includes(name) && installing) { acc.add('once', 'list.install', { cmd: name }, false); return; }
+  // npm と pip は、ls・list・freeze・--version のようにローカルしか見ない形でも、外へ送りうるものに数える（sends だけ。fetch は立てないので、動かしたあとの印は付かず、シェルで動かす形を止めることもない）。
+  // レジストリ・インデックスの宛先は作業フォルダの設定（.npmrc・pip.conf・pip.ini など）から読まれ、だまされた判定役がモデルにそれを書かせていたら、どの形でもその宛先へ問い合わせが出うる。形からは設定の中身が分からないので、形では分けない
+  if ((name === 'npm' || /^pip3?$/u.test(name)) && args.length > 0) acc.sends = true;
   const info = INFO_FORMS.find(([re]) => re.test(name));
   if (info && exactForm(words, info[1])) return;
   if (name === 'npm' && exactForm(words, [['--version'], ['-v']])) return;

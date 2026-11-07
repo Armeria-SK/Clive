@@ -118,12 +118,12 @@ test('X2 計画モード（パイプライン）: 効果 network + writesFiles �
   assert.deepEqual(ranNormal, ['net_writer']);
 });
 
-test('X2 計画モード（途中でモードが替わる）: 自動承認の判定役を待つあいだに計画モードに替わったら、network + writesFiles の道具は札にもせず断る。writesFiles の無い network の道具は今までどおり札になる', async t => {
+test('X2 計画モード（途中でモードが替わる）: 自動承認の判定役を待つあいだに計画モードに替わったら、writesFiles の道具は札にもせず断る。writesFiles の無い道具は今までどおり札になる。外へ出る道具（network）は、そもそも判定役に回らない', async t => {
   const preCheck: ToolDef['preCheck'] = () => ({ decision: 'ask', reasons: ['フォルダの外を読みます'], askKinds: ['outside_read'] });
   const ran: string[] = [];
   let classified = 0;
-  // 判定役が答えるまでのあいだに、持ち主が計画モードに替える
-  const writerSide = setup(t, [tool(ran, 'net_writer', 'network', { writesFiles: true, preCheck })], {
+  // 判定役が答えるまでのあいだに、持ち主が計画モードに替える（外へ出る道具は送る側なので判定役に回らないため、読む道具で確かめる）
+  const writerSide = setup(t, [tool(ran, 'net_writer', 'read', { writesFiles: true, preCheck })], {
     mode: 'auto', classify: () => { classified++; writerSide.state.mode = 'plan'; return ALLOW; },
   });
   const writer = await observe(writerSide, 'net_writer', {});
@@ -134,12 +134,21 @@ test('X2 計画モード（途中でモードが替わる）: 自動承認の判
   assert.deepEqual(ran, []);
   assert.equal(writerSide.approvals.pending().length, 0);
 
-  const plainSide = setup(t, [tool(ran, 'net_plain', 'network', { preCheck })], {
+  const plainSide = setup(t, [tool(ran, 'net_plain', 'read', { preCheck })], {
     mode: 'auto', classify: () => { plainSide.state.mode = 'plan'; return ALLOW; },
   });
   const plain = await observe(plainSide, 'net_plain', {});
-  assert.equal(plain.asked, true, '比べる基準: 計画モードで使える network の道具は、断らず、いつもの札になる（自動では通さない）');
+  assert.equal(plain.asked, true, '比べる基準: 計画モードで使える道具は、断らず、いつもの札になる（自動では通さない）');
   assert.deepEqual(plain.asked && plain.kinds, ['outside_read']);
+  assert.deepEqual(ran, []);
+
+  // 効果が network の道具は外へ出る（送る側）ので、自動承認でも判定役に回さず、いつもの札
+  let networkClassified = 0;
+  const netSide = setup(t, [tool(ran, 'net_real', 'network', { preCheck })], { mode: 'auto', classify: () => { networkClassified++; return ALLOW; } });
+  const net = await observe(netSide, 'net_real', {});
+  assert.equal(net.asked, true);
+  assert.deepEqual(net.asked && net.kinds, ['outside_read']);
+  assert.equal(networkClassified, 0, '効果が network の道具は、判定役を呼ばない');
   assert.deepEqual(ran, []);
 });
 
@@ -167,7 +176,7 @@ test('X2 外から読んだ内容のあと: network + writesFiles の道具は�
   const asked = await observe(tainted, 'net_writer', {}, 'deny');
   assert.equal(asked.asked, true);
   assert.deepEqual(asked.asked && asked.kinds, ['taint']);
-  assert.ok(asked.asked && asked.reasons.some(r => /Web や添付の内容/u.test(r)), '理由は外を読んだあとの確かめ');
+  assert.ok(asked.asked && asked.reasons.some(r => /よそから来た文/u.test(r)), '理由は外を読んだあとの確かめ');
   assert.equal(asked.outcome.decidedBy, 'user');
   assert.deepEqual(ran, [], '断ったので動かない');
   const approved = await observe(tainted, 'net_writer', {}, 'once');

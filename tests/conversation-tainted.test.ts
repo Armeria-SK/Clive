@@ -12,7 +12,7 @@ function insertOldConversation(db: ReturnType<typeof openDatabase>, id: string, 
   db.prepare('INSERT INTO conversations (id, kind, title, created_at, last_message_at) VALUES (?, ?, ?, 1, 1)').run(id, kind, id);
 }
 
-// 段 8b（審査の直し）: 会話ごとの「外から読んだことがある」印（自動承認の判定役を、その会話では使わない）と、会話ごとの「自動承認で外を読んだことがある」印（その会話のシェルのコマンドと通信は、ずっと毎回確かめる）
+// 段 8b（審査の直し）: 会話ごとの「外から読んだことがある」印（Q16 のあとは、判定役を止めず、判定役に見せる文の 1 行だけに使う。送る・消すを止めるのは humanOnlyOf）と、会話ごとの「自動承認で外を読んだことがある」印（その会話のシェルのコマンドと通信は、ずっと毎回確かめる）
 
 test('マイグレーション 12: conversations に ever_tainted、engine_runs に auto_read_outside が足される。前に外から読んだ実行のある会話は 1 になり、ほかは 0', t => {
   assert.ok(MIGRATIONS.length >= 12);

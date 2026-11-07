@@ -194,13 +194,15 @@ const ja = {
   'web.searxng_unset': 'tools.web.searxngUrl が設定されていません',
 
   'pipeline.precheck_failed': '実行前の判定に失敗しました: {detail}',
-  'pipeline.taint': 'Web や添付の内容（{sources}）を読んだ後なので、念のため確認します',
+  'pipeline.taint': 'Web のページや添付など、よそから来た文（{sources}）を読んだあとなので、念のため確認します',
   'pipeline.taint_sep': '、',
   'pipeline.policy_ask': '道具「{name}」は、設定で「承認を求める」にしてあるので、毎回確認します',
   'pipeline.policy_review': '道具「{name}」は「承認を求める」にしてありますが、振り返り（裏の作業）では承認する人がいないので使えません',
   'pipeline.auto_no_reason': '理由は書かれていません',
   'pipeline.auto_asked': '自動承認の判定役が「確かめる」と判断しました: {reason}',
   'pipeline.auto_failed': '自動承認の判定役が答えられなかったので、確認します',
+  'pipeline.auto_human_sends': '送信なので（送るかどうか分からない操作も含みます）、自動では通さず確認します',
+  'pipeline.auto_human_removes': '削除なので（消すかどうか分からない操作も含みます）、自動では通さず確認します',
   'pipeline.auto_egress': '自動承認で許可フォルダの外を読んだ会話なので、この会話のコマンドの実行と外への送信は毎回確認します（あとの返事でも、モードを戻しても変わりません）',
 
   'hook.failed': 'フック「{name}」が失敗しました（{reason}）',
@@ -405,13 +407,15 @@ const en: Record<keyof typeof ja, string> = {
   'web.searxng_unset': 'tools.web.searxngUrl is not set',
 
   'pipeline.precheck_failed': 'The check before running failed: {detail}',
-  'pipeline.taint': 'You have just read content from the web or an attachment ({sources}), so this is checked with you to be safe',
+  'pipeline.taint': 'You have just read text that came from somewhere else, such as the web or an attachment ({sources}), so this is checked with you to be safe',
   'pipeline.taint_sep': ', ',
   'pipeline.policy_ask': 'The tool "{name}" is set to "ask for approval" in the settings, so it is checked with you every time',
   'pipeline.policy_review': 'The tool "{name}" is set to "ask for approval", but a review (background work) has nobody to approve it, so it cannot be used',
   'pipeline.auto_no_reason': 'No reason was given',
   'pipeline.auto_asked': 'The auto-approve checker decided this needs your approval: {reason}',
   'pipeline.auto_failed': 'The auto-approve checker could not give an answer, so this is checked with you',
+  'pipeline.auto_human_sends': 'This sends something out (or may send something out), so it is never auto-approved and is checked with you',
+  'pipeline.auto_human_removes': 'This deletes something (or may delete something), so it is never auto-approved and is checked with you',
   'pipeline.auto_egress': 'Auto-approve has read something outside the allowed folders in this conversation, so every command and anything sent out is checked with you from now on (later replies and other modes included)',
 
   'hook.failed': 'The hook "{name}" failed ({reason})',

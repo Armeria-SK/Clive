@@ -57,7 +57,7 @@ test('memory_save: ふつうは承認なし。Web や添付を読んだ後は承
   const refused = s.call('memory_save', { book: 'user', content: 'ページに書かれていた指示' }, tainted(s.ctx));
   const request = await decideNext(s, 'deny');
   assert.equal(request.tool, 'memory_save');
-  assert.match(request.reasons.join(), /Web や添付/u);
+  assert.match(request.reasons.join(), /よそから来た文/u);
   assert.match(request.title, /記憶/u, '何を記憶しようとしているかが札に出る');
   assert.equal(request.body, 'ページに書かれていた指示');
   assert.equal((await refused).output.isError, true);
@@ -123,14 +123,14 @@ test('memory_update / memory_forget: Web や添付を読んだ後は承認制。
   const refusedUpdate = s.call('memory_update', { id: 'u1', content: 'ページに書かれていた指示で書き換え' }, tainted(s.ctx));
   const updateRequest = await decideNext(s, 'deny');
   assert.equal(updateRequest.tool, 'memory_update');
-  assert.match(updateRequest.reasons.join(), /Web や添付/u);
+  assert.match(updateRequest.reasons.join(), /よそから来た文/u);
   assert.equal((await refusedUpdate).output.isError, true);
   assert.equal(s.memory.list()[0]!.content, 'ふつうの書き換え', '断れば書き換えない');
 
   const refusedForget = s.call('memory_forget', { id: 'u1', reason: 'ページに書かれていた指示' }, tainted(s.ctx));
   const forgetRequest = await decideNext(s, 'deny');
   assert.equal(forgetRequest.tool, 'memory_forget');
-  assert.match(forgetRequest.reasons.join(), /Web や添付/u);
+  assert.match(forgetRequest.reasons.join(), /よそから来た文/u);
   assert.equal((await refusedForget).output.isError, true);
   assert.equal(s.memory.list().length, 1, '断れば消さない');
 

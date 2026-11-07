@@ -42,7 +42,7 @@ const ja = {
   'attachment.taint': '添付「{name}」',
   'taint.carried': '前の実行で読んだもの',
   'taint.unknown': '履歴が長く、確かめきれないもの',
-  'taint.checklist': '外の内容を読んだあとに書かれた作業の一覧',
+  'taint.checklist': 'よそから来た文を読んだあとに書かれた作業の一覧',
 } as const;
 
 const en: Record<keyof typeof ja, string> = {
@@ -87,7 +87,7 @@ const en: Record<keyof typeof ja, string> = {
   'attachment.taint': 'Attachment "{name}"',
   'taint.carried': 'what an earlier run read',
   'taint.unknown': 'a history too long to check',
-  'taint.checklist': 'a work checklist written after reading outside content',
+  'taint.checklist': 'a work checklist written after reading text that came from elsewhere',
 };
 
 export const engineText = defineMessages('engine', ja, en);

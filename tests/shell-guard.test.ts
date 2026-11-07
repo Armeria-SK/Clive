@@ -221,6 +221,30 @@ test('shell: レジストリに問い合わせる形（npm view・npm outdated�
   assert.equal(verdict('npm view left-pad | bash').decision, 'deny');
 });
 
+// npm・pip は、ローカルしか見ない形（ls・list・freeze・--version）も外へ送りうるもの（sends）に数える（レジストリの宛先を作業フォルダの設定が決めるため）。取得ではないので fetched にはしない。fetched にすると、動かしたあとに「よそから来た文を読んだ」印が付き、つないだ node や bash を「取ってきたものを動かす」として止めてしまう
+test('shell: npm と pip のローカルしか見ない形は sends だが fetched ではない。あとにシェルで動かす形をつないでも前と同じ確かめで、レジストリを読む形だけが止まる', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'bash' | 'powershell' = 'bash') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
+  const local: Array<[string, 'bash' | 'powershell']> = [
+    ['npm ls', 'bash'], ['npm ls --json', 'bash'], ['npm list --depth=1', 'bash'], ['npm --version', 'bash'], ['npm -v', 'bash'],
+    ['pip list', 'bash'], ['pip list --format=json', 'bash'], ['pip show requests', 'bash'], ['pip freeze', 'bash'], ['pip3 freeze', 'bash'], ['pip --version', 'bash'],
+    ['npm ls', 'powershell'], ['npm --version', 'powershell'], ['pip list', 'powershell'], ['pip freeze', 'powershell'],
+  ];
+  for (const [command, shell] of local) {
+    const v = verdict(command, shell);
+    assert.deepEqual([v.decision, v.fetched, v.sends], ['allow', false, true], `${shell}: ${command} → ${v.reasons.join(' / ')}`);
+  }
+  const chains: Array<[string, 'bash' | 'powershell', Decision, boolean]> = [
+    ['npm run build && node dist/x.js', 'bash', 'ask', false], ['npm ls; bash y.sh', 'bash', 'ask', false], ['npm ls | bash', 'bash', 'ask', false],
+    ['pip list; bash y.sh', 'bash', 'ask', false], ['pip freeze && python y.py', 'bash', 'ask', false], ['npm ls; bash y.sh', 'powershell', 'ask', false],
+    ['npm view x; bash y', 'bash', 'deny', true], ['npm outdated && node y.js', 'bash', 'deny', true], ['pip list --outdated; bash y.sh', 'bash', 'deny', true], ['npm view x; bash y', 'powershell', 'deny', true],
+  ];
+  for (const [command, shell, decision, fetched] of chains) {
+    const v = verdict(command, shell);
+    assert.deepEqual([v.decision, v.fetched, v.sends], [decision, fetched, true], `${shell}: ${command} → ${v.reasons.join(' / ')}`);
+  }
+});
+
 test('shell: outsideRoots=deny なら外は止める。allow は「一覧に無い」確かめだけを外し、拒否は外せない', t => {
   const f = fixture(t);
   const bash = { shell: 'bash' as const, windows: false };

@@ -180,7 +180,8 @@ writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force'
 // 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数
 writer('mkdir md', 'Path:path-w Name:s Force', 'path', joinName);
 writer('set-content add-content ac', `Path:path-w LiteralPath:path-w Value:s Encoding:${ENC} NoNewline Force`, 'path value…');
-writer('clear-content clc', 'Path:path-w LiteralPath:path-w Force', 'path');
+// Clear-Content は「このファイルを空にする」と名指しするコマンドなので、消す印（deletes）を立てる。リダイレクトや sed で空にする書き方は、上書きとして扱う（持ち主の決め: 上書きは消すに入れない）
+writer('clear-content clc', 'Path:path-w LiteralPath:path-w Force', 'path', (_p, acc) => { acc.deletes = true; });
 writer('out-file', `FilePath:path-w LiteralPath:path-w Encoding:${ENC} Append NoNewline Width:n InputObject:s`, 'filepath');
 writer('tee-object tee', 'FilePath:path-w LiteralPath:path-w Append Variable:var', 'filepath');
 writer('copy-item copy cp cpi', 'Path:path-r LiteralPath:path-r Destination:path-w Recurse Force Container Filter:s Include:s Exclude:s', 'path destination', (p, acc) => {
@@ -291,6 +292,7 @@ export function runPsSimple(name: string, words: Word[], acc: Acc, ctx: MatchCtx
   if (name === 'tree.com' || name === 'tree') {
     for (const w of args) {
       if (/^\/[FA]$/iu.test(w.text) && literal(w)) continue;
+      if (isFlagLike(w)) { acc.add('once', 'list.flag', { cmd: 'tree', flag: w.text }, true); continue; }
       checkValue('path-n', w, acc, 'tree', '', ctx);
     }
     return true;

@@ -49,6 +49,8 @@ export interface StatementResult {
   copies: CopyUse[];
   // 外から読む（curl・wget・iwr・irm）
   fetch: boolean;
+  // 外へ送りうる（取得ではない。npm・pip のどの形も。宛先を作業フォルダの設定が決めるため）。fetch とは別に持ち、動かしたあとの印や、取ってきたものをシェルで動かす形を止める判定には使わない
+  sends: boolean;
   // 消すコマンド（rm・Remove-Item など）。ルートやホームを消す形は止める
   deletes: boolean;
   // cd・Set-Location など。word が null なら、行き先が分からない
@@ -62,6 +64,7 @@ export class Acc {
   readonly paths: PathRef[] = [];
   readonly copies: CopyUse[] = [];
   fetch = false;
+  sends = false;
   deletes = false;
   cwd?: { word: Word | null };
   readonly remoteNames: Array<{ url: Word; dir: Word | null }> = [];
@@ -80,7 +83,7 @@ export class Acc {
     let level: Level = 'allow';
     for (const r of this.reasons) level = worstLevel(level, r.level);
     return {
-      level, reasons: this.reasons, paths: this.paths, copies: this.copies, fetch: this.fetch, deletes: this.deletes,
+      level, reasons: this.reasons, paths: this.paths, copies: this.copies, fetch: this.fetch, sends: this.sends, deletes: this.deletes,
       remoteNames: this.remoteNames, ...(this.cwd ? { cwd: this.cwd } : {}),
     };
   }

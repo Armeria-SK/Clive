@@ -131,7 +131,7 @@ export class Conversations {
     if (choice.permissionMode !== undefined) this.db.prepare('UPDATE conversations SET permission_mode = ? WHERE id = ?').run(choice.permissionMode, id);
   }
 
-  // 会話に「外から読んだことがある」印を付ける（一度付いたら外れない）。自動承認の判定役は、印のある会話では使わない
+  // 会話に「外から読んだことがある」印を付ける（一度付いたら外れない）。自動承認の判定役に見せる文に「よそから来た文を読んだ会話」の 1 行を足す材料になる（判定役を止めはしない）
   markTainted(id: string): void {
     this.db.prepare('UPDATE conversations SET ever_tainted = 1 WHERE id = ?').run(id);
   }
