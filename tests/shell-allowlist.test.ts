@@ -688,14 +688,14 @@ test('穴 5 の回帰: 受け入れる束（f か C が 1 つ最後・ほかは 
 });
 
 // 穴 5 の続き（審査 2 回目の F2）: ダッシュ付きの束で値を取る文字（f・C）の前に一覧に無い文字（P・r・u など）があると、その文字で読み取りを打ち切って f の値を束縛しない。
-// --create・--file=・--directory などの長い綴りも束縛しない。どれも「一覧に無いフラグ」の確かめ（持ち主の許可で外せる）にしかならず、
+// --crea・--fi= のような長い綴りの省略形も束縛しない（本物の GNU tar 1.35 では --fi・--verb は曖昧でエラー、--gz は gzip になる。tar.exe〔bsdtar〕と版でも変わる）。どれも「一覧に無いフラグ」の確かめ（持ち主の許可で外せる）にしかならず、
 // 持ち主が allow: ['tar'] を置いた途端に、本物の tar が書く読み取り専用の場所（RO/x.tar）への書き込みが確かめなしで通っていた（本物の GNU tar 1.35 で、下の書き込みの行がどれも RO/x.tar を作ることを確かめた）。
 // 束縛できない f・C・長い綴りがあれば、外せない list.form にする
 const TAR_UNBOUND = [
-  'tar -cPf RO/x.tar sub', 'tar -Pcf RO/x.tar sub', 'tar -cPvf RO/x.tar sub', 'tar -rf RO/x.tar sub', 'tar -uf RO/x.tar sub', 'tar -cpf RO/x.tar sub',
-  'tar --create -f RO/x.tar sub', 'tar -c --file=RO/x.tar sub', 'tar -c --file RO/x.tar sub', 'tar --create --file=RO/x.tar sub', 'tar --crea -f RO/x.tar sub', 'tar --cre --fi=RO/x.tar sub',
+  'tar -cPf RO/x.tar sub', 'tar -Pcf RO/x.tar sub', 'tar -cPvf RO/x.tar sub', 'tar -rf RO/x.tar sub', 'tar -uf RO/x.tar sub',
+  'tar --crea -f RO/x.tar sub', 'tar --cre --fi=RO/x.tar sub',
   'tar --append -f RO/x.tar sub', 'tar --update --file=RO/x.tar sub', 'tar -r -f RO/x.tar sub', 'tar -u -f RO/x.tar sub', 'tar -A -f RO/x.tar a.tar', 'tar --delete -f RO/x.tar a',
-  'tar -c --directory=sub -f out.tar b.txt', 'tar -c --directory sub -f out.tar b.txt', 'tar -cPC sub -f out.tar b.txt', 'tar --extract --file=a.tar', 'tar --list --file=a.tar', 'tar --get -f a.tar',
+  'tar -cPC sub -f out.tar b.txt',
 ] as const;
 
 test('穴 5（F2）: 束縛できない f・C・長い綴りがあれば、毎回の確かめ。持ち主の許可の tar でも外せない（bash・PowerShell の tar・tar.exe）', t => {
@@ -705,7 +705,7 @@ test('穴 5（F2）: 束縛できない f・C・長い綴りがあれば、毎�
     const command = row.replace('RO/', `${f.ro}/`);
     const runs: ReadonlyArray<readonly ['bash' | 'powershell', string, boolean]> = [['bash', command, true], ['powershell', command, true], ['powershell', command.replace(/^tar /u, 'tar.exe '), true]];
     for (const [shell, text, windows] of runs) {
-      for (const allow of [undefined, ['tar']]) {
+      for (const allow of [undefined, [text.startsWith('tar.exe ') ? 'tar.exe' : 'tar']]) {
         const v = f.guard(text, shell, allow, windows);
         if (!(v.decision === 'ask' && v.onceOnly)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${text.replace(f.ro, 'RO')} → ${whyOf(v)}`);
       }
@@ -722,8 +722,13 @@ test('穴 5（F2）の回帰: 束縛できる形・無関係な長い綴りは�
     // [コマンド, 許可なし, allow: ['tar'] つき]
     ['tar -cf RO/x.tar sub', 'deny', 'deny'], ['tar -cf out.tar b.txt', 'allow', 'allow'], ['tar -czvf out.tgz sub', 'allow', 'allow'], ['tar -C sub -cf out.tar b.txt', 'allow', 'allow'],
     ['tar -tf a.tar', 'allow', 'allow'], ['tar -tvf a.tar', 'allow', 'allow'], ['tar -cf out.tar --exclude=x sub', 'allow', 'allow'], ['tar -cf SOUL.md b.txt', 'ask', 'ask'],
-    ['tar -cf out.tar -p b.txt', 'ask', 'allow'], ['tar -cf out.tar --gzip sub', 'ask', 'allow'], ['tar -cvf out.tar --totals sub', 'ask', 'allow'],
+    ['tar -cf out.tar -p b.txt', 'ask', 'allow'], ['tar -cf out.tar --gzip sub', 'ask', 'allow'], ['tar -cvf out.tar --totals sub', 'ask', 'ask'],
     ['tar -xf a.tar', 'ask', 'ask'], ['tar -tf RO/x.tar', 'allow', 'allow'],
+    // 長い綴りの --create・--list・--file・--directory と、束の中の p は、-c・-t・-f・-C・-p と同じに束縛して調べる（読み取り専用の場所は止まり、置ける場所は持ち主の許可で通る）
+    ['tar -cpf RO/x.tar sub', 'deny', 'deny'], ['tar --create -f RO/x.tar sub', 'deny', 'deny'], ['tar -c --file=RO/x.tar sub', 'deny', 'deny'], ['tar -c --file RO/x.tar sub', 'deny', 'deny'],
+    ['tar --create --file=RO/x.tar sub', 'deny', 'deny'], ['tar --create --file=out.tar b.txt', 'ask', 'allow'], ['tar --list --file=a.tar', 'ask', 'allow'], ['tar --list --file=RO/x.tar', 'ask', 'allow'],
+    ['tar -c --directory=sub -f out.tar b.txt', 'ask', 'allow'], ['tar -c --directory sub -f out.tar b.txt', 'ask', 'allow'], ['tar -czpf out.tgz sub', 'ask', 'allow'], ['tar -pcf out.tar b.txt', 'ask', 'allow'],
+    ['tar --create --file=SOUL.md b.txt', 'ask', 'ask'], ['tar --extract --file=a.tar', 'ask', 'ask'], ['tar --get -f a.tar', 'ask', 'ask'],
   ];
   const wrong: string[] = [];
   for (const [row, plain, allowed] of rows) {
@@ -731,6 +736,70 @@ test('穴 5（F2）の回帰: 束縛できる形・無関係な長い綴りは�
     for (const [allow, want] of [[undefined, plain], [['tar'], allowed]] as const) {
       const v = f.guard(command, 'bash', allow ? [...allow] : undefined, true);
       if (v.decision !== want) wrong.push(`bash${allow ? '+allow' : ''}: ${row} → ${whyOf(v)} (want ${want})`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+// 穴 5 の続き（再審査 3 回目）: 一覧に無いオプションを 1 つずつ「外せない」に足していく方式（TAR_LONG_UNBOUND）は、足し漏れが続いた（bsdtar の --cd・-T・--files-from・--index-file・-g・--remove-files、host:out.tar という名前、プログラムを動かす -I・--to-command・-F など）。
+// 逆にして、持ち主の許可が外せるのは「コマンドラインのオプションが全部、既知の安全な綴りの集まり（短い c t x v z j J f C p と、長い --create --list --extract --get --file --directory --gzip --bzip2 --xz --verbose --preserve-permissions〔--exclude= も〕）に入っている」tar だけ。
+// 集まりの外のオプションが 1 つでもあれば、ほかが安全な綴りだけでも、外せない list.form にする。長い綴りは名前の完全一致だけ（省略形は版で別の綴りに展開されうる: 本物の GNU tar 1.35 では --fi・--verb は曖昧でエラー、--gz は gzip、tar.exe〔bsdtar 3.8〕は --cd が --directory の別名）
+const TAR_NOT_WAIVABLE = [
+  // bsdtar の --cd（--directory の別名）: 元の名前の基準が作業フォルダの外に変わる（本物の tar.exe 3.8.9 で ../config.json が入るのを確かめた）
+  'tar -cf out.tar --cd=.. config.json', 'tar -c --cd=.. -f out.tar config.json', 'tar -cf out.tar --cd .. config.json', 'tar -cf out.tar -C sub --cd=.. config.json',
+  // 名前・除外の一覧のファイルを読む
+  'tar -cf out.tar -T names.txt', 'tar -cf out.tar -Tnames.txt', 'tar -cf out.tar --files-from=names.txt', 'tar -cf out.tar --files-from names.txt', 'tar -cf out.tar -X skip.txt b.txt', 'tar -cf out.tar --exclude-from=skip.txt b.txt',
+  // 書き込み先・読み取り先を増やす、元を消す、リンクの先まで読む
+  'tar -cf out.tar --index-file=idx.txt b.txt', 'tar -cf out.tar -g snap.snar b.txt', 'tar -cf out.tar --listed-incremental=snap.snar b.txt', 'tar -cf out.tar --remove-files b.txt', 'tar -chf out.tar b.txt', 'tar -cf out.tar --dereference b.txt',
+  // host:out.tar は、リモートのシェル（rsh・ssh）を動かす
+  'tar -cf host:out.tar b.txt', 'tar -cf user@host:out.tar b.txt', 'tar -c --file=host:out.tar b.txt', 'tar -tf host:a.tar', 'tar -t --file host:a.tar',
+  // プログラムを動かす
+  'tar -cf out.tar -I evil b.txt', 'tar -cf out.tar -Ievil b.txt', 'tar -cIf evil out.tar b.txt', 'tar -cf out.tar --use-compress-program=evil b.txt', 'tar -cf out.tar --use-compress-program evil b.txt',
+  'tar -tf a.tar --to-command=evil', 'tar -cf out.tar --checkpoint=1 --checkpoint-action=exec=evil b.txt', 'tar -cf out.tar -F evil b.txt', 'tar -cf out.tar --info-script=evil b.txt',
+  'tar -cf out.tar --new-volume-script=evil b.txt', 'tar -cf out.tar --rsh-command=evil b.txt', 'tar -cf out.tar --rmt-command=evil b.txt',
+  // そのほか集まりに無いオプション（-- も）
+  'tar -cf out.tar -P b.txt', 'tar -cf out.tar --absolute-names b.txt', 'tar -cf out.tar --totals b.txt', 'tar -cf out.tar --transform=s/a/b/ b.txt', 'tar -cf out.tar -- b.txt', 'tar -cf out.tar -a b.txt', 'tar -cf out.tar --one-file-system b.txt',
+  // 長い綴りの省略形
+  'tar -cf out.tar --gz b.txt', 'tar -cf out.tar --verb b.txt', 'tar -cf out.tar --preserve b.txt', 'tar -cf out.tar --bz b.txt', 'tar --crea -f out.tar b.txt', 'tar --creat --fil=out.tar b.txt',
+  // 安全な綴りでも、値の付け方が違う形
+  'tar -c --create=x -f out.tar b.txt', 'tar -cf out.tar --gzip=x b.txt', 'tar -c --file=', 'tar -c --file',
+  // 安全な綴りだけの束・長い綴りに混ざっても
+  'tar -czf out.tgz -T names.txt sub', 'tar -cpf out.tar -I evil b.txt', 'tar -c --file=out.tar --gzip --verbose --cd=.. config.json',
+] as const;
+
+test('穴 5（F3）: 既知の安全な綴りに入らないオプションが 1 つでもある tar は、持ち主の許可でも外せない毎回の確かめ（bash の tar・PowerShell の tar・tar.exe）', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  for (const row of TAR_NOT_WAIVABLE) {
+    const runs: ReadonlyArray<readonly ['bash' | 'powershell', string, string]> = [['bash', row, 'tar'], ['powershell', row, 'tar'], ['powershell', row.replace(/^tar /u, 'tar.exe '), 'tar.exe']];
+    for (const [shell, text, entry] of runs) {
+      for (const allow of [undefined, [entry]]) {
+        const v = f.guard(text, shell, allow, shell === 'powershell');
+        if (!(v.decision === 'ask' && v.onceOnly)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${text} → ${whyOf(v)}`);
+      }
+    }
+    const fixed = classify(row, 'bash', { windows: true }).results.flatMap(r => r.reasons).filter(r => r.key === 'list.form' && r.level === 'once' && !r.exempt);
+    if (fixed.length === 0) wrong.push(`${row}: 外せない list.form が付いていない`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5（F3）の回帰: 既知の安全な綴りだけの tar は今のまま（許可なしは同じ判定、持ち主の許可の tar.exe も同じに外せる）', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly [string, 'allow' | 'ask' | 'deny', 'allow' | 'ask' | 'deny']> = [
+    ['tar -cf out.tar b.txt', 'allow', 'allow'], ['tar -cf RO/x.tar sub', 'deny', 'deny'], ['tar -czf out.tgz sub', 'allow', 'allow'], ['tar -cjf out.tbz sub', 'allow', 'allow'], ['tar -cJf out.txz sub', 'allow', 'allow'],
+    ['tar -tf a.tar', 'allow', 'allow'], ['tar -C sub -cf out.tar b.txt', 'allow', 'allow'], ['tar -cf out.tar --exclude=x sub', 'allow', 'allow'],
+    ['tar -cf out.tar -p b.txt', 'ask', 'allow'], ['tar -cf out.tar --gzip sub', 'ask', 'allow'], ['tar -cf out.tar --bzip2 sub', 'ask', 'allow'], ['tar -cf out.tar --xz sub', 'ask', 'allow'],
+    ['tar -cf out.tar --verbose sub', 'ask', 'allow'], ['tar -cf out.tar --preserve-permissions sub', 'ask', 'allow'], ['tar --create --file=out.tar --gzip --verbose sub', 'ask', 'allow'],
+  ];
+  const wrong: string[] = [];
+  for (const [row, plain, allowed] of rows) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    for (const [text, entry] of [[command, 'tar'], [command.replace(/^tar /u, 'tar.exe '), 'tar.exe']] as const) {
+      for (const [allow, want] of [[undefined, plain], [[entry], allowed]] as const) {
+        const v = f.guard(text, 'powershell', allow ? [...allow] : undefined, true);
+        if (v.decision !== want) wrong.push(`powershell${allow ? '+allow' : ''}: ${text.replace(f.ro, 'RO')} → ${whyOf(v)} (want ${want})`);
+      }
     }
   }
   assert.deepEqual(wrong, []);
