@@ -369,3 +369,44 @@ test('字句 PowerShell: 空の here-string は開きの次の行の \'@ で閉�
   assert.equal(failure("$x = @'x\n'@", 'powershell'), 'here_string');
   assert.equal(failure("$x = @'", 'powershell'), 'here_string');
 });
+
+// PowerShell の # は、トークンの先頭（行頭・空白・; | & ( { , のあと）ならコメント。前の語に空白なしでくっついた # は、本物の Parser でも前に何があるかで読みが分かれる
+// （$x# $x]# a'b'# $env:x# @x# [int]# は文字、'a'# "a"# (1)# $x.Length# $x.y# $x[0]# {1}# は # から行末までがコメント）。字句の読み取りが全部をコメントと読むと、
+// Write-Output $x#; Remove-Item … は Remove-Item を隠す（本物は動かす）。文字と読むと、Write-Output 'a'#'<改行>Remove-Item …<改行>#' は Remove-Item を引用符の中に隠す（本物はコメントなので動かす）。
+// どちらに読み違えても隠せるので、くっついた # は読まずに止める。語の中の # (a#b) は語の一部
+test('字句 PowerShell: 前の語に空白なしでくっついた # は止める。行頭・空白・; | & ( { , のあとの # は今までどおりコメント', () => {
+  const tail = "'\nRemove-Item -Recurse -Force sub\n#'";
+  const glued = [
+    'Write-Output $x#; Remove-Item -Recurse -Force sub', 'Write-Output $x#; Get-Content .env', 'Write-Output $x.y#; Remove-Item -Recurse -Force sub', 'Write-Output $x]#; Remove-Item -Recurse -Force sub',
+    "Write-Output a'b'#; Remove-Item -Recurse -Force sub", 'Write-Output $env:x#; Remove-Item -Recurse -Force sub', 'Write-Output @x#; Remove-Item -Recurse -Force sub', 'Write-Output [int]#; Remove-Item -Recurse -Force sub',
+    "$x = @'\n'@#; Remove-Item -Recurse -Force sub", '$a = $b#; Remove-Item -Recurse -Force sub',
+    ...["Write-Output 'a'", 'Write-Output "a"', 'Write-Output (1)', 'Write-Output $x.Length', 'Write-Output $x[0]', 'Write-Output {1}', 'Write-Output @(1)', 'Write-Output @{a=1}', 'Write-Output $(1)', 'Write-Output $x', 'Write-Output $x]',
+      "Write-Output a'b'", 'Write-Output $env:x', 'Write-Output @x', 'Write-Output [int]', "$x = @'\n'@", '$a = $b'].map(prefix => `${prefix}#${tail}`),
+    'Write-Output "a"#', "Write-Output 'a'#", 'Write-Output (1)#', 'ls >#x', 'Write-Output $x#x', 'if ($x) { 1 }# note',
+  ];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of glued) assert.equal(failure(command, shell), 'unexpected', `${shell}: ${JSON.stringify(command)}`);
+  const commands = (command: string, shell: ShellKind = 'powershell') => read(command, shell).filter(s => s.kind === 'command').map(line);
+  const comments: Array<[string, string[]]> = [
+    ['echo a #; Remove-Item -Recurse -Force sub', ['echo a']],
+    ['# comment\nGet-ChildItem sub', ['Get-ChildItem sub']],
+    ['Get-ChildItem sub # note', ['Get-ChildItem sub']],
+    ['Get-ChildItem sub #note', ['Get-ChildItem sub']],
+    ['Write-Output a;# note\nGet-ChildItem sub', ['Write-Output a', 'Get-ChildItem sub']],
+    ['Write-Output a ;#note\nGet-ChildItem sub', ['Write-Output a', 'Get-ChildItem sub']],
+    ['# c\r\nGet-ChildItem sub', ['Get-ChildItem sub']],
+    ['Get-ChildItem sub\r\n# note\r\nGet-ChildItem sub', ['Get-ChildItem sub', 'Get-ChildItem sub']],
+    ['Get-ChildItem sub # note\r\nGet-ChildItem sub', ['Get-ChildItem sub', 'Get-ChildItem sub']],
+    ["Write-Output $x # it's\nWrite-Output b", ['Write-Output $x', 'Write-Output b']],
+    ["Get-ChildItem |#'\nRemove-Item -Recurse -Force sub\n#'", ['Get-ChildItem', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output (#c\n1)', ['Write-Output $(…)']],
+    ['Write-Output @(1,#c\n2)', ['Write-Output $(…)']],
+    ["echo 'a#b'", ['echo a#b']],
+    ['echo "a#b"', ['echo a#b']],
+    ['Write-Output a#; Remove-Item -Recurse -Force sub', ['Write-Output a#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output -#; Remove-Item -Recurse -Force sub', ['Write-Output -#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output %#; Remove-Item -Recurse -Force sub', ['Write-Output %#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output 1,2#; Remove-Item -Recurse -Force sub', ['Write-Output 1,2#', 'Remove-Item -Recurse -Force sub']],
+  ];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const [command, expected] of comments) assert.deepEqual(commands(command, shell), expected, `${shell}: ${JSON.stringify(command)}`);
+  assert.equal(failure('<# block #>\nGet-ChildItem sub', 'powershell'), 'block_comment');
+});

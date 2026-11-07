@@ -589,6 +589,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
 interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][] }
 
 const PS_WORD_STOPS = new Set([' ', '\t', '\r', '\n', ';', '|', '&', '(', ')', '{', '}', ',', "'", '"', '`', '$', '<', '>']);
+const PS_HASH_STARTS = new Set([';', '|', '&', '(', '{', ',', '\n']);
 const PS_OTHER_CONTROL = new Set([
   'function', 'filter', 'class', 'enum', 'param', 'begin', 'process', 'end', 'trap', 'try', 'catch', 'finally', 'switch', 'do', 'while', 'for', 'until', 'using',
   'return', 'throw', 'break', 'continue', 'exit', 'data', 'workflow', 'parallel', 'sequence', 'inlinescript', 'foreach-object-parallel',
@@ -632,12 +633,16 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
     if (!p) return false;
     return p.t === 'var' || p.t === 'str' || p.t === 'member' || p.t === 'static' || (p.t === 'p' && (p.v === ')' || p.v === ']' || p.v === '}')) || p.t === 'type';
   };
+  const atTokenStart = (): boolean => {
+    const p = toks.at(-1);
+    return sp || !p || (p.t === 'p' ? PS_HASH_STARTS.has(p.v) : p.t === 'arr' || p.t === 'hash' || p.t === 'sub');
+  };
   while (i < n) {
     const ch = src[i]!;
     if (ch === ' ' || ch === '\t') { sp = true; i++; continue; }
     if (ch === '\r') { i++; continue; }
     if (ch === '\n') { push({ t: 'p', v: '\n' }); sp = true; i++; continue; }
-    if (ch === '#') { if (sub) return fail('unexpected', '#'); while (i < n && src[i] !== '\n') i++; continue; }
+    if (ch === '#') { if (sub || !atTokenStart()) return fail('unexpected', '#'); while (i < n && src[i] !== '\n') i++; continue; }
     if (ch === '<') return fail(src[i + 1] === '#' ? 'block_comment' : 'unexpected', '<');
     if (ch === '`') return fail('backtick');
     if (ch === ';') { push({ t: 'p', v: ';' }); i++; continue; }

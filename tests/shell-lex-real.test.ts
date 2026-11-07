@@ -328,9 +328,12 @@ const PS_DQ_ROWS = [
   // "$1" "$0" "$é" "$日" は、数字・Unicode の文字の変数名として展開する（空）。Get-Content ".env$1" は .env を読む。$@ $% $+ $, $; $.x $² $‿ $Ⅷ は文字のまま。"$:x" は : のあとの名前つき
   'Write-Output "$1"', 'Write-Output "$0"', 'Write-Output "$9"', 'Write-Output "$12"', 'Write-Output "a$1b"', 'Write-Output "$é"', 'Write-Output "$日"', 'Write-Output "$Ａ"', 'Write-Output "$ǅ"', 'Write-Output "$٣"', 'Write-Output "$ª"',
   'Write-Output "$_"', 'Write-Output "$:x"', 'Write-Output "$global:x"', 'Get-Content ".env$1"', 'Get-Content ".env$é"', 'Get-Content ".env$日"', 'Get-Content -Path ".env$0"',
-  // # の行コメントは、語の頭（空白・; ( ) { } , ' " | & のあと）だけ。中の引用符は始まりにならない。a#b は語
-  "Write-Output a # it's\nWrite-Output b", 'Write-Output a # "\nWrite-Output b', "Write-Output 'a' # x\nWrite-Output b", "Write-Output 'a'#x\nWrite-Output b", 'Write-Output "a"#x\nWrite-Output b', 'Write-Output (1)#x\nWrite-Output b',
-  "Write-Output a;#x'\nWrite-Output b", 'Write-Output a#b', "Write-Output a#b'c'", 'Write-Output a # ＡＢ\nWrite-Output b', "Write-Output {1}#x'\nWrite-Output b", 'Write-Output @(1)#x\nWrite-Output b',
+  // # の行コメントは、行頭・空白・; ( { , | のあとのトークンの先頭だけ。中の引用符は始まりにならない。a#b は語。前の語にくっついた # は読みが分かれるので、字句の読み取りが止める（下の PS_GLUED_HASH_RUNS / PS_GLUED_HASH_SWALLOWED）
+  "Write-Output a # it's\nWrite-Output b", 'Write-Output a # "\nWrite-Output b', "Write-Output 'a' # x\nWrite-Output b",
+  "Write-Output a;#x'\nWrite-Output b", 'Write-Output a#b', "Write-Output a#b'c'", 'Write-Output a # ＡＢ\nWrite-Output b',
+  'Get-ChildItem sub # note', 'Write-Output a;# note\nGet-ChildItem sub', '# c\r\nGet-ChildItem sub', 'Get-ChildItem sub\r\n# note\r\nGet-ChildItem sub', "Get-ChildItem |#'\nRemove-Item -Recurse -Force sub\n#'",
+  'Write-Output (#c\n1)', 'Write-Output @(#c\n1)', 'Write-Output @{#c\na=1}', 'Write-Output @(1,#c\n2)', 'ForEach-Object {#c\n1}', 'echo a #; Remove-Item -Recurse -Force sub',
+  'Write-Output a#; Remove-Item -Recurse -Force sub', 'Write-Output -#; Remove-Item -Recurse -Force sub', 'Write-Output %#; Remove-Item -Recurse -Force sub',
   // 空の here-string（@' の次の行がすぐ '@）は最初の '@ で閉じ、そのあとの行はコマンド。閉じを見逃すと次の here-string の閉じまでが文字列になり、Remove-Item などが隠れる
   "$x = @'\n'@\nRemove-Item -Recurse -Force sub\n$y = @'\nz\n'@", "$x = @'\n'@\nGet-Content .env\n$y = @'\nz\n'@", "$x = @'\r\n'@\r\nRemove-Item -Recurse -Force sub\r\n$y = @'\r\nz\r\n'@",
   "$x = @'\n'@\nRemove-Item -Recurse -Force sub", "$x = @'\n'@ + @'\n'@\nRemove-Item -Recurse -Force sub", "Write-Output @'\n'@", "$x = @'\nhello\n'@\nRemove-Item -Recurse -Force sub", "$x = @'\n\n'@\nGet-ChildItem sub",
@@ -411,4 +414,34 @@ test('PowerShell 5.1: "…" の中の $( の読みきれない形（${・$$(・�
   assert.deepEqual(byRow.get(6) ?? [], [['Write-Output', 'a$(Get-Date)']], 'バッククォートで打ち消した $( は文字');
   // 本物の Parser は、"…" の中の $( の終わりを、引用符やコメントに関わらず ( と ) の数だけで決める。括弧が引用符・ヒア文字列・コメントの中にある形は、本物は構文エラーになる（読み方が割れる）ので、字句の読み取りは止める
   for (const i of [9, 10, 11, 12, 13, 14]) assert.ok(errored.has(i), `${rows[i]}: 本物の Parser は ( ) を数だけで数えるので構文エラー`);
+});
+
+// 前の語に空白なしでくっついた # は、本物の Parser でも前の語で読みが分かれる。$x# $x]# a'b'# $env:x# @x# [int]# は文字（# 以降も語・引数）、'a'# "a"# (1)# $x.Length# $x.y# $x[0]# {1}# @(1)# は # から行末までがコメント。
+// 字句の読み取りが全部をコメントと読むと、文字の側の Write-Output $x#; Remove-Item … が Remove-Item を隠す。全部を文字と読むと、コメントの側の Write-Output 'a'#'<改行>Remove-Item …<改行>#' が Remove-Item を引用符の中に隠す。
+// どちらに読み違えても本物では動くコマンドが隠れる（または逆に、動かないものを動くと見る）ので、くっついた # は読まずに止める
+const AS_CHAR = ['Write-Output $x', 'Write-Output $x]', "Write-Output a'b'", 'Write-Output $env:x', 'Write-Output @x', 'Write-Output [int]'];
+const AS_COMMENT = ["Write-Output 'a'", 'Write-Output "a"', 'Write-Output (1)', 'Write-Output $x.Length', 'Write-Output $x.y', 'Write-Output $x[0]', 'Write-Output {1}', 'Write-Output @(1)', '$a = $b', "$x = @'\n'@"];
+const REST_AS_LINE = "#'\nRemove-Item -Recurse -Force sub\n#'";
+const REST_AS_SAME_LINE = '#; Remove-Item -Recurse -Force sub';
+// 本物の Parser が Remove-Item・Get-Content を動かす形（読み違えて隠すと、確かめなしで通る）
+const PS_GLUED_HASH_RUNS = [...AS_CHAR.map(p => p + REST_AS_SAME_LINE), ...AS_COMMENT.map(p => p + REST_AS_LINE), 'Write-Output $x#; Get-Content .env'];
+// 本物の Parser では # 以降が引用符の中・コメントになって動かない形（文字と読み違えると、動かないものを動くと見る）
+const PS_GLUED_HASH_SWALLOWED = [...AS_CHAR.map(p => p + REST_AS_LINE), ...AS_COMMENT.map(p => p + REST_AS_SAME_LINE)];
+
+test('PowerShell 5.1: 前の語にくっついた # は、本物の Parser では前の語で文字かコメントかが分かれる。字句の読み取りは、どちらの形も止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const rows = [...PS_GLUED_HASH_RUNS, ...PS_GLUED_HASH_SWALLOWED];
+  const { byRow, errored } = realWordsOf(rows);
+  const ran = (i: number): boolean => (byRow.get(i) ?? []).some(c => c[0] === 'Remove-Item' || c[0] === 'Get-Content');
+  const wrong: string[] = [];
+  for (const [i, row] of rows.entries()) {
+    if (errored.has(i)) { wrong.push(`${JSON.stringify(row)}: 本物の Parser が構文エラー`); continue; }
+    const runs = i < PS_GLUED_HASH_RUNS.length;
+    if (ran(i) !== runs) wrong.push(`${JSON.stringify(row)}: 本物の Parser は Remove-Item・Get-Content を${runs ? '動かす' : '動かさない'}はず`);
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (lexed.ok) wrong.push(`${shell}: ${JSON.stringify(row)}: 読めてしまった（止めるはず）`);
+      else if (lexed.fail.code !== 'unexpected') wrong.push(`${shell}: ${JSON.stringify(row)}: 止めた理由が ${lexed.fail.code}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
 });

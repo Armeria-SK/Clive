@@ -181,6 +181,49 @@ test('shell（PowerShell）: 空の here-string のあとの行も、コマン�
   }
 });
 
+// 前の語に空白なしでくっついた # は、本物の PowerShell でもコメントか文字か分かれる（$x# は文字、'a'# (1)# $x.Length# は行末までコメント）。全部をコメントと読むと Remove-Item を隠し、
+// 全部を文字と読むと 'a'#'<改行>Remove-Item …<改行>#' のように Remove-Item を引用符の中に隠す。どちらに読み違えても隠せるので、読まずに止める
+test('shell（PowerShell）: 前の語に空白なしでくっついた # は止める（コメントとも文字とも読まない）。空白・行頭・; のあとの # は今までどおりコメント', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const hidden = "#'\nRemove-Item -Recurse -Force sub\n#'";
+  const rows: Array<[string, Decision, boolean | null]> = [
+    ['Write-Output $x#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ['Write-Output $x#; Get-Content .env', 'deny', null],
+    ['Write-Output $x.y#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ['Write-Output $x]#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ["Write-Output a'b'#; Remove-Item -Recurse -Force sub", 'deny', null],
+    ['Write-Output $env:x#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ['Write-Output @x#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ["Write-Output 'a'" + hidden, 'deny', null],
+    ['Write-Output "a"' + hidden, 'deny', null],
+    ['Write-Output (1)' + hidden, 'deny', null],
+    ['Write-Output $x.Length' + hidden, 'deny', null],
+    ['Write-Output $x' + hidden, 'deny', null],
+    ["$x = @'\n'@" + hidden, 'deny', null],
+    // 語の中の # は語の一部。-# % 1,2# も語なので、あとの文は隠れない
+    ['Write-Output a#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output -#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output %#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output 1,2#; Remove-Item -Recurse -Force sub', 'ask', true],
+    // 今までどおり: 空白・行頭・; のあとはコメント
+    ['echo a #; Remove-Item -Recurse -Force sub', 'allow', false],
+    ['# comment\nGet-ChildItem sub', 'allow', false],
+    ['# comment\r\nGet-ChildItem sub', 'allow', false],
+    ['Get-ChildItem sub # note', 'allow', false],
+    ['Get-ChildItem sub;# note', 'allow', false],
+    ['Get-ChildItem sub\r\n# note\r\nGet-ChildItem sub', 'allow', false],
+    ["echo 'a#b'", 'allow', false],
+    ['echo "a#b"', 'allow', false],
+    ['<# block #>\nGet-ChildItem sub', 'deny', null],
+  ];
+  for (const [command, decision, removes] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+    if (removes !== null) assert.equal(v.removes, removes, `${shell}: ${JSON.stringify(command)} の removes`);
+  }
+});
+
 test('shell: 外から取得するコマンドは、確かめの結果にかかわらず fetched になる（実行すると外の中身を読むので、「外から読んだ」印の材料）', t => {
   const f = fixture(t);
   const verdict = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
