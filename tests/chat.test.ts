@@ -106,9 +106,9 @@ test('renameTitleOf / isRenameWithoutTitle: /rename のあとの題だけを取�
   assert.equal(isRenameWithoutTitle('/rename x'), false);
 });
 
-test('toolIcon: 組み込みの道具 31 個すべてに絵があり、知らない道具は terminal', () => {
+test('toolIcon: 組み込みの道具 33 個すべてに絵があり、知らない道具は terminal', () => {
   const names = builtinTools().map(t => t.name).sort();
-  assert.equal(names.length, 31);
+  assert.equal(names.length, 33);
   assert.deepEqual(Object.keys(TOOL_ICONS).sort(), names, '道具を足したり消したりしたら、絵の表も直す');
   assert.equal(toolIcon('file_read'), 'file');
   assert.equal(toolIcon('shell_run'), 'terminal');

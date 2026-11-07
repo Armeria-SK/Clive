@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
-import type { ChatMessage, StopReason } from '../engine/types.ts';
+import type { ChatMessage, ImageRef, StopReason } from '../engine/types.ts';
 import { redactSecrets } from '../shared/redaction.ts';
 import { contextHint, errorProbeText, evaluateContext } from './context.ts';
 import { classifyHttpFailure, parseRetryAfter, providerSecrets, requireApiKey, UPSTREAM_KEEP } from './http.ts';
@@ -8,6 +8,8 @@ import { ProviderError, providerError, type Env, type FetchLike, type ModelReque
 
 type Block = Anthropic.ContentBlockParam;
 const EPHEMERAL = { type: 'ephemeral' } as const;
+
+const imageBlock = (img: ImageRef): Anthropic.ImageBlockParam => ({ type: 'image', source: { type: 'base64', media_type: img.mediaType as 'image/png', data: img.data } });
 
 export function toAnthropicMessages(messages: readonly ChatMessage[], vision: boolean): Anthropic.MessageParam[] {
   const out: Array<{ role: 'user' | 'assistant'; content: Block[] }> = [];
@@ -20,9 +22,7 @@ export function toAnthropicMessages(messages: readonly ChatMessage[], vision: bo
   for (const m of messages) {
     if (m.role === 'user') {
       const blocks: Block[] = [];
-      if (vision) for (const img of m.images ?? []) {
-        blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType as 'image/png', data: img.data } });
-      }
+      if (vision) for (const img of m.images ?? []) blocks.push(imageBlock(img));
       blocks.push({ type: 'text', text: m.content || '（空のメッセージ）' });
       push('user', blocks);
     } else if (m.role === 'assistant') {
@@ -34,7 +34,9 @@ export function toAnthropicMessages(messages: readonly ChatMessage[], vision: bo
       }
       push('assistant', blocks.length ? blocks : [{ type: 'text', text: '（空の応答）' }]);
     } else {
-      push('user', [{ type: 'tool_result', tool_use_id: m.toolCallId, content: m.content, ...(m.isError ? { is_error: true } : {}) }]);
+      const images = vision ? m.images ?? [] : [];
+      const content = images.length ? [...(m.content ? [{ type: 'text' as const, text: m.content }] : []), ...images.map(imageBlock)] : m.content;
+      push('user', [{ type: 'tool_result', tool_use_id: m.toolCallId, content, ...(m.isError ? { is_error: true } : {}) }]);
     }
   }
   // 会話の末尾にキャッシュの区切りを置き、次のターンで前半を再利用できるようにする

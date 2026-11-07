@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { extractToolCalls, looksLikeTextToolCall, toJsonFallbackHistory } from '../src/engine/toolcall-parse.ts';
+import type { ChatMessage } from '../src/engine/types.ts';
 
 const names = new Set(['file_write', 'shell_run']);
 
@@ -35,4 +36,45 @@ test('json_fallback: 履歴のツール呼び出しと結果をテキストに�
   assert.deepEqual(history.map(m => m.role), ['user', 'assistant', 'user']);
   assert.match((history[1] as { content: string }).content, /<tool_call>/u);
   assert.match((history[2] as { content: string }).content, /shell_run」の結果/u);
+});
+
+// ── 段 4-4: 道具の結果の画像は、本文で道具を呼ぶモデルには、道具の結果をまとめた利用者の発言の images に移す ──
+
+const png = (data: string) => ({ mediaType: 'image/png', data });
+
+test('json_fallback: 道具の結果の画像は、まとめた利用者の発言の images に移る（続く道具の結果の画像は順番どおりに足される）', () => {
+  const history = toJsonFallbackHistory([
+    { role: 'user', content: '画像を見て' },
+    { role: 'assistant', content: '', toolCalls: [{ id: '1', name: 'image_view', arguments: { path: 'a.png' } }, { id: '2', name: 'image_view', arguments: { path: 'b.png' } }] },
+    { role: 'tool', toolCallId: '1', name: 'image_view', content: 'a.png です', images: [png('A')] },
+    { role: 'tool', toolCallId: '2', name: 'image_view', content: 'b.png です', images: [png('B1'), png('B2')] },
+  ]);
+  assert.deepEqual(history.map(m => m.role), ['user', 'assistant', 'user'], '道具の結果は 1 つの利用者の発言にまとまる');
+  const merged = history[2] as Extract<ChatMessage, { role: 'user' }>;
+  assert.deepEqual(merged.images?.map(i => i.data), ['A', 'B1', 'B2']);
+  assert.ok(merged.content.includes('a.png です') && merged.content.includes('b.png です'), '文字は今までどおりまとまる');
+});
+
+test('json_fallback: 道具の結果が利用者の発言の直後に続くとき、その発言の画像のあとに足す。入力の発言は書き換えない', () => {
+  const input: ChatMessage[] = [
+    { role: 'user', content: '見て', images: [png('USER')] },
+    { role: 'tool', toolCallId: '1', name: 'image_view', content: 'a.png です', images: [png('TOOL')] },
+  ];
+  const before = JSON.stringify(input);
+  const history = toJsonFallbackHistory(input);
+  assert.deepEqual(history.map(m => m.role), ['user']);
+  assert.deepEqual((history[0] as Extract<ChatMessage, { role: 'user' }>).images?.map(i => i.data), ['USER', 'TOOL']);
+  assert.equal(JSON.stringify(input), before, '入力の発言（画像の並びも）は書き換えない');
+});
+
+test('json_fallback: 画像の無い道具の結果は今までと同じ（images の項目が付かない。前の発言の画像はそのまま）', () => {
+  const history = toJsonFallbackHistory([
+    { role: 'user', content: '見て', images: [png('USER')] },
+    { role: 'tool', toolCallId: '1', name: 'file_read', content: 'a' },
+    { role: 'assistant', content: '', toolCalls: [{ id: '2', name: 'file_read', arguments: {} }] },
+    { role: 'tool', toolCallId: '2', name: 'file_read', content: 'b', images: [] },
+  ]);
+  assert.deepEqual(history.map(m => m.role), ['user', 'assistant', 'user']);
+  assert.deepEqual((history[0] as Extract<ChatMessage, { role: 'user' }>).images?.map(i => i.data), ['USER']);
+  assert.equal('images' in history[2]!, false, '画像が無い（空の並びも）なら、項目を付けない');
 });

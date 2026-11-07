@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
-import type { ChatMessage, StopReason, ToolCall } from '../engine/types.ts';
+import type { ChatMessage, ImageRef, StopReason, ToolCall } from '../engine/types.ts';
 import { OLLAMA_DEFAULT_URL } from '../config/store.ts';
 import { contextHint, errorProbeText, evaluateContext, probeText } from './context.ts';
 import {
@@ -19,15 +19,26 @@ type OllamaMessage = {
 export function toOllamaMessages(system: string, messages: readonly ChatMessage[], vision: boolean): OllamaMessage[] {
   const out: OllamaMessage[] = [];
   if (system) out.push({ role: 'system', content: system });
+  let shown: Array<{ id: string; images: ImageRef[] }> = [];
+  const flushShown = () => {
+    if (!shown.length) return;
+    out.push({ role: 'user', content: shown.map(s => `[image from tool result ${s.id}]`).join('\n'), images: shown.flatMap(s => s.images.map(i => i.data)) });
+    shown = [];
+  };
   for (const m of messages) {
+    if (m.role !== 'tool') flushShown();
     if (m.role === 'user') out.push({ role: 'user', content: m.content, ...(vision && m.images?.length ? { images: m.images.map(i => i.data) } : {}) });
     else if (m.role === 'assistant') {
       out.push({
         role: 'assistant', content: m.content,
         ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map(c => ({ function: { name: c.name, arguments: c.arguments ?? {} } })) } : {}),
       });
-    } else out.push({ role: 'tool', content: m.content, tool_name: m.name });
+    } else {
+      out.push({ role: 'tool', content: m.content, tool_name: m.name });
+      if (vision && m.images?.length) shown.push({ id: m.toolCallId, images: m.images });
+    }
   }
+  flushShown();
   return out;
 }
 

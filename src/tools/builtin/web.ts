@@ -18,13 +18,13 @@ function web(ctx: ToolContext) {
   return { throttle: ctx.services?.web?.throttle ?? sharedThrottle, network: ctx.services?.web?.network, fetch: ctx.services?.web?.fetch };
 }
 
-function exfiltrationCheck(text: string, language: Language, extraReasons: string[] = []): PreCheck {
+export function exfiltrationCheck(text: string, language: Language, extraReasons: string[] = []): PreCheck {
   const reasons = [...extraReasons];
   if (sanitizeModelInputText(text).redaction_count > 0) reasons.push(guardText(language, 'web.secret_text'));
   return reasons.length ? { decision: 'ask', reasons, details: [text.slice(0, 500)], askKinds: ['web'] } : { decision: 'allow', reasons: [] };
 }
 
-const APP_TEXT_ONLY: ReadonlySet<ToolMessageKey> = new Set<ToolMessageKey>(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked']);
+const APP_TEXT_ONLY: ReadonlySet<ToolMessageKey> = new Set<ToolMessageKey>(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked', 'download.idle', 'download.disk_low']);
 
 export function webFailure(error: unknown, language: Language): ToolOutput & { isError: true } {
   if (error instanceof RetrievalFailure || error instanceof SearchFailure) {

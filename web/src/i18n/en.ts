@@ -926,6 +926,8 @@ export const en: Dict = {
   'tool.notify_owner': 'Notify the owner',
   'tool.doc_read': 'Read PDF, Word and Excel files',
   'tool.table_write': 'Write a table file (CSV or Excel)',
+  'tool.image_view': 'View an image (a file or a web image)',
+  'tool.web_download': 'Download a file into downloads/',
   'folders.mode.write': 'Read and write',
   'folders.mode.read': 'Read only',
   'folders.modeLabel': path => `Access to ${path}`,
