@@ -85,9 +85,10 @@ export function toJsonFallbackHistory(messages: readonly ChatMessage[], language
       out.push({ role: 'assistant', content: [m.content, calls].filter(Boolean).join('\n') });
     } else if (m.role === 'tool') {
       const content = `${FALLBACK_TEXT[language].toolResult(m.name, Boolean(m.isError))}\n${m.content}`;
+      const images = m.images ?? [];
       const last = out.at(-1);
-      if (last?.role === 'user') last.content += `\n\n${content}`;
-      else out.push({ role: 'user', content });
+      if (last?.role === 'user') out[out.length - 1] = { ...last, content: `${last.content}\n\n${content}`, ...(images.length ? { images: [...(last.images ?? []), ...images] } : {}) };
+      else out.push({ role: 'user', content, ...(images.length ? { images: [...images] } : {}) });
     } else out.push(m);
   }
   return out;

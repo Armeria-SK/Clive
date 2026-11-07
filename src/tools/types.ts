@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { TSchema } from '@sinclair/typebox';
 import type { AppConfig, Language } from '../config/schema.ts';
-import type { RunEvent } from '../engine/types.ts';
+import type { ImageRef, RunEvent } from '../engine/types.ts';
 import type { MemoryStore } from '../memory/store.ts';
 import type { TaskStore } from '../tasks/store.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
@@ -35,6 +35,8 @@ export interface ToolOutput {
   noRemoteContent?: boolean;
   // この結果が外の中身を持ち込んだ（実行の結果を見てからでないと分からないとき。file_search が downloads/ の下の行を返したときなど）。パイプラインは「外から読んだ」印を付ける。印を付ける向きにしか働かない（付けない・外す効果は無い）
   fetched?: boolean;
+  // この結果に添える画像（image_view）。エンジンが道具の結果の発言に持たせて保存し、画像を読めるモデルにだけ渡す。失敗（isError）の結果の画像は保存しない。tool.result の出来事・tool_calls の行・output_preview には入れない（文字だけ）
+  images?: ImageRef[];
 }
 
 export interface PreCheck {
@@ -96,6 +98,8 @@ export interface ToolContext {
   // 道具の結果を返せる量の上限（見積もりのトークン。モデルのコンテキストの残りに合わせて、エンジンが呼ぶたびに決める）。
   // 文字数の上限（pipeline.ts の TOOL_OUTPUT_LIMIT = 16,000 文字）とは別で、先に達した方で切る。無ければ文字数の上限だけ
   outputTokens?: number | undefined;
+  // いまモデルを呼んでいる（この道具の結果を次に読む）モデル。エンジンが道具を呼ぶ直前に入れる（鎖で替わったら替わる）。vision は設定の models[].vision。無い（試験・ほかの呼び方）なら、画像を読めないとみなす
+  model?: { id: string; vision: boolean } | undefined;
   // この実行では渡さず、呼ばれても拒否する道具の名前（例: 整理の振り返りでは memory_forget）
   forbiddenTools?: ReadonlySet<string> | undefined;
   // 会話のチャットの実行が始まったときの権限モード（段 8b）。無ければふつう。実行に効くのは、これと会話のいまのモードの厳しい方（pipeline.ts の effectiveMode）
@@ -123,7 +127,7 @@ export interface ToolDef<I = any> {
   escalateOnTaint?: boolean;
   // 書き込み先のフォルダ単位で、外から読んだ内容のあとの確かめ（理由の種類が taint だけ）を、その実行のあいだ許せる道具（file_write / file_edit）。事前の判定が書き込み先のパスを 1 つ返すこと
   folderGrant?: boolean;
-  // 効果は network のまま、ファイルも書く道具（web_download）。計画モードでは書き込みと同じに断り（planAllows）、外から読んだ内容のあとは書き込みと同じに確かめる。振り返りは effect network で既に断られる
+  // 効果は network のまま、ファイルも書く道具（web_download）。計画モードでは書き込みと同じに断り（planAllows）、振り返りでも断り（reviewAllows。効果が何でも）、外から読んだ内容のあとは書き込みと同じに確かめる
   writesFiles?: true;
   // この呼び出し（引数の確かめを通ったあと）が外へ出るか。true なら、効果が network でなくても、外から読んだ印（動かしたら付く）と、自動承認で外を読んだ会話の毎回の確かめを network と同じにする。効果・計画モード・振り返りの扱いは変えない。投げる・false 以外を返すときは外へ出るとみなす
   networkCall?: (input: I) => boolean;

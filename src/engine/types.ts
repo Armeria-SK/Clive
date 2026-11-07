@@ -29,7 +29,8 @@ export interface ImageRef {
 export type ChatMessage =
   | { role: 'user'; content: string; images?: ImageRef[]; attachments?: AttachmentMeta[] }
   | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
-  | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean };
+  // images: 道具の結果に添えた画像（ToolOutput.images。失敗の結果には付けない）。3 つの提供元の変換が、読めるモデルにだけ渡す
+  | { role: 'tool'; toolCallId: string; name: string; content: string; isError?: boolean; images?: ImageRef[] };
 
 export interface Usage {
   inputTokens?: number;

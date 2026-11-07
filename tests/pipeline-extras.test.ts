@@ -11,7 +11,7 @@ import { resolvePaths } from '../src/paths.ts';
 import type { PermissionMode } from '../src/shared/permission-mode.ts';
 import { ApprovalBroker } from '../src/tools/approvals.ts';
 import type { ClassifierPrompt } from '../src/tools/auto-approve.ts';
-import { PLAN_EFFECTS, planAllows, REVIEW_FORBIDDEN, runToolCall } from '../src/tools/pipeline.ts';
+import { PLAN_EFFECTS, planAllows, REVIEW_FORBIDDEN, reviewAllows, runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { AskKind, ToolContext, ToolDef, ToolEffect } from '../src/tools/types.ts';
@@ -200,6 +200,33 @@ test('X2 振り返り: network + writesFiles の道具も、writesFiles の無�
   }
   assert.equal((await s.call('reader', {}, review)).decision, 'allow');
   assert.deepEqual(ran, ['reader']);
+});
+
+test('X2 振り返りの締め付け: 効果が read・meta でも writesFiles の道具は、パイプラインが断り、モデルに渡す一覧（エンジンの #toolsFor）にも入らない。writesFiles の無い道具・会話の実行は今までどおり', async t => {
+  assert.deepEqual(EFFECTS.filter(effect => reviewAllows({ effect })), ['read', 'meta'], '足した項目が無い道具は、今までの REVIEW_FORBIDDEN と同じ');
+  assert.deepEqual(EFFECTS.filter(effect => reviewAllows({ effect, writesFiles: true })), [], 'writesFiles があれば、効果が何でも使えない');
+
+  const ran: string[] = [];
+  const s = setup(t, [tool(ran, 'read_writer', 'read', { writesFiles: true }), tool(ran, 'meta_writer', 'meta', { writesFiles: true }), tool(ran, 'reader', 'read')]);
+  const review = s.makeCtx({ kind: 'review', conversationId: 'review-conv' });
+  for (const name of ['read_writer', 'meta_writer']) {
+    const outcome = await s.call(name, {}, review);
+    assert.equal(outcome.decision, 'deny', name);
+    assert.equal(outcome.decidedBy, 'registry', name);
+    assert.match(outcome.output.content, /振り返り/u, name);
+  }
+  assert.equal((await s.call('reader', {}, review)).decision, 'allow');
+  assert.equal((await s.call('read_writer', {})).decision, 'allow', '比べる基準: 会話の実行では動く（締め付けは振り返りだけ）');
+  assert.deepEqual(ran, ['reader', 'read_writer']);
+
+  const app = await startApp(t, { tools: [tool([], 'read_writer', 'read', { writesFiles: true }), tool([], 'meta_writer', 'meta', { writesFiles: true }), tool([], 'reader', 'read')] });
+  const started = app.app.engine.runReview(app.app.conversations.create({ kind: 'task' }).id, '[振り返り] テスト');
+  assert.ok(started.ok);
+  await started.done;
+  assert.deepEqual(app.adapter().calls[0]!.tools.map(x => x.name), ['reader'], '振り返りのモデルに渡す一覧に、writesFiles の道具は無い');
+  const chat = await app.json(`/api/conversations/${CONVERSATION}/messages`, 'POST', { text: 'ふつうに' });
+  await settled(app.app, chat.body.runId);
+  assert.deepEqual(app.adapter().calls[1]!.tools.map(x => x.name).sort(), ['meta_writer', 'read_writer', 'reader'], '比べる基準: 会話の実行には全部渡す');
 });
 
 // ── X6: networkCall ──

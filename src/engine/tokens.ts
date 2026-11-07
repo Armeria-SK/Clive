@@ -32,7 +32,7 @@ export function estimateMessageTokens(message: ChatMessage): number {
     tokens += estimateTextTokens(message.content);
     for (const call of message.toolCalls ?? []) tokens += 8 + estimateTextTokens(call.name) + estimateTextTokens(call.raw ?? JSON.stringify(call.arguments ?? {}));
   } else {
-    tokens += 8 + estimateTextTokens(message.content);
+    tokens += 8 + estimateTextTokens(message.content) + (message.images?.length ?? 0) * IMAGE_TOKENS;
   }
   return tokens;
 }

@@ -2,12 +2,19 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { Type } from '@sinclair/typebox';
 import { App } from '../src/app.ts';
 import type { ModelConfig } from '../src/config/schema.ts';
+import type { SendChoice } from '../src/engine/chat.ts';
 import { contextAvailable } from '../src/engine/context-budget.ts';
-import type { RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
+import { estimateMessageTokens, IMAGE_TOKENS } from '../src/engine/tokens.ts';
+import type { ChatMessage, ImageRef, RunEvent, StopReason, ToolCall } from '../src/engine/types.ts';
+import { transcriptOf } from '../src/memory/review.ts';
 import { resolvePaths } from '../src/paths.ts';
-import { FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
+import { ProviderError } from '../src/providers/types.ts';
+import type { ToolContext, ToolDef, ToolOutput } from '../src/tools/types.ts';
+import { CONVERSATION, fakeModel, startApp } from './app-setup.ts';
+import { fail, FakeAdapter, reply, tempDir, type Script, testConfig } from './helpers.ts';
 
 function toolCall(name: string, args: unknown): Script {
   return async function* () {
@@ -338,4 +345,150 @@ test('上限 100 は今までどおり: 100 回目の呼び出しのあとで止
   assert.equal(calls.at(-1)!.tools.length, 0);
   assert.equal(result.text, 'まとめです');
   assert.ok(s.events.some(e => e.type === 'warning' && e.code === 'max_iterations'));
+});
+
+// ── 段 4-4: 道具の結果の画像（X5 ToolOutput.images）のエンジンの側 ──
+
+const MARK = 'SECRETIMAGEBASE64MARK';
+const PNG: ImageRef = { mediaType: 'image/png', data: MARK };
+const imageTool = (name: string, run: (ctx: ToolContext) => ToolOutput): ToolDef => ({
+  name, description: name, effect: 'read', allowedIn: ['chat', 'task', 'review'],
+  input: Type.Object({}, { additionalProperties: false }),
+  async execute(_input, ctx) { return run(ctx); },
+});
+type ImageApp = Awaited<ReturnType<typeof startApp>>;
+
+async function runImages(s: ImageApp, text: string, choice: SendChoice = {}) {
+  const outcome = s.app.engine.send(CONVERSATION, text, [], [], choice);
+  assert.ok(outcome.ok, JSON.stringify(outcome));
+  const result = await s.app.engine.wait(outcome.runId)!;
+  assert.ok(result.ok, JSON.stringify(result));
+  return result;
+}
+
+const storedTool = (s: ImageApp) => s.app.conversations.messages(CONVERSATION).filter(m => m.role === 'tool').map(m => m.message as Extract<ChatMessage, { role: 'tool' }>);
+
+test('道具の結果の画像: 保存した道具の結果の発言に images が付き、次のモデル呼び出しの messages に渡る。長くて切られた結果でも残る', async t => {
+  const long = 'あ'.repeat(30_000);
+  const s = await startApp(t, { tools: [imageTool('img_ok', () => ({ content: long, images: [PNG] }))] });
+  s.adapter().scripts.push(toolCall('img_ok', {}), reply('見ました'));
+  await runImages(s, '画像を見て');
+  const [saved] = storedTool(s);
+  assert.deepEqual(saved!.images, [PNG], '保存された道具の結果の発言に画像がある');
+  assert.ok(JSON.stringify(s.app.db.prepare("SELECT parts FROM messages WHERE role = 'tool'").all()).includes(MARK), 'messages.parts の JSON に base64 で入る（添付の画像と同じ置き場所）');
+  assert.ok(saved!.content.length < long.length, '長い結果は切られている（切る処理が images を落とさない）');
+  const second = s.adapter().calls[1]!.messages.at(-1)!;
+  assert.equal(second.role, 'tool');
+  assert.deepEqual(second.role === 'tool' ? second.images : undefined, [PNG], '次のモデル呼び出しの messages に画像が渡る');
+});
+
+test('道具の結果の画像: 画像の無い道具の結果の発言は今までと同じ形（images の項目が無い）', async t => {
+  const s = await startApp(t, { tools: [imageTool('plain', () => ({ content: 'ok' })), imageTool('empty', () => ({ content: 'ok', images: [] }))] });
+  s.adapter().scripts.push(toolCall('plain', {}), toolCall('empty', {}), reply('おわり'));
+  await runImages(s, '呼んで');
+  for (const message of storedTool(s)) assert.deepEqual(Object.keys(message).sort(), ['content', 'name', 'role', 'toolCallId'], message.name);
+});
+
+test('道具の結果の画像: 失敗（isError）の結果の画像は保存せず、モデルにも渡さない', async t => {
+  const s = await startApp(t, { tools: [imageTool('img_fail', () => ({ content: '読めませんでした', isError: true, images: [PNG] }))] });
+  s.adapter().scripts.push(toolCall('img_fail', {}), reply('失敗でした'));
+  await runImages(s, '画像を見て');
+  const [saved] = storedTool(s);
+  assert.equal(saved!.isError, true);
+  assert.equal('images' in saved!, false);
+  assert.equal(JSON.stringify(s.adapter().calls[1]!.messages).includes(MARK), false);
+  assert.equal(JSON.stringify(s.app.db.prepare('SELECT parts FROM messages').all()).includes(MARK), false);
+});
+
+test('道具の結果の画像: 出来事・道具の記録・画面の API には画像が出ない。検索・要約・振り返りが読む文字（text）にも入らない', async t => {
+  const s = await startApp(t, { tools: [imageTool('img_ok', () => ({ content: '画像を見せます', images: [PNG] }))] });
+  const events: RunEvent[] = [];
+  s.app.bus.subscribe(e => events.push(e.event));
+  s.adapter().scripts.push(toolCall('img_ok', {}), reply('見ました'));
+  await runImages(s, '画像を見て');
+  assert.ok(storedTool(s)[0]!.images, '画像は保存されている（これが無いと下の確かめは空振り）');
+  assert.ok(events.some(e => e.type === 'tool.result'));
+  assert.equal(JSON.stringify(events).includes(MARK), false, '出来事（SSE）に画像が出ない');
+  assert.equal(JSON.stringify(s.app.db.prepare('SELECT * FROM tool_calls').all()).includes(MARK), false, 'tool_calls の行（output_preview など）に画像が出ない');
+  const listing = await (await s.api(`/api/conversations/${CONVERSATION}/messages`)).text();
+  assert.match(listing, /img_ok/u, '道具の結果の発言は一覧に出ている');
+  assert.equal(listing.includes(MARK), false, 'GET /api/conversations/:id/messages の応答に画像（base64）が無い');
+  const stored = s.app.conversations.messages(CONVERSATION);
+  assert.equal(JSON.stringify(stored.map(m => m.text)).includes(MARK), false, 'text の列（検索の索引・要約・振り返りの材料）に画像が入らない');
+  assert.equal(transcriptOf(stored).includes(MARK), false, '振り返りの記録に画像が入らない');
+});
+
+test('道具の結果の画像: 古い画像つきのやり取りを要約に回しても、要約の依頼に画像は入らない（原文は DB に残る）', async t => {
+  const small = fakeModel('m1', { contextLength: 20_000, minContext: 1024, maxOutputTokens: 1024 });
+  const s = await startApp(t, { models: [small], tools: [] });
+  const conversations = s.app.conversations;
+  conversations.append(CONVERSATION, { role: 'user', content: `質問0${'い'.repeat(3000)}` });
+  conversations.append(CONVERSATION, { role: 'assistant', content: '', toolCalls: [{ id: 't0', name: 'img_ok', arguments: {} }] });
+  conversations.append(CONVERSATION, { role: 'tool', toolCallId: 't0', name: 'img_ok', content: '画像を見せます', images: [PNG] });
+  conversations.append(CONVERSATION, { role: 'assistant', content: '答え0' });
+  for (let i = 1; i < 6; i++) {
+    conversations.append(CONVERSATION, { role: 'user', content: `質問${i}${'い'.repeat(3000)}` });
+    conversations.append(CONVERSATION, { role: 'assistant', content: `答え${i}` });
+  }
+  s.adapter().scripts.push(reply('- 画像を見せてもらった'), reply('ok'));
+  await runImages(s, '最新の質問');
+  assert.ok(s.adapter().calls.length >= 2);
+  const summaryCall = s.adapter().calls[0]!;
+  assert.match(JSON.stringify(summaryCall.messages), /会話の古い部分/u, '1 回目の呼び出しは要約の依頼');
+  assert.match(JSON.stringify(summaryCall.messages), /img_ok/u, '要約に回った古い部分に、画像つきの道具の結果が入っている');
+  assert.equal(JSON.stringify(s.adapter().calls).includes(MARK), false, '要約の依頼にも、そのあとの呼び出しにも画像は入らない');
+  assert.ok(storedTool(s)[0]!.images, '原文の画像は DB に残る');
+});
+
+test('道具の結果の画像: ctx.model は、道具を呼ぶ直前のモデルの id と vision を映す（鎖の途中で替わったら替わる）', async t => {
+  const seen: Array<ToolContext['model']> = [];
+  const s = await startApp(t, {
+    models: [fakeModel('m1', { vision: false }), fakeModel('m2', { vision: true })],
+    tools: [imageTool('probe', ctx => { seen.push(ctx.model === undefined ? undefined : { ...ctx.model }); return { content: 'ok' }; })],
+  });
+  s.adapter().scripts.push(
+    toolCall('probe', {}),
+    fail(new ProviderError('provider_error', 'down', { retryable: false })),
+    toolCall('probe', {}),
+    reply('おわり'),
+  );
+  await runImages(s, '二回呼んで');
+  assert.deepEqual(seen, [{ id: 'm1', vision: false }, { id: 'm2', vision: true }]);
+});
+
+test('道具の結果の画像: 手元のモデルを選んだ会話の道具の画像は、その会話のモデル（手元）にだけ届き、外のモデルには届かない', async t => {
+  const s = await startApp(t, {
+    models: [fakeModel('local', { vision: true }), fakeModel('remote', { vision: true, provider: 'remote' })],
+    configure: config => { config.providers.push({ id: 'remote', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1', maxParallel: 1, timeoutMs: 10_000 }); },
+    tools: [imageTool('img_ok', () => ({ content: '画像を見せます', images: [PNG] }))],
+  });
+  s.adapter().scripts.push(toolCall('img_ok', {}), reply('見ました'));
+  await runImages(s, '画像を見て', { modelId: 'local' });
+  assert.deepEqual(s.adapter().calls.length, 2);
+  const second = s.adapter().calls[1]!.messages.at(-1)!;
+  assert.deepEqual(second.role === 'tool' ? second.images : undefined, [PNG], '手元のモデルには届く');
+  assert.equal(s.adapters.get('remote')?.calls.length ?? 0, 0, '外の提供元は一度も呼ばれない（画像はどこへも新しくは出ない）');
+});
+
+test('道具の結果の画像: 本文で道具を呼ぶモデル（json_fallback）には、道具の結果をまとめた利用者の発言の images として渡る', async t => {
+  const s = await startApp(t, {
+    models: [fakeModel('m1', { toolMode: 'json_fallback', vision: true })],
+    tools: [imageTool('img_ok', () => ({ content: '画像を見せます', images: [PNG] }))],
+  });
+  s.adapter().scripts.push(textOnly('<tool_call>{"name": "img_ok", "arguments": {}}</tool_call>'), reply('見ました'));
+  await runImages(s, '画像を見て');
+  const second = s.adapter().calls[1]!.messages;
+  assert.deepEqual(second.map(m => m.role), ['user', 'assistant', 'user'], 'role: tool は送らない');
+  const last = second.at(-1)!;
+  assert.deepEqual(last.role === 'user' ? last.images : undefined, [PNG], '道具の結果をまとめた利用者の発言に画像がある');
+  assert.match(last.content, /img_ok」の結果/u);
+});
+
+test('見積もり: 道具の結果の画像は 1 枚ごとに IMAGE_TOKENS 増える（利用者の発言の画像と同じ数え方）。画像が無ければ今までどおり', () => {
+  const plain: ChatMessage = { role: 'tool', toolCallId: 't', name: 'image_view', content: '画像を見せます' };
+  assert.equal(estimateMessageTokens({ ...plain, images: [PNG] }) - estimateMessageTokens(plain), IMAGE_TOKENS);
+  assert.equal(estimateMessageTokens({ ...plain, images: [PNG, PNG, PNG] }) - estimateMessageTokens(plain), 3 * IMAGE_TOKENS);
+  assert.equal(estimateMessageTokens({ ...plain, images: [] }), estimateMessageTokens(plain));
+  const user: ChatMessage = { role: 'user', content: '見て' };
+  assert.equal(estimateMessageTokens({ ...user, images: [PNG] }) - estimateMessageTokens(user), IMAGE_TOKENS, '比べる基準: 利用者の発言の画像と同じ');
 });

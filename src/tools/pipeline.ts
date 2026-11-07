@@ -22,6 +22,11 @@ import type { AskKind, PreCheck, ToolContext, ToolDef, ToolOutput } from './type
 
 export const REVIEW_FORBIDDEN: ReadonlySet<ToolDef['effect']> = new Set(['write', 'exec', 'network']);
 
+// 振り返りで使えない道具: 効果が REVIEW_FORBIDDEN にあるもの、またはファイルも書く道具（writesFiles。効果が何でも）。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、reviewAllows を通す
+export function reviewAllows(tool: Pick<ToolDef, 'effect' | 'writesFiles'>): boolean {
+  return !REVIEW_FORBIDDEN.has(tool.effect) && tool.writesFiles !== true;
+}
+
 export const TOOL_OUTPUT_LIMIT = 16_000;
 
 // 計画モードで使える道具の効果: 読む道具（read）と Web の読み取り（network）。ただしファイルも書く道具（writesFiles）は除く。モデルに渡す一覧（engine/chat.ts の #toolsFor）も、パイプラインの拒否も、planAllows を通す
@@ -141,8 +146,8 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
 
   if (!tool) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_missing', { name: call.name, names: deps.registry.forRun(ctx.kind).map(t => t.name).join(', ') }), true);
   if (!tool.allowedIn.includes(ctx.kind) || ctx.forbiddenTools?.has(tool.name)) return refuse('deny', 'registry', toolText(language, 'pipeline.tool_not_allowed', { name: call.name }));
-  // 振り返りでは、登録の設定にかかわらず、外に影響する道具（書き込み・実行・送信）を使わせない（二重の禁止）
-  if (ctx.kind === 'review' && REVIEW_FORBIDDEN.has(tool.effect)) return refuse('deny', 'registry', toolText(language, 'pipeline.review_forbidden', { name: call.name }));
+  // 振り返りでは、登録の設定にかかわらず、外に影響する道具（書き込み・実行・送信、ファイルも書く道具）を使わせない（二重の禁止）
+  if (ctx.kind === 'review' && !reviewAllows(tool)) return refuse('deny', 'registry', toolText(language, 'pipeline.review_forbidden', { name: call.name }));
   // 持ち主が「止める」にした道具（モデルに渡す一覧からも外している。二重の拒否）。会話の許可・フックの allow では越えられない
   const policy = policyFor(tool.name, ctx, deps);
   if (policy === 'block') return refuse('deny', 'policy', toolText(language, 'pipeline.policy_blocked', { name: tool.name }));
