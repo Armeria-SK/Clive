@@ -331,6 +331,9 @@ const PS_DQ_ROWS = [
   // # の行コメントは、語の頭（空白・; ( ) { } , ' " | & のあと）だけ。中の引用符は始まりにならない。a#b は語
   "Write-Output a # it's\nWrite-Output b", 'Write-Output a # "\nWrite-Output b', "Write-Output 'a' # x\nWrite-Output b", "Write-Output 'a'#x\nWrite-Output b", 'Write-Output "a"#x\nWrite-Output b', 'Write-Output (1)#x\nWrite-Output b',
   "Write-Output a;#x'\nWrite-Output b", 'Write-Output a#b', "Write-Output a#b'c'", 'Write-Output a # ＡＢ\nWrite-Output b', "Write-Output {1}#x'\nWrite-Output b", 'Write-Output @(1)#x\nWrite-Output b',
+  // 空の here-string（@' の次の行がすぐ '@）は最初の '@ で閉じ、そのあとの行はコマンド。閉じを見逃すと次の here-string の閉じまでが文字列になり、Remove-Item などが隠れる
+  "$x = @'\n'@\nRemove-Item -Recurse -Force sub\n$y = @'\nz\n'@", "$x = @'\n'@\nGet-Content .env\n$y = @'\nz\n'@", "$x = @'\r\n'@\r\nRemove-Item -Recurse -Force sub\r\n$y = @'\r\nz\r\n'@",
+  "$x = @'\n'@\nRemove-Item -Recurse -Force sub", "$x = @'\n'@ + @'\n'@\nRemove-Item -Recurse -Force sub", "Write-Output @'\n'@", "$x = @'\nhello\n'@\nRemove-Item -Recurse -Force sub", "$x = @'\n\n'@\nGet-ChildItem sub",
   'Write-Output "$@"', 'Write-Output "$%"', 'Write-Output "$+"', 'Write-Output "$,"', 'Write-Output "$;"', 'Write-Output "$.x"', 'Write-Output "$²"', 'Write-Output "$‿"', 'Write-Output "$Ⅷ"', 'Write-Output "$&"',
 ];
 

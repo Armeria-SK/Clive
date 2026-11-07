@@ -695,7 +695,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
       if (next === "'") {
         const m = /^@'\r?\n/u.exec(src.slice(i));
         if (!m) return fail('here_string');
-        const close = /\r?\n'@/u.exec(src.slice(i + m[0].length));
+        const close = /(^|\r?\n)'@/u.exec(src.slice(i + m[0].length));
         if (!close) return fail('unclosed', "@'");
         push({ t: 'str', v: src.slice(i + m[0].length, i + m[0].length + close.index), dyn: false });
         i += m[0].length + close.index + close[0].length; continue;

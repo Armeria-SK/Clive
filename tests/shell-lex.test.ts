@@ -343,3 +343,29 @@ test('字句 11.2.3: bash の $[ … ] と (( … )) は、中の # がコメン
   assert.deepEqual(read('( (ls) )', 'bash').map(line), ['ls'], '空白で離した入れ子の部分シェルは今までどおり');
   assert.deepEqual(read('echo $((1 + 2)); (ls)', 'bash').map(line), ['echo $((1 + 2))', 'ls'], '$(( は算術のまま');
 });
+
+// 空の here-string（@' の次の行がすぐ '@）は、その '@ で閉じる。閉じ側が「直前に改行 1 つ」を求めていたため、開きが消費した改行しか無い空の here-string の '@ を見逃し、
+// 次の here-string の閉じまでを文字列として飲み込んで、間の行（Remove-Item など）をコマンドとして読まなかった。本物の PowerShell は最初の '@ で閉じて、そのあとの行を動かす
+test('字句 PowerShell: 空の here-string は開きの次の行の \'@ で閉じ、そのあとの行はコマンドとして読む（隠さない）', () => {
+  const commands = (command: string, shell: ShellKind = 'powershell') => read(command, shell).filter(s => s.kind === 'command').map(line);
+  for (const shell of ['powershell', 'pwsh'] as const) for (const nl of ['\n', '\r\n']) {
+    const tag = `${shell} ${JSON.stringify(nl)}`;
+    assert.deepEqual(commands(`$x = @'${nl}'@${nl}Remove-Item -Recurse -Force sub${nl}$y = @'${nl}z${nl}'@`, shell), ['Remove-Item -Recurse -Force sub'], tag);
+    assert.deepEqual(commands(`$x = @'${nl}'@${nl}Get-Content .env${nl}$y = @'${nl}z${nl}'@`, shell), ['Get-Content .env'], tag);
+    assert.deepEqual(commands(`$x = @'${nl}'@${nl}Remove-Item -Recurse -Force sub`, shell), ['Remove-Item -Recurse -Force sub'], `${tag}: 後ろに here-string が無くても読める（今までは閉じ忘れで止まっていた）`);
+    assert.deepEqual(commands(`Write-Output @'${nl}'@`, shell), ['Write-Output '], `${tag}: 空の here-string の値は空`);
+    assert.deepEqual(commands(`$x = @'${nl}'@ + @'${nl}'@${nl}Remove-Item -Recurse -Force sub`, shell), ['Remove-Item -Recurse -Force sub'], `${tag}: 続けて並べても`);
+  }
+  // 今までどおり: 中身のある here-string・空行 1 行の here-string は、改行の直後の '@ で閉じる
+  assert.deepEqual(commands("$x = @'\nhello\n'@\nRemove-Item -Recurse -Force sub"), ['Remove-Item -Recurse -Force sub']);
+  assert.deepEqual(commands("$x = @'\n\n'@\nGet-ChildItem sub"), ['Get-ChildItem sub']);
+  assert.deepEqual(read("Write-Output @'\n\n'@", 'powershell')[0]!.words.map(w => w.text), ['Write-Output', '']);
+  assert.deepEqual(read("Write-Output @'\na\n'@ x", 'powershell')[0]!.words.map(w => w.text), ['Write-Output', 'a', 'x']);
+  // 緩めていない: 閉じが無い・開きの後ろに空白・開きと同じ行に中身がある・行の途中の '@ は閉じにならない
+  assert.equal(failure("$x = @'\n", 'powershell'), 'unclosed');
+  assert.equal(failure("$x = @'\nabc '@", 'powershell'), 'unclosed');
+  assert.equal(failure("$x = @'\nabc\n '@", 'powershell'), 'unclosed');
+  assert.equal(failure("$x = @'  \n'@\nRemove-Item -Recurse -Force sub", 'powershell'), 'here_string');
+  assert.equal(failure("$x = @'x\n'@", 'powershell'), 'here_string');
+  assert.equal(failure("$x = @'", 'powershell'), 'here_string');
+});

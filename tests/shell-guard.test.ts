@@ -155,6 +155,32 @@ test('shell: 表形式のプローブ（PowerShell）', t => {
   }
 });
 
+// 空の here-string（@' の次の行がすぐ '@）の閉じを見逃して、次の here-string の閉じまでを文字列として飲み込み、間の行を隠していた（本物の PowerShell は最初の '@ で閉じて、そのあとの行を動かす）
+test('shell（PowerShell）: 空の here-string のあとの行も、コマンドとして調べる（閉じを見逃して隠さない）', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const rows: Array<[string, Decision, boolean | null]> = [
+    ["$x = @'\n'@\nRemove-Item -Recurse -Force sub\n$y = @'\nz\n'@", 'ask', true],
+    ["$x = @'\r\n'@\r\nRemove-Item -Recurse -Force sub\r\n$y = @'\r\nz\r\n'@", 'ask', true],
+    ["$x = @'\n'@\nGet-Content .env\n$y = @'\nz\n'@", 'deny', null],
+    ["$x = @'\r\n'@\r\nGet-Content .env\r\n$y = @'\r\nz\r\n'@", 'deny', null],
+    ["$x = @'\n'@\nRemove-Item -Recurse -Force sub", 'ask', true],
+    ["$x = @'\n'@ + @'\n'@\nRemove-Item -Recurse -Force sub", 'ask', true],
+    // 今までどおり
+    ["$x = @'\nhello\n'@\nRemove-Item -Recurse -Force sub", 'ask', true],
+    ["$x = @'\n\n'@\nGet-ChildItem sub", 'allow', false],
+    ["$x = @'\n'@\nGet-ChildItem sub", 'allow', false],
+    // 緩めていない: 開きの後ろに空白は読めない形のまま止める。閉じが無いのも止める
+    ["$x = @'  \n'@\nRemove-Item -Recurse -Force sub", 'deny', null],
+    ["$x = @'\nRemove-Item -Recurse -Force sub", 'deny', null],
+  ];
+  for (const [command, decision, removes] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+    if (removes !== null) assert.equal(v.removes, removes, `${shell}: ${JSON.stringify(command)} の removes`);
+  }
+});
+
 test('shell: 外から取得するコマンドは、確かめの結果にかかわらず fetched になる（実行すると外の中身を読むので、「外から読んだ」印の材料）', t => {
   const f = fixture(t);
   const verdict = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
