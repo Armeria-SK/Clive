@@ -445,3 +445,27 @@ test('PowerShell 5.1: 前の語にくっついた # は、本物の Parser で�
   }
   assert.deepEqual(wrong, []);
 });
+
+// bash の関数定義は name () { … } のように括弧の前に空白があってもよい。本物の bash では関数が定義されて、同名の許可コマンド（ls など）を隠す
+test('bash: name () { … }（括弧の前に空白・タブ・改行）も本物の bash では関数の定義で、同名のコマンドを隠す。字句の読み取りは function の印を付ける', { skip: !bashPath && 'bash が無い' }, t => {
+  const dir = scratch(t);
+  const ran = join(dir, 'cwd', 'ran.txt');
+  const rows = ['pwn() { echo ran >> ran.txt; }; pwn', 'pwn () { echo ran >> ran.txt; }; pwn', 'pwn  () { echo ran >> ran.txt; }; pwn', 'pwn\t() { echo ran >> ran.txt; }; pwn', 'pwn ()\n{ echo ran >> ran.txt; }\npwn', 'ls () { echo ran >> ran.txt; }; ls'];
+  const notFunction: string[] = [];
+  const notRun: string[] = [];
+  for (const row of rows) {
+    rmSync(ran, { force: true });
+    viaFile(dir, row);
+    if (!existsSync(ran)) notRun.push(row);
+    for (const shell of ['bash', 'sh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (!lexed.ok || !lexed.statements.some(s => s.shapes.includes('function'))) notFunction.push(`${shell}: ${row}`);
+    }
+  }
+  assert.deepEqual(notRun, [], '前提: 本物の bash では関数が定義されて動く');
+  assert.deepEqual(notFunction, [], '字句の読み取りが function の印を付けなかった');
+  rmSync(ran, { force: true });
+  viaFile(dir, '(echo ran >> ran.txt); echo ran | (cat >> ran.txt)');
+  assert.equal(existsSync(ran), true);
+  for (const row of ['(echo ran >> ran.txt)', 'echo ran | (cat >> ran.txt)']) assert.ok(!(lexShell(row, 'bash') as { statements?: Array<{ shapes: string[] }> }).statements?.some(s => s.shapes.includes('function')), `${row}: 文の頭の ( は部分シェルで、関数ではない`);
+});

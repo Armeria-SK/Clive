@@ -472,7 +472,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       }
       if (ch === '&' && src[i + 1] !== '>') { i++; cur.background = true; end(false); continue; }
       if (ch === '(' || ch === ')') {
-        if (ch === '(' && cur.words.length > 0 && !/\s/u.test(src[i - 1] ?? ' ')) cur.shapes.push('function');
+        if (ch === '(' && cur.words.length > 0) cur.shapes.push('function');
         // (( … )) は算術のコマンド。中は式として読まれ、# はコメントでない（(( ls # )); pwn は pwn も動かす）
         if (ch === '(' && src[i + 1] === '(') return fail('unexpected', '((');
         // NAME=( … ) は配列の代入。閉じ ) のあとに続く # もコメントでなく語の一部（ech=()#o } a | pwn）

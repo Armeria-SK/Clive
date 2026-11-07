@@ -410,3 +410,19 @@ test('字句 PowerShell: 前の語に空白なしでくっついた # は止め�
   for (const shell of ['powershell', 'pwsh'] as const) for (const [command, expected] of comments) assert.deepEqual(commands(command, shell), expected, `${shell}: ${JSON.stringify(command)}`);
   assert.equal(failure('<# block #>\nGet-ChildItem sub', 'powershell'), 'block_comment');
 });
+
+// bash の関数定義は name() { … } でも name () { … } でもよい（NAME ( のあとは、空白があっても関数定義）。括弧の前に空白があると関数と読まなかったため、
+// echo () { grep "$@"; }; echo x .env が、関数が隠した許可コマンド echo を呼ぶ文として通っていた。(( )) と NAME=( ) は先に止まり、文の頭の ( は今までどおり部分シェル
+test('字句 bash: 関数定義 name () { … } は、括弧の前に空白（スペース・タブ・複数）があっても function の形として印を付ける。文の頭の ( ) は部分シェルのまま', () => {
+  for (const shell of ['bash', 'sh'] as const) {
+    for (const command of ['name() { ls; }', 'name () { ls; }', 'name  () { ls; }', 'name\t() { ls; }', 'name ()\n{ ls; }', 'echo () { grep "$@"; }; echo x .env', 'ls () { cat notes.md; }; ls', 'function name () { ls; }', 'function name() { ls; }']) {
+      assert.ok(read(command, shell).some(s => s.shapes.includes('function')), `${shell}: ${JSON.stringify(command)} に function の印が無い`);
+    }
+    for (const command of ['ls', 'echo hi', '(cd sub; ls)', 'ls | (cat)', 'ls && (cd sub; ls)', 'x=1; (ls)', 'if true; then (ls); fi', 'echo $(ls)', 'cat <(ls)', 'tee >(cat)', 'echo $((1 + 2))', '[[ ( -n x ) ]] && ls', 'function name { ls; }']) {
+      assert.ok(!read(command, shell).some(s => s.shapes.includes('function')), `${shell}: ${JSON.stringify(command)} に function の印が付いた`);
+    }
+    assert.equal(failure('(( ls ))', shell), 'unexpected');
+    assert.equal(failure('ls ((1))', shell), 'unexpected');
+    assert.equal(failure('x=(a b)', shell), 'unexpected');
+  }
+});

@@ -224,6 +224,69 @@ test('shell（PowerShell）: 前の語に空白なしでくっついた # は止
   }
 });
 
+// bash の関数定義 name () { … }（括弧の前に空白）を関数と読まず、関数が隠した許可コマンドを呼ぶ文として通していた。
+// echo () { grep "$@"; }; echo x .env は、作業フォルダの grep を .env に動かせる。4 つの書き方（name() / name () / function name / function name()）はどれも確かめ
+test('shell（bash）: 関数定義 name () { … } も、name() { … } と同じ確かめにする（関数が隠した許可コマンドを通さない）', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'bash' | 'sh' = 'bash') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: false });
+  const rows: Array<[string, Decision]> = [
+    ['echo () { grep "$@"; }; echo x .env', 'ask'],
+    ['ls () { cat notes.md; }; ls', 'ask'],
+    ['ls  ()  { cat notes.md; }; ls', 'ask'],
+    ['ls\t() { cat notes.md; }; ls', 'ask'],
+    ['ls ()\n{ cat notes.md; }\nls', 'ask'],
+    // 今までどおり: ほかの 3 つの書き方も確かめ。関数を定義しない文は確かめなし
+    ['ls() { cat notes.md; }; ls', 'ask'],
+    ['function ls { cat notes.md; }; ls', 'ask'],
+    ['function ls() { cat notes.md; }; ls', 'ask'],
+    ['function ls () { cat notes.md; }; ls', 'ask'],
+    ['ls', 'allow'],
+    ['echo hi', 'allow'],
+    ['(cd sub; ls)', 'allow'],
+    ['ls | (cat)', 'allow'],
+    ['echo $(ls)', 'allow'],
+    ['[[ ( -n x ) ]] && ls', 'allow'],
+    // 関数と同じく、同名の許可コマンドを隠せるもの（alias）は今までどおり確かめ
+    ["alias ls='cat notes.md'; ls", 'ask'],
+    ["alias ll='ls -l'", 'ask'],
+    // ループの変数・読み取りの変数が PATH などを書き換える形は、今までどおり（止める・確かめ）
+    ['select PATH in .; do ls; done', 'deny'],
+    ['for ((i=0;i<3;i++)); do ls; done', 'deny'],
+    ['while read PATH; do ls; done', 'ask'],
+    ['read PATH', 'ask'],
+  ];
+  for (const [command, decision] of rows) for (const shell of ['bash', 'sh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+    if (decision === 'ask') assert.deepEqual([v.sends, v.removes], [true, true], `${shell}: ${JSON.stringify(command)} の sends・removes（理由が分からない確かめは両方立つ）`);
+    if (decision === 'allow') assert.deepEqual([v.sends, v.removes], [false, false], `${shell}: ${JSON.stringify(command)} の sends・removes`);
+  }
+});
+
+// PowerShell で同名のコマンドを隠せる関数・フィルター・別名（Set-Alias・sal・New-Alias）と、変数名を渡すパラメータが、今までどおり確かめになる（緩めていない）
+test('shell（PowerShell）: 同名のコマンドを隠せる関数・別名と、変数名を取るパラメータは、今までどおり確かめ', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const rows: Array<[string, Decision]> = [
+    ['function ls { Get-Content notes.md }; ls', 'ask'],
+    ['filter ls { Get-Content notes.md }; ls', 'ask'],
+    ['function Get-Content { Remove-Item -Recurse -Force sub }; Get-Content notes.md', 'ask'],
+    ['Set-Alias ls Get-Content; ls notes.md', 'ask'],
+    ['sal ls gc; ls notes.md', 'ask'],
+    ['New-Alias ls gc; ls notes.md', 'ask'],
+    ['Get-ChildItem | ForEach-Object -PipelineVariable PATH { $_ }', 'ask'],
+    ['Get-ChildItem -ov PATH', 'ask'],
+    ['Get-ChildItem -OutVariable PSDefaultParameterValues', 'ask'],
+    ['for ($PATH=0;$PATH -lt 1;$PATH++) { ls }', 'ask'],
+    ['foreach ($f in 1,2) { echo $f }', 'allow'],
+    ['Get-ChildItem sub', 'allow'],
+  ];
+  for (const [command, decision] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+  }
+});
+
 test('shell: 外から取得するコマンドは、確かめの結果にかかわらず fetched になる（実行すると外の中身を読むので、「外から読んだ」印の材料）', t => {
   const f = fixture(t);
   const verdict = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });
