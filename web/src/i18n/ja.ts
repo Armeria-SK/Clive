@@ -923,6 +923,8 @@ export const ja = {
   'tool.notify_owner': '持ち主に知らせる',
   'tool.doc_read': 'PDF・Word・Excel を読む',
   'tool.table_write': '表のファイル（CSV・Excel）を書く',
+  'tool.image_view': '画像を見る（ファイルか Web の画像）',
+  'tool.web_download': 'ファイルをダウンロードして downloads/ に保存する',
   'folders.mode.write': '読み書き',
   'folders.mode.read': '読むだけ',
   'folders.modeLabel': (path: string) => `${path} の権限`,

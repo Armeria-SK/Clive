@@ -24,7 +24,7 @@ export function exfiltrationCheck(text: string, language: Language, extraReasons
   return reasons.length ? { decision: 'ask', reasons, details: [text.slice(0, 500)], askKinds: ['web'] } : { decision: 'allow', reasons: [] };
 }
 
-const APP_TEXT_ONLY: ReadonlySet<ToolMessageKey> = new Set<ToolMessageKey>(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked', 'download.idle', 'download.disk_low', 'download.encoded']);
+const APP_TEXT_ONLY: ReadonlySet<ToolMessageKey> = new Set<ToolMessageKey>(['fetch.too_long', 'fetch.policy', 'fetch.redirect_downgrade', 'fetch.aborted', 'fetch.timeout', 'search.limit', 'search.blocked', 'download.idle', 'download.disk_low']);
 
 export function webFailure(error: unknown, language: Language): ToolOutput & { isError: true } {
   if (error instanceof RetrievalFailure || error instanceof SearchFailure) {

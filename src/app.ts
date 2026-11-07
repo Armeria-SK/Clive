@@ -38,6 +38,8 @@ import { checklistWrite } from './tools/builtin/checklist.ts';
 import { notifyOwner } from './tools/builtin/notify.ts';
 import { docRead } from './tools/builtin/docs.ts';
 import { tableWrite } from './tools/builtin/tables.ts';
+import { imageView } from './tools/builtin/image.ts';
+import { webDownload } from './tools/builtin/download.ts';
 import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { SkillStore } from './tools/skills/store.ts';
@@ -58,6 +60,7 @@ export function builtinTools(): ToolDef[] {
     skillView, skillDraft, curiosityAdd, curiosityList, curiosityUpdate,
     fileSearch, calculate, dateCalc,
     checklistWrite, notifyOwner, docRead, tableWrite,
+    imageView, webDownload,
   ];
 }
 
