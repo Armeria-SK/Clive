@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_LANGUAGE, type Language, type ModelConfig, type ProviderConfig } from '../config/schema.ts';
-import type { ChatMessage, StopReason, ToolCall } from '../engine/types.ts';
+import type { ChatMessage, ImageRef, StopReason, ToolCall } from '../engine/types.ts';
 import { contextHint, errorProbeText, evaluateContext, probeText } from './context.ts';
 import { providerText } from '../shared/messages/providers.ts';
 import {
@@ -14,14 +14,23 @@ type OpenAiMessage =
   | { role: 'assistant'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }
   | { role: 'tool'; tool_call_id: string; content: string };
 
+const imagePart = (img: ImageRef) => ({ type: 'image_url' as const, image_url: { url: `data:${img.mediaType};base64,${img.data}` } });
+
 export function toOpenAiMessages(system: string, messages: readonly ChatMessage[], vision: boolean): OpenAiMessage[] {
   const out: OpenAiMessage[] = [];
   if (system) out.push({ role: 'system', content: system });
+  let shown: Array<{ id: string; images: ImageRef[] }> = [];
+  const flushShown = () => {
+    if (!shown.length) return;
+    out.push({ role: 'user', content: shown.flatMap(s => [{ type: 'text' as const, text: `[image from tool result ${s.id}]` }, ...s.images.map(imagePart)]) });
+    shown = [];
+  };
   for (const m of messages) {
+    if (m.role !== 'tool') flushShown();
     if (m.role === 'user') {
       if (vision && m.images?.length) {
         out.push({ role: 'user', content: [
-          ...m.images.map(img => ({ type: 'image_url' as const, image_url: { url: `data:${img.mediaType};base64,${img.data}` } })),
+          ...m.images.map(imagePart),
           { type: 'text' as const, text: m.content },
         ] });
       } else out.push({ role: 'user', content: m.content });
@@ -32,8 +41,10 @@ export function toOpenAiMessages(system: string, messages: readonly ChatMessage[
       });
     } else {
       out.push({ role: 'tool', tool_call_id: m.toolCallId, content: m.content });
+      if (vision && m.images?.length) shown.push({ id: m.toolCallId, images: m.images });
     }
   }
+  flushShown();
   return out;
 }
 

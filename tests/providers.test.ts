@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ModelConfig, ProviderConfig } from '../src/config/schema.ts';
-import { AnthropicAdapter } from '../src/providers/anthropic.ts';
+import type { ChatMessage, ImageRef } from '../src/engine/types.ts';
+import { AnthropicAdapter, toAnthropicMessages } from '../src/providers/anthropic.ts';
 import { evaluateContext } from '../src/providers/context.ts';
 import { checkBaseUrl, parseRetryAfter, readSseData } from '../src/providers/http.ts';
-import { contextLengthFromShow, OllamaAdapter } from '../src/providers/ollama.ts';
-import { OpenAiCompatibleAdapter } from '../src/providers/openai-compatible.ts';
+import { contextLengthFromShow, OllamaAdapter, toOllamaMessages } from '../src/providers/ollama.ts';
+import { OpenAiCompatibleAdapter, toOpenAiMessages } from '../src/providers/openai-compatible.ts';
 import { ProviderError, type ModelRequest, type StreamEvent } from '../src/providers/types.ts';
 import { fakeServer, sse } from './helpers.ts';
 
@@ -277,4 +278,204 @@ test('Anthropic: probe は max_input_tokens を上限として使う', async () 
 test('Anthropic: キーが無ければ no_api_key', async () => {
   const result = await new AnthropicAdapter(anthropicProvider, {}).probe(model(), 1024);
   assert.equal(result.status, 'no_api_key');
+});
+
+// ── 道具の結果の画像 ─────────────────────────────────────
+
+const PNG: ImageRef = { mediaType: 'image/png', data: 'AAAA' };
+const JPG: ImageRef = { mediaType: 'image/jpeg', data: 'BBBB' };
+const PARALLEL_CALLS = [
+  { id: 'c1', name: 'image_view', arguments: { path: 'a.png' }, raw: '{"path":"a.png"}' },
+  { id: 'c2', name: 'file_read', arguments: { path: 'b.txt' } },
+];
+// 道具を 2 つ並べて呼んだ履歴。画像の有無だけを引数で変える
+function toolHistory(images1?: ImageRef[], images2?: ImageRef[], tail = true): ChatMessage[] {
+  return [
+    { role: 'user', content: '見て' },
+    { role: 'assistant', content: '', toolCalls: PARALLEL_CALLS },
+    { role: 'tool', toolCallId: 'c1', name: 'image_view', content: '結果1', ...(images1 ? { images: images1 } : {}) },
+    { role: 'tool', toolCallId: 'c2', name: 'file_read', content: '結果2', ...(images2 ? { images: images2 } : {}) },
+    ...(tail ? [{ role: 'assistant' as const, content: '見ました' }] : []),
+  ];
+}
+function withoutImages(history: ChatMessage[]): ChatMessage[] {
+  return history.map(m => { if (m.role !== 'tool') return m; const { images: _images, ...rest } = m; return rest; });
+}
+const anthropicOf = (h: ChatMessage[], vision: boolean) => toAnthropicMessages(h, vision);
+const openAiOf = (h: ChatMessage[], vision: boolean) => toOpenAiMessages('sys', h, vision);
+const ollamaOf = (h: ChatMessage[], vision: boolean) => toOllamaMessages('sys', h, vision);
+const json = (v: unknown) => JSON.stringify(v);
+const roles = (out: Array<{ role: string }>) => out.map(m => m.role);
+
+// 画像に対応する前の実装が、toolHistory() に対して出していた JSON そのもの
+const BEFORE = {
+  anthropic: '[{"role":"user","content":[{"type":"text","text":"見て"}]},{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"image_view","input":{"path":"a.png"}},{"type":"tool_use","id":"c2","name":"file_read","input":{"path":"b.txt"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"結果1"},{"type":"tool_result","tool_use_id":"c2","content":"結果2"}]},{"role":"assistant","content":[{"type":"text","text":"見ました","cache_control":{"type":"ephemeral"}}]}]',
+  openAi: '[{"role":"system","content":"sys"},{"role":"user","content":"見て"},{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"image_view","arguments":"{\\"path\\":\\"a.png\\"}"}},{"id":"c2","type":"function","function":{"name":"file_read","arguments":"{\\"path\\":\\"b.txt\\"}"}}]},{"role":"tool","tool_call_id":"c1","content":"結果1"},{"role":"tool","tool_call_id":"c2","content":"結果2"},{"role":"assistant","content":"見ました"}]',
+  ollama: '[{"role":"system","content":"sys"},{"role":"user","content":"見て"},{"role":"assistant","content":"","tool_calls":[{"function":{"name":"image_view","arguments":{"path":"a.png"}}},{"function":{"name":"file_read","arguments":{"path":"b.txt"}}}]},{"role":"tool","content":"結果1","tool_name":"image_view"},{"role":"tool","content":"結果2","tool_name":"file_read"},{"role":"assistant","content":"見ました"}]',
+};
+
+test('道具の結果の画像: 画像が無い履歴は、画像に対応する前と同じ JSON になる（3 つの提供元・vision の true / false）', () => {
+  for (const vision of [true, false]) {
+    assert.equal(json(anthropicOf(toolHistory(), vision)), BEFORE.anthropic);
+    assert.equal(json(openAiOf(toolHistory(), vision)), BEFORE.openAi);
+    assert.equal(json(ollamaOf(toolHistory(), vision)), BEFORE.ollama);
+  }
+});
+
+test('道具の結果の画像: vision が false なら画像を落とし、画像が無いときと同じ JSON になる（3 つの提供元）', () => {
+  const histories = [toolHistory([PNG]), toolHistory([PNG], [JPG]), toolHistory(undefined, [JPG], false), toolHistory([PNG], undefined, false)];
+  for (const history of histories) {
+    const bare = withoutImages(history);
+    const outs = [anthropicOf(history, false), openAiOf(history, false), ollamaOf(history, false)].map(json);
+    assert.deepEqual(outs, [anthropicOf(bare, false), openAiOf(bare, false), ollamaOf(bare, false)].map(json));
+    for (const out of outs) assert.ok(!out.includes('AAAA') && !out.includes('BBBB') && !out.includes('image from tool result'), out);
+  }
+  assert.equal(json(anthropicOf(toolHistory([PNG]), false)), BEFORE.anthropic);
+  assert.equal(json(openAiOf(toolHistory([PNG]), false)), BEFORE.openAi);
+  assert.equal(json(ollamaOf(toolHistory([PNG]), false)), BEFORE.ollama);
+});
+
+test('Anthropic の道具の結果の画像: tool_result の中に [text, image] で入り、画像の無い結果は文字のまま', () => {
+  const out = anthropicOf(toolHistory([PNG]), true);
+  assert.equal(out.length, 4);
+  assert.deepEqual(out[2], { role: 'user', content: [
+    { type: 'tool_result', tool_use_id: 'c1', content: [
+      { type: 'text', text: '結果1' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+    ] },
+    { type: 'tool_result', tool_use_id: 'c2', content: '結果2' },
+  ] });
+  const both = anthropicOf(toolHistory([PNG, JPG], [JPG]), true)[2]!.content as any[];
+  assert.deepEqual(both.map(b => b.tool_use_id), ['c1', 'c2']);
+  assert.deepEqual(both[0].content.map((b: any) => b.type), ['text', 'image', 'image']);
+  assert.equal(both[0].content[2].source.media_type, 'image/jpeg');
+  assert.deepEqual(both[1].content.map((b: any) => b.type), ['text', 'image']);
+});
+
+test('Anthropic の道具の結果の画像: 最後の発言が道具の結果でも、キャッシュの区切りは今までどおり最後の塊に付く', () => {
+  const last = anthropicOf(toolHistory([PNG], undefined, false), true).at(-1)!.content as any[];
+  assert.equal(last.length, 2);
+  assert.equal(last[0].cache_control, undefined);
+  assert.deepEqual(last[1].cache_control, { type: 'ephemeral' });
+  assert.equal(last[0].content[1].cache_control, undefined);
+  const imageLast = anthropicOf(toolHistory(undefined, [PNG], false), true).at(-1)!.content as any[];
+  assert.deepEqual(imageLast[1].cache_control, { type: 'ephemeral' });
+  assert.deepEqual(imageLast[1].content.map((b: any) => b.type), ['text', 'image']);
+});
+
+test('Anthropic の道具の結果の画像: 文が空なら空の text を作らず、失敗の印は残る', () => {
+  const out = anthropicOf([
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'image_view', arguments: {} }, { id: 'c2', name: 'x', arguments: {} }] },
+    { role: 'tool', toolCallId: 'c1', name: 'image_view', content: '', images: [PNG] },
+    { role: 'tool', toolCallId: 'c2', name: 'x', content: 'ng', isError: true },
+  ], true);
+  const results = out[1]!.content as any[];
+  assert.deepEqual(results[0].content, [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }]);
+  assert.equal(results[1].is_error, true);
+  assert.equal(results[1].content, 'ng');
+});
+
+test('OpenAI 互換の道具の結果の画像: 道具の結果の並びが終わったあとに、画像だけの利用者の発言が 1 つ入る', () => {
+  const out = openAiOf(toolHistory([PNG]), true);
+  assert.deepEqual(roles(out), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
+  assert.deepEqual(out[3], { role: 'tool', tool_call_id: 'c1', content: '結果1' });
+  assert.deepEqual(out[4], { role: 'tool', tool_call_id: 'c2', content: '結果2' });
+  assert.deepEqual(out[5], { role: 'user', content: [
+    { type: 'text', text: '[image from tool result c1]' },
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+  ] });
+});
+
+test('OpenAI 互換の道具の結果の画像: 2 つ目だけに画像があっても、2 つの道具の結果が続いてから画像の発言になる', () => {
+  const out = openAiOf(toolHistory(undefined, [JPG]), true);
+  assert.deepEqual(roles(out), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
+  assert.deepEqual((out[5] as any).content, [
+    { type: 'text', text: '[image from tool result c2]' },
+    { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,BBBB' } },
+  ]);
+});
+
+test('OpenAI 互換の道具の結果の画像: 両方に画像があれば、1 つの発言に呼び出しごとの目印と画像が順に入る', () => {
+  const out = openAiOf(toolHistory([PNG], [JPG]), true);
+  assert.deepEqual(roles(out), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
+  assert.deepEqual((out[5] as any).content, [
+    { type: 'text', text: '[image from tool result c1]' },
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+    { type: 'text', text: '[image from tool result c2]' },
+    { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,BBBB' } },
+  ]);
+});
+
+test('OpenAI 互換の道具の結果の画像: 道具の結果が最後の発言でも画像の発言が付き、別の並びにはそれぞれ付く', () => {
+  const last = openAiOf(toolHistory([PNG], undefined, false), true);
+  assert.deepEqual(roles(last), ['system', 'user', 'assistant', 'tool', 'tool', 'user']);
+  assert.equal((last[5] as any).content[0].text, '[image from tool result c1]');
+  const two = openAiOf([
+    ...toolHistory([PNG]),
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c3', name: 'image_view', arguments: {} }] },
+    { role: 'tool', toolCallId: 'c3', name: 'image_view', content: '結果3', images: [JPG] },
+  ], true);
+  assert.deepEqual(roles(two), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant', 'assistant', 'tool', 'user']);
+  assert.equal((two[5] as any).content[0].text, '[image from tool result c1]');
+  assert.equal((two[9] as any).content[0].text, '[image from tool result c3]');
+});
+
+test('OpenAI 互換の道具の結果の画像: 利用者の添付の画像は今までどおり（画像が先・文が後）', () => {
+  assert.deepEqual(openAiOf([{ role: 'user', content: 'これ', images: [PNG] }], true)[1], { role: 'user', content: [
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+    { type: 'text', text: 'これ' },
+  ] });
+});
+
+test('Ollama の道具の結果の画像: 道具の結果の並びが終わったあとに、画像だけの利用者の発言が 1 つ入る', () => {
+  const out = ollamaOf(toolHistory([PNG]), true);
+  assert.deepEqual(roles(out), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
+  assert.deepEqual(out[3], { role: 'tool', content: '結果1', tool_name: 'image_view' });
+  assert.deepEqual(out[4], { role: 'tool', content: '結果2', tool_name: 'file_read' });
+  assert.deepEqual(out[5], { role: 'user', content: '[image from tool result c1]', images: ['AAAA'] });
+});
+
+test('Ollama の道具の結果の画像: 2 つ目だけ・両方に画像があるときの順番と、最後の発言が道具の結果のとき', () => {
+  const second = ollamaOf(toolHistory(undefined, [JPG]), true);
+  assert.deepEqual(roles(second), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
+  assert.deepEqual(second[5], { role: 'user', content: '[image from tool result c2]', images: ['BBBB'] });
+  const both = ollamaOf(toolHistory([PNG], [JPG]), true);
+  assert.deepEqual(roles(both), ['system', 'user', 'assistant', 'tool', 'tool', 'user', 'assistant']);
+  assert.deepEqual(both[5], { role: 'user', content: '[image from tool result c1]\n[image from tool result c2]', images: ['AAAA', 'BBBB'] });
+  assert.deepEqual(roles(ollamaOf(toolHistory([PNG], undefined, false), true)), ['system', 'user', 'assistant', 'tool', 'tool', 'user']);
+});
+
+test('Ollama の道具の結果の画像: 利用者の添付の画像は今までどおり', () => {
+  assert.deepEqual(ollamaOf([{ role: 'user', content: 'これ', images: [PNG] }], true)[1], { role: 'user', content: 'これ', images: ['AAAA'] });
+});
+
+test('道具の結果の画像: 実際に送る本文にも、3 つの提供元とも画像が載る（Anthropic は tool_result の中、ほかは並びのあとの利用者の発言）', async t => {
+  const history = toolHistory([PNG], undefined, false);
+
+  let anthropicBody: any;
+  const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+    anthropicBody = JSON.parse(String(init?.body));
+    return anthropicSse([{ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } }, { type: 'message_stop' }]);
+  }) as typeof fetch;
+  await collect(new AnthropicAdapter(anthropicProvider, { ANTHROPIC_API_KEY: 'k' }, fetchImpl).stream(request(model({ vision: true }), { messages: history })));
+  assert.equal(anthropicBody.messages.at(-1).content[0].content[1].source.data, 'AAAA');
+
+  const okReply = (_req: unknown, _body: unknown, res: Parameters<Parameters<typeof fakeServer>[0]>[2]) => sse(res, [{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }]);
+  const compatServer = await fakeServer(okReply);
+  const blindServer = await fakeServer(okReply);
+  const ollamaServer = await fakeServer((_req, _body, res) => { res.writeHead(200); res.end(`${JSON.stringify({ message: { content: 'ok' }, done: true, done_reason: 'stop' })}\n`); });
+  t.after(async () => { await compatServer.close(); await blindServer.close(); await ollamaServer.close(); });
+
+  await collect(new OpenAiCompatibleAdapter(compat(compatServer.url), {}).stream(request(model({ vision: true }), { messages: history })));
+  const compatSent = compatServer.requests[0]!.body.messages;
+  assert.deepEqual(roles(compatSent), ['system', 'user', 'assistant', 'tool', 'tool', 'user']);
+  assert.equal(compatSent.at(-1).content[1].image_url.url, 'data:image/png;base64,AAAA');
+
+  await collect(new OllamaAdapter(ollama(ollamaServer.url), {}).stream(request(model({ vision: true }), { messages: history })));
+  const ollamaSent = ollamaServer.requests[0]!.body.messages;
+  assert.deepEqual(roles(ollamaSent), ['system', 'user', 'assistant', 'tool', 'tool', 'user']);
+  assert.deepEqual(ollamaSent.at(-1).images, ['AAAA']);
+
+  await collect(new OpenAiCompatibleAdapter(compat(blindServer.url), {}).stream(request(model({ vision: false }), { messages: history })));
+  assert.deepEqual(roles(blindServer.requests[0]!.body.messages), ['system', 'user', 'assistant', 'tool', 'tool']);
 });
