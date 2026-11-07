@@ -340,6 +340,29 @@ test('shell（PowerShell）: 式の位置で数・符号・演算子につなが
   }
 });
 
+// DSC の資源ブロックの中の `名前 = 値` は、名前がコマンド名の形でも、= の右が式（右辺の数のあとの # はコメント）。引数の位置と読むと、隠した Get-Content が引用符の中に入って、確かめなしで通っていた（本物の PowerShell 5.1 は動かす）。
+// 読み取れない形（#）として拒否にする（隠した行を、許可フォルダの外を読む確かめや、中身の分からない確かめに落とさない）。右辺がコマンドなら引数の位置のままで、引用符の中の Get-Content は動かない文字
+test('shell（PowerShell）: DSC の `名前 = 値` で = のあとの数につながった # は止める（隠した Get-Content は、そのまま書いたときと同じに止まる）。右辺がコマンドなら今までどおり', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const dsc = (property: string, payload: string): string => `configuration C { File f { DestinationPath = 'x'\n${property}#'\n${payload}\n#'\n}\n}; C`;
+  const secret = 'Type = Get-Content .env';
+  const rows: Array<[string, Decision]> = [
+    [dsc('Contents = 1', secret), 'deny'], [dsc('Contents= 1', secret), 'deny'], [dsc('Contents =1', secret), 'deny'], [dsc('Contents=1', secret), 'deny'],
+    [dsc('Contents = -1', secret), 'deny'], [dsc('Contents = $x*2', secret), 'deny'], [dsc('Contents = 1,2', secret), 'deny'], [dsc('Contents += 1', secret), 'deny'],
+    [dsc('Contents = 1', 'Type = Get-Content ..\\config.json'), 'deny'], [dsc('Contents=1', 'Type = Get-Content ..\\config.json'), 'deny'],
+    [dsc('Contents = 1', 'Type = Remove-Item -Recurse -Force sub'), 'deny'],
+    // 右辺がコマンドの形は引数の位置（引用符の中の Get-Content .env は文字で、動かない）。確かめにはなるが、秘密のパスの拒否にはならない
+    [dsc('Contents = Write-Output 1', secret), 'ask'], [dsc('Contents=Write-Output 1', secret), 'ask'],
+  ];
+  for (const [command, decision] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+  }
+  assert.equal(verdict('Get-Content .env').decision, 'deny', '前提: 隠した行をそのまま書けば止まる');
+  assert.equal(verdict('Get-Content ..\\config.json').decision, 'ask', '前提: 許可フォルダの外のファイルをそのまま読む行は確かめ（隠した形は、確かめにも拒否にもならず通っていた）');
+});
+
 test('shell: 外から取得するコマンドは、確かめの結果にかかわらず fetched になる（実行すると外の中身を読むので、「外から読んだ」印の材料）', t => {
   const f = fixture(t);
   const verdict = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });

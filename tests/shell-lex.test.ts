@@ -470,3 +470,36 @@ test('字句 PowerShell: 式の位置で数・符号・演算子につながっ�
     assert.deepEqual(commands(command, shell).sort(), [...expected].sort(), `${shell}: ${JSON.stringify(command)}`);
   }
 });
+
+// DSC（configuration { File f { … } }）の資源ブロックの中の `名前 = 値` は、名前がコマンド名の形（英字で始まる）でも、本物の Parser は名前と = と式として読む（右辺の数のあとの # はコメント）。
+// 文の頭がコマンド名の形だからと引数の位置と読むと、`Contents = 1#'<改行>Type = Get-Content …<改行>#'` は Get-Content を引用符の中に隠す（本物の PowerShell 5.1 は動かす）。
+// 文の頭のコマンド名の形の語に = か += などがすぐ続くとき（Contents = ・Contents= ・Contents =・Contents=）は代入と同じに、= のあとを式の位置として読む
+test('字句 PowerShell: DSC の `名前 = 値` で = のあとの数・符号・演算子につながった # は止める（名前がコマンド名の形でも。= の前後の空白の有る無しを問わない）', () => {
+  const hidden = (head: string, tail = "#'\nType = Get-Content ..\\config.json\n#'"): string => `configuration C { File f { DestinationPath = 'x'\n${head}${tail}\n}\n}; C`;
+  const heads = [
+    'Contents = 1', 'Contents= 1', 'Contents =1', 'Contents=1', 'Contents = -1', 'Contents = +1', 'Contents = 1,2', 'Contents = 1..2', 'Contents = 1.5', 'Contents = 0x1F', 'Contents = 1kb', 'Contents = $x*2', 'Contents = $x..2',
+    'Contents += 1', 'Contents -= 1', 'Contents *= 1', 'Contents /= 1', 'Contents %= 1', 'Contents+=1', 'Contents =+1', 'Contents = (1)*2',
+  ];
+  const commands: string[] = [];
+  for (const head of heads) commands.push(hidden(head), hidden(head, '#; Remove-Item -Recurse -Force sub'), `Contents = 1\n${head}#'\nGet-Content .env\n#'`);
+  commands.push(
+    "configuration C { Node n { File f { DestinationPath = 'x'\nContents = 1#'\nType = Get-Content ..\\config.json\n#'\n} } }; C",
+    "configuration C { File f { DestinationPath = 'x'; Contents = 1#'\nType = Get-Content ..\\config.json\n#'\n}\n}; C",
+    "File f { Contents = 1#'\nType = Get-Content ..\\config.json\n#'\n}",
+    "Contents = 1#'\nGet-Content ..\\config.json\n#'",
+  );
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of commands) assert.equal(failure(command, shell), 'unexpected', `${shell}: ${JSON.stringify(command)}`);
+  // 右辺がコマンドなら、その引数の位置（本物の Parser も # は語の一部。引用符の中の Get-Content は動かない）。名前の直後でない = と、# が名前の中の形も今までどおり
+  const commandsOf = (command: string, shell: ShellKind) => read(command, shell).filter(s => s.kind === 'command').map(line);
+  const same: Array<[string, string[]]> = [
+    ['Write-Output a=b#; Remove-Item -Recurse -Force sub', ['Write-Output a=b#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output x =1#; Remove-Item -Recurse -Force sub', ['Write-Output x =1#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output a#b = 1', ['Write-Output a#b = 1']],
+    ["Contents = Write-Output 1#'\nGet-Content ..\\config.json\n#'", ['Contents = Write-Output 1#\nGet-Content ..\\config.json\n#']],
+    ["Contents=Write-Output 1#'\nGet-Content ..\\config.json\n#'", ['Contents=Write-Output 1#\nGet-Content ..\\config.json\n#']],
+    ['Contents = 1 # note\nGet-Content ..\\config.json', ['Contents = 1', 'Get-Content ..\\config.json']],
+  ];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const [command, expected] of same) {
+    assert.deepEqual(commandsOf(command, shell), expected, `${shell}: ${JSON.stringify(command)}`);
+  }
+});

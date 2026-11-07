@@ -614,6 +614,9 @@ const PS_EXPR_KEYWORDS = new Set([...PS_OTHER_CONTROL, 'if', 'elseif', 'else', '
 const isPsOpener = (t: Tok): boolean => t.t === 'sub' || t.t === 'arr' || t.t === 'hash' || (t.t === 'p' && (t.v === '(' || t.v === '{' || t.v === '['));
 const isPsCloser = (t: Tok): boolean => t.t === 'p' && (t.v === ')' || t.v === '}' || t.v === ']');
 const isPsCommandWord = (v: string): boolean => /^(?:[\p{L}_%?\\/~]|\.(?![0-9]))/u.test(v) && !PS_EXPR_KEYWORDS.has(v.toLowerCase());
+// DSC の資源ブロックの `名前 = 値`（Contents = 1・Contents= 1・Contents =1・Contents=1）は、名前がコマンド名の形でも代入。= のあとは式の位置
+const PS_ASSIGN_LEAD = /^[+\-*/%]?=/u;
+const PS_NAME_ASSIGN = /^[\p{L}_][\p{L}\p{N}_]*[+\-*/%]?=/u;
 
 function psInArguments(toks: readonly Tok[], text: string): boolean {
   let start = -1;
@@ -632,8 +635,24 @@ function psInArguments(toks: readonly Tok[], text: string): boolean {
   if (start < 0) start = open + 1;
   for (let k = start; ;) {
     const t = toks[k];
+    const head = t === undefined ? text : t.t === 'word' ? t.v : '';
+    const named = PS_NAME_ASSIGN.exec(head);
+    if (named) {
+      const rest = head.slice(named[0].length);
+      if (t === undefined || rest !== '') return isPsCommandWord(rest);
+      k++;
+      continue;
+    }
     if (t === undefined) return isPsCommandWord(text);
-    if (t.t === 'word' && isPsCommandWord(t.v)) return true;
+    if (t.t === 'word' && isPsCommandWord(t.v)) {
+      const next = toks[k + 1];
+      const lead = PS_ASSIGN_LEAD.exec(next === undefined ? text : next.t === 'word' ? next.v : '');
+      if (lead === null) return true;
+      const rest = (next === undefined ? text : next.v).slice(lead[0].length);
+      if (next === undefined || rest !== '') return isPsCommandWord(rest);
+      k += 2;
+      continue;
+    }
     let eq = -1;
     let d = 0;
     for (let m = k; m < toks.length && eq < 0; m++) {

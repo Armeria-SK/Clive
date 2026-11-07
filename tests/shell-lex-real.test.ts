@@ -508,6 +508,48 @@ test('PowerShell 5.1: コマンドの引数の中の数・符号・演算子に�
   assert.deepEqual(wrong, []);
 });
 
+// DSC（configuration { File f { … } }）の資源ブロックの中の `名前 = 値` は、名前がコマンド名の形（Contents など）でも、本物の Parser は名前と = と式として読む。右辺の数・符号・演算子のあとの # は行末までコメント。
+// `Contents = 1#'<改行>Type = Get-Content ..\config.json<改行>#'` は、# 以降がコメントなので、次の行の Get-Content は本物では動く（本物の PowerShell 5.1 の Parser で CommandAst になるのを確かめた）。
+// 字句の読み取りが、文の頭がコマンド名の形だからと引数の位置（# は語の一部）と読むと、Get-Content が引用符の中に隠れる。= がすぐ続くときは代入と同じに、= のあとを式の位置として読んで止める
+const DSC_HEAD = "configuration C { File f { DestinationPath = 'x'\n";
+const DSC_TAIL = '\n}\n}; C';
+const DSC_HIDING = "#'\nType = Get-Content ..\\config.json\n#'";
+const DSC_PROPERTIES = [
+  'Contents = 1', 'Contents= 1', 'Contents =1', 'Contents=1', 'Contents = -1', 'Contents = +1', 'Contents = 1,2', 'Contents = 1..2', 'Contents = 1.5', 'Contents = 0x1F', 'Contents = 1kb', 'Contents = $x*2', 'Contents = $x..2',
+];
+const DSC_ROWS = [
+  ...DSC_PROPERTIES.map(p => `${DSC_HEAD}${p}${DSC_HIDING}${DSC_TAIL}`),
+  `configuration C { Node n { File f { DestinationPath = 'x'\nContents = 1${DSC_HIDING}\n} } }; C`,
+  `configuration C { File f { DestinationPath = 'x'; Contents = 1${DSC_HIDING}\n}\n}; C`,
+];
+
+test('PowerShell 5.1: DSC の `名前 = 値` で = のあとの数・符号・演算子につながった # は本物の Parser ではコメントで、次の行の Get-Content は動く。字句の読み取りは止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const { byRow, errored } = realWordsOf(DSC_ROWS);
+  const wrong: string[] = [];
+  for (const [i, row] of DSC_ROWS.entries()) {
+    if (errored.has(i)) { wrong.push(`${JSON.stringify(row)}: 本物の Parser が構文エラー`); continue; }
+    if (!(byRow.get(i) ?? []).some(c => c[0] === 'Get-Content' && c[1] === '..\\config.json')) wrong.push(`${JSON.stringify(row)}: 本物の Parser は Get-Content ..\\config.json を動かすはず`);
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (lexed.ok) wrong.push(`${shell}: ${JSON.stringify(row)}: 読めてしまった（止めるはず）`);
+      else if (lexed.fail.code !== 'unexpected') wrong.push(`${shell}: ${JSON.stringify(row)}: 止めた理由が ${lexed.fail.code}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+  // 読み違えの確認: 右辺がコマンドなら引数の位置なので、本物も # は語の一部（引用符の中の Get-Content は動かない）。字句の読み取りはこれを止めず、本物と同じに Get-Content を動くコマンドとして数えない
+  const arg = [`${DSC_HEAD}Type = Write-Output 1${DSC_HIDING.replace('Type = Get-Content ..\\config.json', 'Get-Content ..\\config.json')}${DSC_TAIL}`, `${DSC_HEAD}Contents = Write-Output 1${DSC_HIDING}${DSC_TAIL}`];
+  const real = realWordsOf(arg);
+  for (const [i, row] of arg.entries()) {
+    assert.ok(!real.errored.has(i), `${JSON.stringify(row)}: 本物の Parser が構文エラー`);
+    assert.ok(!(real.byRow.get(i) ?? []).some(c => c[0] === 'Get-Content'), `${JSON.stringify(row)}: 本物は引用符の中の Get-Content を動かさない`);
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      assert.ok(lexed.ok, `${shell}: ${JSON.stringify(row)}: 引数の位置なので読めるはず`);
+      if (lexed.ok) assert.ok(!lexed.statements.some(s => s.kind === 'command' && s.words[0]?.text === 'Get-Content'), `${shell}: ${JSON.stringify(row)}: Get-Content を動くコマンドと読んではいけない`);
+    }
+  }
+});
+
 // bash の関数定義は name () { … } のように括弧の前に空白があってもよい。本物の bash では関数が定義されて、同名の許可コマンド（ls など）を隠す
 test('bash: name () { … }（括弧の前に空白・タブ・改行）も本物の bash では関数の定義で、同名のコマンドを隠す。字句の読み取りは function の印を付ける', { skip: !bashPath && 'bash が無い' }, t => {
   const dir = scratch(t);
