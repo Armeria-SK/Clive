@@ -3,8 +3,9 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
-import { expandGlob } from '../src/tools/hooks/path-expand.ts';
+import { compileWildcard, expandGlob, segmentRegex } from '../src/tools/hooks/path-expand.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
@@ -116,4 +117,104 @@ test('expandGlob: PowerShell のワイルドカードは、[^S]・[!S] を否定
   assert.deepEqual(names('[!S]OUL.md', false), ['TOUL.md']);
   assert.deepEqual(names('[A-S]OUL.md', true), ['SOUL.md']);
   assert.deepEqual(names('SOUL.m?', true), ['SOUL.md']);
+});
+
+// 穴 6: ワイルドカードは、正規表現ではなく線形時間の照合（compileWildcard）で当てる。`*?*?…Z` のように * が並ぶと、古い正規表現（segmentRegex）は指数回バックトラックして固まる。
+// 古い segmentRegex は答え合わせ用に残してあり、分かる形ではそれと同じ名前に当たること、分からない形（正規表現が例外を投げる形を含む）は null を返すことを確かめる
+
+function rng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 2 ** 32; };
+}
+const pick = <T>(r: () => number, xs: readonly T[]): T => xs[Math.floor(r() * xs.length)]!;
+
+// ふつうの形: 組は [ab] [a-c] [!a] [^a] [a-] [-a] [😀-😁] だけ。これらだけの並びは、必ず分かる（null にならない）
+const PLAIN = ['a', 'b', 'A', 'B', 'c', '.', '-', 'x', '_', 'K', 'ſ', 'ß', 'ẞ', '😀', '!', '^', ' ', '{', '}', '(', ')', '+', '$', '|', ',', '*', '*', '?', '?', '[ab]', '[a-c]', '[A-C]', '[!a]', '[^a]', '[!a-c]', '[a-]', '[-a]', '[😀-😁]'];
+const ODD = ['[', ']', '[]a]', '[z-a]', '[a-c-e]', '[a-c-]', '[:alpha:]', '[[:alpha:]]', '[[a]', '[a\\b]', '[!]', '[^]', '[]', '\\', '/', '[a-a]', '[--a]', '[+--]', '[ab', '[!]a]'];
+const NAME_CHARS = ['a', 'b', 'c', 'A', 'B', '.', '-', 'x', 'K', 'k', 'K', 'ſ', 's', 'S', 'ß', 'ẞ', '😀', '😁', '^', '!', '/', '\\', '[', ']', ' ', '_'];
+
+test('compileWildcard: 古い segmentRegex と同じ名前に当たる（bash・PowerShell・大文字小文字・Unicode）。分からない形は null', () => {
+  const r = rng(20261107);
+  const wrong: string[] = [];
+  let positives = 0, negatives = 0, unknown = 0;
+  for (let i = 0; i < 4000; i++) {
+    const tokens = Array.from({ length: 1 + Math.floor(r() * 6) }, () => pick(r, i % 2 === 1 ? [...PLAIN, ...ODD] : PLAIN));
+    const pattern = tokens.join('');
+    const plainOnly = tokens.every(t => PLAIN.includes(t));
+    // 名前: 無作為なものと、パターンの * ? 組を文字に置き換えた「当たりそうな」もの
+    const names: string[] = [];
+    for (let k = 0; k < 10; k++) names.push(Array.from({ length: Math.floor(r() * 6) }, () => pick(r, NAME_CHARS)).join(''));
+    for (let k = 0; k < 14; k++) {
+      names.push(tokens.map(t => (t === '*' ? Array.from({ length: Math.floor(r() * 3) }, () => pick(r, NAME_CHARS)).join('') : t === '?' || (t.length > 1 && t.startsWith('[')) ? pick(r, NAME_CHARS) : r() < 0.3 ? t.toLowerCase() : t)).join(''));
+    }
+    for (const caseFold of [false, true]) for (const powershell of [false, true]) {
+      const match = compileWildcard(pattern, caseFold, powershell);
+      let old: RegExp | null = null;
+      try { old = segmentRegex(pattern, caseFold, powershell); } catch { old = null; }
+      if (match === null) {
+        unknown++;
+        if (plainOnly) wrong.push(`ふつうの形が null: ${JSON.stringify(pattern)}`);
+        continue;
+      }
+      if (old === null) { wrong.push(`古い方が例外なのに null でない: ${JSON.stringify(pattern)}`); continue; }
+      for (const name of names) {
+        const want = old.test(name);
+        if (want) positives++; else negatives++;
+        if (match(name) !== want) wrong.push(`${JSON.stringify(pattern)} caseFold=${caseFold} powershell=${powershell} name=${JSON.stringify(name)} 古い=${want}`);
+      }
+    }
+  }
+  assert.deepEqual(wrong.slice(0, 20), []);
+  // 空振りの試験でないこと: 当たる例・外れる例が十分にあり、分からない形も出ている
+  assert.ok(positives > 5000 && negatives > 5000 && unknown > 500, `positives=${positives} negatives=${negatives} unknown=${unknown}`);
+});
+
+test('compileWildcard: 古い正規表現と同じに読む例（* は空も、先頭の . はそのまま、未閉じの [ は文字、[a-] は a と -、bash だけ ! ^ が否定、大文字小文字）', () => {
+  const m = (pattern: string, name: string, caseFold = false, powershell = false): boolean => {
+    const match = compileWildcard(pattern, caseFold, powershell);
+    assert.notEqual(match, null, pattern);
+    assert.equal(match!(name), segmentRegex(pattern, caseFold, powershell).test(name), `古い正規表現と違う: ${pattern} / ${name}`);
+    return match!(name);
+  };
+  assert.deepEqual([m('*.ts', 'abc.ts'), m('*.ts', 'abc.js'), m('*.ts', '.ts')], [true, false, true]);
+  assert.deepEqual([m('a?c', 'abc'), m('a?c', 'ac'), m('a?c', 'abbc')], [true, false, false]);
+  assert.deepEqual([m('[ab]*', 'ax'), m('[ab]*', 'cx'), m('[ab]*', 'a')], [true, false, true]);
+  assert.deepEqual([m('*', 'anything'), m('*', ''), m('**', ''), m('**', 'ab'), m('a**b', 'ab'), m('*a*', 'xax'), m('*a*', 'xxx')], [true, true, true, true, true, true, false]);
+  assert.deepEqual([m('.*', '.env'), m('.*', 'env'), m('?', ''), m('?', '😀')], [true, false, false, true]);
+  assert.deepEqual([m('[a-]', 'a'), m('[a-]', '-'), m('[a-]', 'b'), m('[a', '[a'), m('[a', 'a'), m('a[', 'a[')], [true, true, false, true, false, true]);
+  assert.deepEqual([m('[!S]OUL', 'TOUL'), m('[!S]OUL', 'SOUL'), m('[^S]OUL', 'TOUL'), m('[!S]OUL', 'TOUL', false, true), m('[!S]OUL', '!OUL', false, true), m('[^S]OUL', '^OUL', false, true)], [true, false, true, false, true, true]);
+  assert.deepEqual([m('*.TS', 'abc.ts', true), m('*.TS', 'abc.ts'), m('[A-C]x', 'bx', true), m('[A-C]x', 'bx'), m('k', 'K', true), m('k', 'K')], [true, false, true, false, true, false]);
+  // 名前の中の / と \ には、* も ? も当たらない
+  assert.deepEqual([m('a*', 'a/b'), m('a?b', 'a/b'), m('a*', 'a\\b')], [false, false, false]);
+});
+
+test('compileWildcard: 分からない形は null（空の組・先頭が ] の組・[ の入れ子・逆向きの範囲・[:alpha:]・組の中の \\・組の外の ]）。古い正規表現は、これらの多くで例外を投げる', () => {
+  for (const pattern of ['[]', '[]a]', '[!]a]', '[[a]', '[[:alpha:]]', '[:alpha:]', '[z-a]', '[a\\b]', '[a-c-e]', '[--a]', 'a]', ']*', '*]']) {
+    assert.equal(compileWildcard(pattern, false, false), null, `bash: ${pattern}`);
+    assert.equal(compileWildcard(pattern, true, true), null, `powershell: ${pattern}`);
+  }
+  // bash の [!] [^] は、否定だけで中身が空（古い正規表現では「どんな 1 文字にも当たる」）。PowerShell では ! と ^ は文字なので、1 文字の組
+  for (const pattern of ['[!]', '[^]']) assert.equal(compileWildcard(pattern, false, false), null, `bash: ${pattern}`);
+  assert.notEqual(compileWildcard('[!]', false, true), null);
+  assert.equal(compileWildcard('[^]', false, true)!('^'), true);
+  assert.equal(compileWildcard('[^]', false, true)!('a'), false);
+});
+
+// 子プロセスで測る: 退行して指数回帰に戻っても、テスト全体が固まらずに、この試験だけが落ちる
+function timedInChild(body: string, args: string[], limitMs = 8000): { ms: number; value: any } {
+  const code = `const timed = f => { const t0 = performance.now(); const value = f(); return { ms: performance.now() - t0, value }; };\n${body}`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code, ...args], { encoding: 'utf8', timeout: limitMs });
+  assert.equal(r.error, undefined, `${limitMs}ms で終わらなかった（指数回帰）: ${r.error?.message}`);
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout.trim().split('\n').pop()!);
+}
+const hooksUrl = (file: string): string => pathToFileURL(join(import.meta.dirname, '..', 'src', 'tools', 'hooks', file)).href;
+const STARS = '*?*?*?*?*?*?*?*?*?*?Z';
+
+test('compileWildcard: * が 10 個並ぶパターンを、200 文字の a に当てても 1 秒未満（古い正規表現は固まる）', () => {
+  for (const [pattern, want] of [[STARS, false], ['*a*a*a*a*a*a*a*a*a*a*Z', false], ['*?*?*?*?*?*?*?*?*?*?', true], ['[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*Z', false]] as const) {
+    const { ms, value } = timedInChild(`const { compileWildcard } = await import(process.argv[1]); const match = compileWildcard(process.argv[2], true, true); console.log(JSON.stringify(timed(() => match('a'.repeat(200)))));`, [hooksUrl('path-expand.ts'), pattern]);
+    assert.equal(value, want, pattern);
+    assert.ok(ms < 1000, `${pattern}: ${ms}ms`);
+  }
 });

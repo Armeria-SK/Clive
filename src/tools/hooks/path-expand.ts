@@ -34,7 +34,8 @@ function braces(text: string, budget = 64): string[] | null {
 }
 
 // powershell: PowerShell のワイルドカード。[..] の中の ^ と ! は否定ではなく、ただの文字（本物の PowerShell 5.1 で、[^x] は ^ と x のどちらかに当たると確かめた）
-function segmentRegex(seg: string, caseFold: boolean, powershell: boolean): RegExp {
+// 答え合わせ用に残した、正規表現に直す古い作り（tests/shell-wildcard.test.ts が compileWildcard と比べる）。* が並ぶと指数回バックトラックするので、本番では使わない
+export function segmentRegex(seg: string, caseFold: boolean, powershell: boolean): RegExp {
   let re = '';
   for (let i = 0; i < seg.length; i++) {
     const ch = seg[i]!;
@@ -51,6 +52,83 @@ function segmentRegex(seg: string, caseFold: boolean, powershell: boolean): RegE
     } else re += ch.replace(/[.+^${}()|\\/]/gu, '\\$&');
   }
   return new RegExp(`^${re}$`, caseFold ? 'iu' : 'u');
+}
+
+type CharTest = (ch: string) => boolean;
+export type Wildcard = (name: string) => boolean;
+
+const NOT_SEP: CharTest = ch => ch !== '/' && ch !== '\\';
+
+// 1 文字の比べは 1 文字だけの正規表現（戻り読みが起きない）に任せ、大文字小文字の畳み込みを segmentRegex と同じにする
+function literalTest(ch: string, caseFold: boolean): CharTest {
+  if (!caseFold) return c => c === ch;
+  const re = new RegExp(`^${ch.replace(/[.*+?^${}()|[\]\\/]/gu, '\\$&')}$`, 'iu');
+  return c => c === ch || re.test(c);
+}
+
+// [..] の中身（[ と ] の間）。見慣れた形（文字・a-z の範囲・先頭か末尾の -・bash の先頭の ! ^ による否定）だけ受け取り、それ以外は null（分からない）
+function classTest(body: string[], caseFold: boolean, powershell: boolean): CharTest | null {
+  const negate = !powershell && (body[0] === '!' || body[0] === '^');
+  const items = negate ? body.slice(1) : body;
+  if (items.length === 0 || items.some(c => c === '\\' || c === '[' || c === ']')) return null;
+  if (items[0] === ':' && items[items.length - 1] === ':') return null;
+  for (let k = 0; k < items.length; k++) {
+    if (items[k] === '-') { if (k === 0 || k === items.length - 1) continue; return null; }
+    if (items[k + 1] === '-' && k + 2 < items.length) {
+      if (items[k + 2] === '-' || items[k + 3] === '-') return null;
+      k += 2;
+    }
+  }
+  try {
+    const re = new RegExp(`[${negate ? '^' : ''}${items.map(c => (c === '^' ? '\\^' : c)).join('')}]`, caseFold ? 'iu' : 'u');
+    return c => re.test(c);
+  } catch { return null; }
+}
+
+// ワイルドカード（* ? [..]）の 1 つの名前への当てはめを、正規表現ではなく、「いまどこまで読めたか」の集合を 1 文字ずつ進める方法で行う（最悪 O(名前の長さ × パターンの長さ)。* が並んでも指数回帰しない）。
+// 当たる名前は segmentRegex と同じ（文字は 1 つずつ正規表現と同じ決まりで比べる）。分からない形（空の [] ・先頭が ] の組・[ の入れ子・逆向きの範囲・[:alpha:]・組の中の \・組の外の ]）は null
+export function compileWildcard(seg: string, caseFold: boolean, powershell: boolean): Wildcard | null {
+  const chars = Array.from(seg);
+  const tokens: Array<CharTest | null> = [];
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i]!;
+    if (ch === '*') tokens.push(null);
+    else if (ch === '?') tokens.push(NOT_SEP);
+    else if (ch === '[') {
+      const end = chars.indexOf(']', i + 2);
+      if (end < 0) { tokens.push(literalTest('[', caseFold)); continue; }
+      const test = classTest(chars.slice(i + 1, end), caseFold, powershell);
+      if (!test) return null;
+      tokens.push(test);
+      i = end;
+    } else if (ch === ']') return null;
+    else tokens.push(literalTest(ch, caseFold));
+  }
+  const m = tokens.length;
+  const fixed = tokens.filter(t => t !== null).length;
+  const closeStars = (set: Uint8Array): void => { for (let j = 0; j < m; j++) if (set[j] === 1 && tokens[j] === null) set[j + 1] = 1; };
+  let now = new Uint8Array(m + 1);
+  let after = new Uint8Array(m + 1);
+  return name => {
+    const cs = Array.from(name);
+    if (cs.length < fixed) return false;
+    now.fill(0);
+    now[0] = 1;
+    closeStars(now);
+    for (const ch of cs) {
+      after.fill(0);
+      let alive = false;
+      for (let j = 0; j < m; j++) {
+        if (now[j] === 0) continue;
+        const token = tokens[j]!;
+        if (token === null ? NOT_SEP(ch) : token(ch)) { after[token === null ? j : j + 1] = 1; alive = true; }
+      }
+      if (!alive) return false;
+      closeStars(after);
+      const spare = now; now = after; after = spare;
+    }
+    return now[m] === 1;
+  };
 }
 
 // secret: 当たったものの中の、秘密のパス（列挙しきれなくても、上限を超えた分まで探す）
