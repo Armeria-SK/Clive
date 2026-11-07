@@ -58,7 +58,8 @@ export interface PreCheck {
   ownHooksDir?: string;
   // 事前の判定: この呼び出しが外の中身を持ち込む（シェルの取得・doc_read・downloads/ の下を読む道具など。シェルは git の fetch・pull・clone、パッケージの導入を含む）。実行したら、パイプラインは「外から読んだ」印を付ける（通信の道具と同じ）
   fetched?: boolean;
-  // 事前の判定: この呼び出しが外へ送りうる / 消しうる（ファイルの上書きは消すに入れない）。自動承認が判定役に回すかの材料で、false とはっきり言わなければ true とみなす（迷ったら人）。シェルは checkShellCommand の sends / removes。file_write・file_edit・table_write は removes: false と言う
+  // 事前の判定: この呼び出しが外へ送りうる / 消しうる（ファイルの上書きは消すに入れない）。自動承認が判定役に回すかの材料（auto-approve.ts の humanOnlyOf）。
+  // 効果が write・exec・network の道具は、false とはっきり言わなければ true とみなす（迷ったら人）。効果が read・meta の道具は、true と言ったときだけ。シェルは checkShellCommand の sends / removes。file_write・file_edit・table_write は sends: false, removes: false と言う
   sends?: boolean;
   removes?: boolean;
 }
@@ -134,7 +135,7 @@ export interface ToolDef<I = any> {
   writesFiles?: true;
   // この呼び出し（引数の確かめを通ったあと）が外へ出るか。true なら、効果が network でなくても、外から読んだ印（動かしたら付く）と、自動承認で外を読んだ会話の毎回の確かめを network と同じにする。効果・計画モード・振り返りの扱いは変えない。投げる・false 以外を返すときは外へ出るとみなす
   networkCall?: (input: I) => boolean;
-  // 呼び出しの引数に関わらず、必ず何かを消す道具（memory_forget）。事前の判定が removes を言わなくても、自動承認は判定役に回さない
+  // 呼び出しの引数に関わらず、必ず何かを消す道具（memory_forget）。事前の判定が removes を言わなくても、自動承認は判定役に回さない。効果が meta の道具で消すものは、これを付ける（言い忘れると、判定役に回る）
   removes?: true;
   summarize?: (input: I, language: Language) => { title: string; body: string; cwd?: string };
   execute: (input: I, ctx: ToolContext, info?: ExecuteInfo) => Promise<ToolOutput>;

@@ -36,7 +36,7 @@ function expectRows(run: ReturnType<typeof fixture>['run'], shell: Shell, rows: 
   }
 }
 
-const NOT_LISTED = ['scp a.txt h:/x', 'rsync -a d h:/x', 'sftp h', 'ftp h', 'ssh h ls', 'nc h 80', 'ncat h 80', 'telnet h 80', 'mail -s x a@b.c', 'sendmail a@b.c', 'gh api -X POST /x', 'gh pr create', 'docker push img', 'certutil -urlcache -f https://e.com x', 'bitsadmin /transfer j https://e.com x', 'frobnicate --x'];
+const NOT_LISTED = ['scp a.txt h:/x', 'rsync -a d h:/x', 'sftp h', 'ftp h', 'ssh h ls', 'nc h 80', 'ncat h 80', 'telnet h 80', 'mail -s x a@b.c', 'sendmail a@b.c', 'gh api -X POST /x', 'gh pr create', 'docker push img', 'certutil -urlcache -f https://e.com x', 'bitsadmin /transfer j https://e.com x', 'frobnicate --x', 'truncate -s 0 a.txt'];
 
 test('sends / removes (bash): every send channel is a send, every delete channel is a remove', t => {
   const f = fixture(t);
@@ -155,6 +155,13 @@ test('sends / removes (PowerShell): every send channel is a send, every delete c
     ['git clean -fd', null, true],
     ['git stash drop', false, true],
     ['git branch -D x', false, true],
+    ['Clear-Content a.txt', false, true],
+    ['clc a.txt', false, true],
+    ['Clear-Content -Path a.txt -Force', false, true],
+    ['Clear-Content -LiteralPath a.txt', false, true],
+    ['Clear-Content *.txt', false, true],
+    ['Clear-Content new.txt', false, true],
+    ['Set-Content a.txt x; Clear-Content b.txt', false, true],
     ['tree -o a.txt', true, true],
     ['tree /F', false, false],
     ['New-Item -Path . -Name $n -ItemType File', null, true],
@@ -209,7 +216,7 @@ test('sends / removes (PowerShell): overwriting an existing file is not a remove
     ['Set-Content a.txt x', false, false],
     ['Add-Content a.txt x', false, false],
     ['Out-File a.txt', false, false],
-    ['Clear-Content a.txt', false, null],
+    ['Set-Content a.txt \'\'', false, false],
     ['Copy-Item b.txt a.txt', false, false],
     ['Copy-Item -Recurse d d2', false, false],
     ['Move-Item b.txt a.txt', false, false],

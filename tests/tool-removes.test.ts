@@ -29,7 +29,7 @@ function setup(t: { after: (fn: () => void) => void }) {
   return { ctx };
 }
 
-test('file_write / file_edit / table_write say removes: false, also when they overwrite an existing file (overwriting is not a removal)', async t => {
+test('file_write / file_edit / table_write say sends: false and removes: false, also when they overwrite an existing file (overwriting is not a removal)', async t => {
   const { ctx } = setup(t);
   const calls: Array<[string, () => ReturnType<NonNullable<typeof fileWrite.preCheck>>]> = [
     ['file_write overwrite (default) on a file with content', () => fileWrite.preCheck!({ path: 'a.txt', content: 'y' }, ctx)],
@@ -46,6 +46,7 @@ test('file_write / file_edit / table_write say removes: false, also when they ov
     const pre = await run();
     assert.equal(pre.decision, 'allow', `${label}: decision`);
     assert.equal(pre.removes, false, `${label}: removes must be said as false, not left out`);
+    assert.equal(pre.sends, false, `${label}: sends must be said as false, not left out (a write tool that says nothing counts as sending)`);
   }
 });
 
@@ -56,7 +57,7 @@ test('memory_forget is the only builtin tool that removes whatever its input; me
   assert.deepEqual(builtinTools().filter(tool => tool.removes).map(tool => tool.name), ['memory_forget']);
 });
 
-test('every builtin tool with effect write or exec is known here: a new one has to decide what it says about removes', () => {
+test('every builtin tool with effect write or exec is known here: a new one has to decide what it says about sends and removes', () => {
   const effectful = builtinTools().filter(tool => tool.effect === 'write' || tool.effect === 'exec').map(tool => tool.name).sort();
   assert.deepEqual(effectful, ['file_edit', 'file_write', 'shell_run', 'table_write']);
 });

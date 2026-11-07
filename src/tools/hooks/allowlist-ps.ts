@@ -180,7 +180,8 @@ writer('new-item ni', 'Path:path-w Name:s ItemType:File|Directory Value:s Force'
 // 計画の表に無い追加: Windows PowerShell 5.1 の mkdir・md は New-Item -ItemType Directory を包んだ関数
 writer('mkdir md', 'Path:path-w Name:s Force', 'path', joinName);
 writer('set-content add-content ac', `Path:path-w LiteralPath:path-w Value:s Encoding:${ENC} NoNewline Force`, 'path value…');
-writer('clear-content clc', 'Path:path-w LiteralPath:path-w Force', 'path');
+// 中身を空にする = 中身を消す（上書きと違い、元の中身は何も残らない）。消す印（deletes）を立てる
+writer('clear-content clc', 'Path:path-w LiteralPath:path-w Force', 'path', (_p, acc) => { acc.deletes = true; });
 writer('out-file', `FilePath:path-w LiteralPath:path-w Encoding:${ENC} Append NoNewline Width:n InputObject:s`, 'filepath');
 writer('tee-object tee', 'FilePath:path-w LiteralPath:path-w Append Variable:var', 'filepath');
 writer('copy-item copy cp cpi', 'Path:path-r LiteralPath:path-r Destination:path-w Recurse Force Container Filter:s Include:s Exclude:s', 'path destination', (p, acc) => {

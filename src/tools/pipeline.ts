@@ -11,7 +11,7 @@ import { guardText } from '../shared/messages/guard.ts';
 import { toolText } from '../shared/messages/tools.ts';
 import type { AppConfig, Language } from '../config/schema.ts';
 import { inputHash, type ApprovalBroker } from './approvals.ts';
-import { autoDecide, mayClassify, type ClassifierPrompt } from './auto-approve.ts';
+import { autoDecide, humanOnlyOf, mayClassify, type AutoGate, type ClassifierPrompt, type HumanOnly } from './auto-approve.ts';
 import { runCommandHook } from './hooks/command-hook.ts';
 import { isInside, placePath, realish, writeApprovalKind } from './hooks/scope.ts';
 import { hasToolConfigName } from './hooks/tool-config.ts';
@@ -55,7 +55,7 @@ export interface PipelineDeps {
   autoClassify?: ((prompt: ClassifierPrompt, signal: AbortSignal) => Promise<string>) | undefined;
   // 判定役に見せる、会話の利用者の最後の発言（添付の中身は除く）
   lastUserRequest?: (() => string) | undefined;
-  // この会話の実行が、外から読んだ内容を一度でも読んだことがあるか（会話ごとの印）。あれば判定役は使わない。渡さない・読めないときも、あるとみなす
+  // この会話の実行が、よそから来た文を一度でも読んだことがあるか（会話ごとの印）。あれば、判定役に見せる文に「よそから来た文を読んだ会話」の 1 行を足す（判定役を慎重にするだけ。守りは humanOnlyOf）。渡さない・読めないときも、あるとみなす
   conversationTainted?: (() => boolean) | undefined;
   // この会話で、自動承認の判定役が許可フォルダの外を読むのを一度でも許したか（会話ごとの印）。あれば、この会話のシェルのコマンドと通信の道具は、ずっと毎回確かめる。渡さない・読めないときも、あるとみなす
   conversationAutoRead?: (() => boolean) | undefined;
@@ -181,7 +181,7 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
       decision = 'deny'; reasons.push(guardText(language, 'pipeline.precheck_failed', { detail: (error as Error).message }));
     }
   }
-  // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる（自動承認が、外を読んだあとのものを判定役に回さないため）。拒否は拒否のまま
+  // 外から読んだ内容のあとは、ほかの理由で既に ask でも、理由の種類に taint を載せる（札の理由と、自動承認の判定役に回してよい種類 taint のため。送る・消すは humanOnlyOf が別に止める）。拒否は拒否のまま
   if (ctx.config.tools.taintEscalation && ctx.taint.tainted && (tool.effect === 'exec' || tool.effect === 'write' || tool.escalateOnTaint || tool.writesFiles === true) && decision !== 'deny') {
     decision = worst(decision, 'ask');
     askKinds.add('taint');
@@ -230,13 +230,22 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
   const covering = grantTarget ? ctx.writeGrants?.find(g => isInside(realish(g.folder), realish(grantTarget.path))) : undefined;
   if (covering) { decision = 'allow'; decidedBy = 'folder-grant'; approvalId = covering.approvalId; }
   // ── 自動承認（段 8b）: 判定役に回してよい確かめだけを、判定役に聞く。許せば実行、確かめる・失敗・時間切れ・読めない返事なら、いつもの承認の札 ──
-  if (decision === 'ask' && deps.autoClassify && mayClassify({ mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime, tainted: ctx.taint.tainted, conversationTainted: conversationTainted(deps) })) {
+  // 送る・消す（と、どちらか分からない）操作は、よそから来た文を読んだかどうかに関わらず、判定役に回さない（1 つ目の関所）。判定役が許すと答えたあとにも、材料を取り直してもう一度見る（2 つ目の関所）。
+  // 会話の許可・フォルダの許可・持ち主が札で通したものは、この関所の外（持ち主が決めたこと）
+  const humanOnlyNow = (): HumanOnly | undefined => humanOnlyOf({ effect: tool.effect, network, toolRemoves: tool.removes === true, check: first });
+  const autoGate: Omit<AutoGate, 'humanOnly'> = { mode: effectiveMode(ctx, deps), runKind: ctx.kind, decision, kinds: askKinds, onceOnly, everyTime };
+  const humanOnly = humanOnlyNow();
+  const humanOnlyReason = (kind: HumanOnly) => guardText(language, kind === 'sends' ? 'pipeline.auto_human_sends' : 'pipeline.auto_human_removes');
+  // 送る・消すのせいで自動承認にならなかったと札で分かるように、理由を添える（このほかの理由で回らないときは添えない）
+  if (decision === 'ask' && deps.autoClassify && humanOnly !== undefined && mayClassify({ ...autoGate, humanOnly: undefined })) reasons.push(humanOnlyReason(humanOnly));
+  if (decision === 'ask' && deps.autoClassify && mayClassify({ ...autoGate, humanOnly })) {
     const summary = tool.summarize?.(args, language) ?? { title: tool.name, body: JSON.stringify(args, null, 2) };
     const autoEvent = (state: 'checking' | 'allowed' | 'asked', reason?: string) =>
       deps.emit({ type: 'tool.auto', runId: ctx.runId, conversationId: ctx.conversationId, callId: call.id, name: call.name, state, ...(reason !== undefined ? { reason } : {}) });
     autoEvent('checking');
     const verdict = await autoDecide({
       userRequest: deps.lastUserRequest?.() ?? '', tool: tool.name, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, paths: first?.paths ?? [],
+      tainted: ctx.taint.tainted || conversationTainted(deps),
     }, deps.autoClassify, ctx.signal, deps.autoTimeoutMs);
     if (ctx.signal.aborted) {
       autoEvent('asked');
@@ -252,12 +261,19 @@ export async function runToolCall(call: ToolCall, ctx: ToolContext, deps: Pipeli
     if (modeNow !== 'auto') {
       autoEvent('asked');
     } else if (verdict.decision === 'allow') {
-      approvalId = deps.approvals.recordAuto({
-        runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, details, kinds: [...askKinds],
-      }, why);
-      decision = 'allow'; decidedBy = 'auto-mode'; autoWhy = why;
-      if (askKinds.has('outside_read')) ctx.autoReadOutside = true;
-      autoEvent('allowed', why);
+      // 2 つ目の関所: 判定役が許すと答えたら、材料（道具の定義・事前の判定）を読み直して、もう一度見る。送る・消す・分からないなら、判定役が許していても札にする
+      const late = humanOnlyNow();
+      if (late !== undefined) {
+        reasons.push(humanOnlyReason(late));
+        autoEvent('asked');
+      } else {
+        approvalId = deps.approvals.recordAuto({
+          runId: ctx.runId, conversationId: ctx.conversationId, tool: tool.name, input: args, title: summary.title, body: summary.body, cwd: summary.cwd, reasons, details, kinds: [...askKinds],
+        }, why);
+        decision = 'allow'; decidedBy = 'auto-mode'; autoWhy = why;
+        if (askKinds.has('outside_read')) ctx.autoReadOutside = true;
+        autoEvent('allowed', why);
+      }
     } else {
       reasons.push(verdict.failed ? guardText(language, 'pipeline.auto_failed') : guardText(language, 'pipeline.auto_asked', { reason: why }));
       autoEvent('asked');

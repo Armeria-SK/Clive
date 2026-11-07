@@ -201,6 +201,8 @@ const ja = {
   'pipeline.auto_no_reason': '理由は書かれていません',
   'pipeline.auto_asked': '自動承認の判定役が「確かめる」と判断しました: {reason}',
   'pipeline.auto_failed': '自動承認の判定役が答えられなかったので、確認します',
+  'pipeline.auto_human_sends': '送信なので（送るかどうか分からない操作も含みます）、自動では通さず確認します',
+  'pipeline.auto_human_removes': '削除なので（消すかどうか分からない操作も含みます）、自動では通さず確認します',
   'pipeline.auto_egress': '自動承認で許可フォルダの外を読んだ会話なので、この会話のコマンドの実行と外への送信は毎回確認します（あとの返事でも、モードを戻しても変わりません）',
 
   'hook.failed': 'フック「{name}」が失敗しました（{reason}）',
@@ -412,6 +414,8 @@ const en: Record<keyof typeof ja, string> = {
   'pipeline.auto_no_reason': 'No reason was given',
   'pipeline.auto_asked': 'The auto-approve checker decided this needs your approval: {reason}',
   'pipeline.auto_failed': 'The auto-approve checker could not give an answer, so this is checked with you',
+  'pipeline.auto_human_sends': 'This sends something out (or may send something out), so it is never auto-approved and is checked with you',
+  'pipeline.auto_human_removes': 'This deletes something (or may delete something), so it is never auto-approved and is checked with you',
   'pipeline.auto_egress': 'Auto-approve has read something outside the allowed folders in this conversation, so every command and anything sent out is checked with you from now on (later replies and other modes included)',
 
   'hook.failed': 'The hook "{name}" failed ({reason})',
