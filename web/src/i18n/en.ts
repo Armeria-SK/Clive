@@ -143,7 +143,7 @@ export const en: Dict = {
   'mode.normal': 'Normal',
   'mode.normalDesc': 'Anything that needs approval is asked of you each time',
   'mode.auto': 'Auto-approve',
-  'mode.autoDesc': 'The model of this chat decides only the approvals for shell commands that just read outside the allowed folders, by whether they fit your request (if shell commands that reach outside the allowed folders are set to "Block" in Settings, they stay blocked, so nothing changes). Writing, sending out, and running code are still asked of you. A chat that has read the web or an attachment is asked of you every time',
+  'mode.autoDesc': 'After you have read text that came from elsewhere (web pages, attachments, downloads), the model of this chat decides the approvals for writing and shell commands by whether they fit your request. But anything that sends something out (an upload, for example), anything that deletes, and anything whose effect is unclear is always asked of you, whatever the model answers (unless you chose "Allow in this chat"). Running code and writing outside the allowed folders are asked of you too. Outside the allowed folders stays blocked if it is set to "Block" in Settings (if it is set to "Ask for approval", the model also decides shell commands that just read there). Secret files stay unreadable',
   'mode.plan': 'Plan',
   'mode.planDesc': 'Changes nothing: investigates and writes a plan only. Only tools that read, and reading the web, are available (text in a URL can leave this PC when reading the web)',
   'mode.switched': 'Permission mode changed',
