@@ -85,25 +85,64 @@ function classTest(body: string[], caseFold: boolean, powershell: boolean): Char
   } catch { return null; }
 }
 
-// ワイルドカード（* ? [..]）の 1 つの名前への当てはめを、正規表現ではなく、「いまどこまで読めたか」の集合を 1 文字ずつ進める方法で行う（最悪 O(名前の長さ × パターンの長さ)。* が並んでも指数回帰しない）。
-// 当たる名前は segmentRegex と同じ（文字は 1 つずつ正規表現と同じ決まりで比べる）。分からない形（空の [] ・先頭が ] の組・[ の入れ子・逆向きの範囲・[:alpha:]・組の中の \・組の外の ]）は null
-export function compileWildcard(seg: string, caseFold: boolean, powershell: boolean): Wildcard | null {
+type Token = CharTest | null;
+// [ から数えて、その [..] の終わりの ] の位置（無ければ -1）
+type ClassEnd = (chars: string[], at: number) => number;
+
+// segmentRegex・compileWildcard の読み方: [ の 2 つあとから数えて最初の ]
+const firstClose: ClassEnd = (chars, at) => chars.indexOf(']', at + 2);
+
+// bash の読み方: 先頭の ! ^ のあとの最初の ] は文字。[:名前:] [.x.] [=x=] の中の ] は数えない
+const bashClose: ClassEnd = (chars, at) => {
+  let j = at + 1;
+  if (chars[j] === '!' || chars[j] === '^') j++;
+  if (chars[j] === ']') j++;
+  for (; j < chars.length; j++) {
+    if (chars[j] === ']') return j;
+    const kind = chars[j + 1];
+    if (chars[j] === '[' && (kind === ':' || kind === '.' || kind === '=')) {
+      for (let k = j + 2; k + 1 < chars.length; k++) if (chars[k] === kind && chars[k + 1] === ']') { j = k + 1; break; }
+    }
+  }
+  return -1;
+};
+
+// 分からない形（空の [] ・先頭が ] の組・[ の入れ子・逆向きの範囲・[:alpha:]・組の中の \・組の外の ]）は null。loose を渡すと null を返さず、分からない [..] は区切りでない任意の 1 文字、組の外の ] は文字として読む
+function tokenize(seg: string, caseFold: boolean, powershell: boolean, loose?: ClassEnd): Token[] | null {
   const chars = Array.from(seg);
-  const tokens: Array<CharTest | null> = [];
+  const tokens: Token[] = [];
   for (let i = 0; i < chars.length; i++) {
     const ch = chars[i]!;
     if (ch === '*') tokens.push(null);
     else if (ch === '?') tokens.push(NOT_SEP);
     else if (ch === '[') {
-      const end = chars.indexOf(']', i + 2);
+      const end = (loose ?? firstClose)(chars, i);
       if (end < 0) { tokens.push(literalTest('[', caseFold)); continue; }
-      const test = classTest(chars.slice(i + 1, end), caseFold, powershell);
+      const test = classTest(chars.slice(i + 1, end), caseFold, powershell) ?? (loose ? NOT_SEP : null);
       if (!test) return null;
       tokens.push(test);
       i = end;
-    } else if (ch === ']') return null;
+    } else if (ch === ']' && !loose) return null;
     else tokens.push(literalTest(ch, caseFold));
   }
+  return tokens;
+}
+
+// ワイルドカード（* ? [..]）の 1 つの名前への当てはめを、正規表現ではなく、「いまどこまで読めたか」の集合を 1 文字ずつ進める方法で行う（最悪 O(名前の長さ × パターンの長さ)。* が並んでも指数回帰しない）。
+// 当たる名前は segmentRegex と同じ（文字は 1 つずつ正規表現と同じ決まりで比べる）。分からない形は null（tokenize）
+export function compileWildcard(seg: string, caseFold: boolean, powershell: boolean): Wildcard | null {
+  const tokens = tokenize(seg, caseFold, powershell);
+  return tokens && runWildcard(tokens);
+}
+
+// compileWildcard が null を返す形のための、当たりすぎる側の照合。展開の答えには使わず、当たりうる秘密のパスを取りこぼさないために使う。
+// 分からない [..] は区切りでない任意の 1 文字とみなす。[..] の終わりの読みは 2 通り（segmentRegex と同じ読み・bash の読み）あり、どちらかで当たれば当たる
+export function looseWildcard(seg: string, caseFold: boolean, powershell: boolean): Wildcard {
+  const readings = [firstClose, bashClose].map(endOf => runWildcard(tokenize(seg, caseFold, powershell, endOf)!));
+  return name => readings.some(read => read(name));
+}
+
+function runWildcard(tokens: Token[]): Wildcard {
   const m = tokens.length;
   const fixed = tokens.filter(t => t !== null).length;
   const closeStars = (set: Uint8Array): void => { for (let j = 0; j < m; j++) if (set[j] === 1 && tokens[j] === null) set[j + 1] = 1; };
@@ -150,6 +189,8 @@ export function expandGlob(pattern: string, dotfiles: boolean, secrets: SecretSc
   let secret: string | undefined;
   let scanned = 0;
   const found = (): { secret?: string } => (secret === undefined ? {} : { secret });
+  // 読み切れない形があった。当たるものは緩い照合で、実際より多めに数えている（secret・matches は多めの側。complete は false）
+  let loose = false;
   for (const alt of alternatives) {
     const segs = alt.split(/[\\/]/u);
     const at = segs.findIndex(s => /[*?[]/u.test(s));
@@ -160,9 +201,10 @@ export function expandGlob(pattern: string, dotfiles: boolean, secrets: SecretSc
       const next: string[] = [];
       let overflow = false;
       if (/[*?[]/u.test(seg)) {
-        const match = compileWildcard(seg, WINDOWS, dotfiles);
-        // 分からない形の組は、当たるものを数えられないので、展開しきれない扱い（呼ぶ側が確かめにする）
-        if (!match) return { prefix, matches, complete: false, ...found() };
+        // 分からない形の組は、当たるものを正確には数えられないので、展開しきれない扱い（呼ぶ側が確かめにする）。ただし、フォルダの中は緩い照合で探し、秘密のパスを取りこぼさない
+        const exact = compileWildcard(seg, WINDOWS, dotfiles);
+        if (!exact) loose = true;
+        const match = exact ?? looseWildcard(seg, WINDOWS, dotfiles);
         scan: for (const dir of level) {
           let names: string[];
           try { names = readdirSync(dir); } catch { continue; }
@@ -184,22 +226,22 @@ export function expandGlob(pattern: string, dotfiles: boolean, secrets: SecretSc
     for (const m of level) if (exists(m)) matches.push(m);
     if (matches.length > GLOB_CAP) return { prefix, matches: matches.slice(0, GLOB_CAP), complete: false, ...found() };
   }
-  return { prefix, matches, complete: true, ...found() };
+  return { prefix, matches, complete: !loose, ...found() };
 }
 
 const LIST_CAP = 20_000;
 
 // PowerShell のワイルドカードを、名前 1 つに当てる（大文字小文字は、Windows では区別しない）
-// 分からない形（null）は「当たる」扱い（-Include では多めに調べる側）。-Exclude に使うと引きすぎるので、呼ぶ側は [ ] を含むパターンを渡さないこと
+// 分からない形（null）の扱いは、使い道（use）で決める。どちらも、絞り込みを効かせず、ガードが多く読む側に倒す: -Include は「当たる」（含める）、-Exclude は「当たらない」（除かない）
 const wildcardCache = new Map<string, Wildcard | null>();
-export function wildcardMatches(name: string, pattern: string): boolean {
+export function wildcardMatches(name: string, pattern: string, use: 'include' | 'exclude'): boolean {
   let match = wildcardCache.get(pattern);
   if (match === undefined) {
     match = compileWildcard(pattern, WINDOWS, true);
     if (wildcardCache.size >= 256) wildcardCache.clear();
     wildcardCache.set(pattern, match);
   }
-  return match === null || match(name);
+  return match === null ? use === 'include' : match(name);
 }
 
 // フォルダの中身（deep なら下の階層まで）の一覧。幅優先で、上限を超えたら途中まで返して complete: false。入れないフォルダ・たどれないリンクがあっても complete: false

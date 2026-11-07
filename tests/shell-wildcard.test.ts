@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
-import { compileWildcard, expandGlob, segmentRegex } from '../src/tools/hooks/path-expand.ts';
+import { compileWildcard, expandGlob, looseWildcard, segmentRegex, wildcardMatches } from '../src/tools/hooks/path-expand.ts';
 import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import { PS_WRITER_ALLOW, tempDir } from './helpers.ts';
 
@@ -278,4 +278,111 @@ test('PowerShell のワイルドカードの * は先頭が . の名前にも当
   assert.equal(f.ps('Get-Content *').decision, 'deny');
   assert.equal(f.bash('cat *').decision, 'allow');
   assert.equal(f.bash('cat .*').decision, 'deny');
+});
+
+// 見落とし: compileWildcard が読み切れない形（[ の入れ子・[:v:]・[[:alpha:]]）のとき、フォルダを調べずに「展開しきれない」で返すと、
+// 古い正規表現が読めて止めていた（deny）秘密のパス・禁止のパスが、確かめ（ask）に落ちていた。読み切れない [..] は区切りでない任意の 1 文字とみなして、フォルダの中を探す
+function secretFixture(t: { after: (fn: () => void) => void }) {
+  const f = fixture(t);
+  mkdirSync(join(f.ws, 'data'));
+  return f;
+}
+
+test('読み切れない形のワイルドカード（bash）でも、当たりうる .env は止める（読む・コピー・消す）。本物の Git Bash は、これらをすべて .env に展開する', t => {
+  const f = secretFixture(t);
+  const wrong = ['cat .en[[v]', 'cat .en[:v:]', 'cp .en[[v] data/', 'rm -f .e[[n]v', 'cat .en[[:alpha:]]', 'cat .en[[:alpha:][:digit:]]', 'head -n1 .e[[n]v']
+    .filter(c => f.bash(c).decision !== 'deny').map(c => `${c} → ${f.bash(c).decision}`);
+  assert.deepEqual(wrong, []);
+});
+
+test('読み切れない形のワイルドカード（PowerShell）でも、当たりうる .env は止める', t => {
+  const f = secretFixture(t);
+  const wrong = ['Get-Content .en[[v]', 'Remove-Item .en[[v]', 'Copy-Item .en[[v] data', "Select-String -Path '.en[[v]' -Pattern S", 'Get-Content .e[[n]v', 'Remove-Item .e[[n]v -Force']
+    .filter(c => f.ps(c).decision !== 'deny').map(c => `${c} → ${f.ps(c).decision}`);
+  assert.deepEqual(wrong, []);
+});
+
+test('読み切れない形のワイルドカードでも、当たりうる禁止のパス（config.json）は止める', t => {
+  const f = secretFixture(t);
+  assert.equal(f.ps("Get-Content '..\\config.jso[[n]'").decision, 'deny');
+  assert.equal(f.bash('cat ../config.jso[[n]').decision, 'deny');
+  assert.equal(f.bash('cat ../conf[[:alpha:]]*.json').decision, 'deny');
+});
+
+test('expandGlob: 読み切れない形でも、フォルダの中の秘密のパスを返す。展開しきれない扱い（complete: false）は変えない', t => {
+  const dir = tempDir(t);
+  for (const name of ['.env', 'notes.md']) writeFileSync(join(dir, name), 'x');
+  for (const [pattern, powershell] of [['.en[[v]', false], ['.en[[v]', true], ['.en[:v:]', false], ['.e[[n]v', true], ['.en[[:alpha:]]', false]] as const) {
+    const globbed = expandGlob(join(dir, pattern), powershell);
+    assert.deepEqual([globbed.complete, globbed.secret], [false, join(dir, '.env')], pattern);
+  }
+  // 秘密のパスが無いフォルダでは、秘密は返さず、確かめ（complete: false）のまま
+  const plain = tempDir(t);
+  writeFileSync(join(plain, 'notes.md'), 'x');
+  const globbed = expandGlob(join(plain, 'notes.m[[d]'), false);
+  assert.deepEqual([globbed.complete, globbed.secret], [false, undefined]);
+});
+
+test('読み切れない形のワイルドカードで、当たるものが秘密でなければ、止めずに確かめ（ask）のまま', t => {
+  const f = secretFixture(t);
+  for (const c of ['cat notes.m[[d]', 'cat sub/z.t[[x]t', 'cat [[:alpha:]]otes.md', 'cat nothing[[v]']) assert.equal(f.bash(c).decision, 'ask', c);
+  for (const c of ['Get-Content notes.m[[d]', 'Get-Content nothing[[v]']) assert.equal(f.ps(c).decision, 'ask', c);
+});
+
+// 緩い照合（looseWildcard）は、「読めなかった形を、実際より多く当てる」ためのもの。古い正規表現が読めて当てていた名前は、必ず当てる（これが崩れると、main で止めていたものを取りこぼす）
+test('looseWildcard: 古い segmentRegex が読めて当てていた名前には、compileWildcard が null の形でも、必ず当たる（取りこぼさない）', () => {
+  const r = rng(20261108);
+  const wrong: string[] = [];
+  let covered = 0, unreadable = 0;
+  for (let i = 0; i < 4000; i++) {
+    const tokens = Array.from({ length: 1 + Math.floor(r() * 5) }, () => pick(r, [...PLAIN, ...ODD]));
+    const pattern = tokens.join('');
+    const names: string[] = [];
+    for (let k = 0; k < 10; k++) names.push(Array.from({ length: Math.floor(r() * 6) }, () => pick(r, NAME_CHARS)).join(''));
+    for (let k = 0; k < 14; k++) names.push(tokens.map(t => (t === '*' ? Array.from({ length: Math.floor(r() * 3) }, () => pick(r, NAME_CHARS)).join('') : t === '?' || (t.length > 1 && t.startsWith('[')) ? pick(r, NAME_CHARS) : t)).join(''));
+    for (const caseFold of [false, true]) for (const powershell of [false, true]) {
+      const loose = looseWildcard(pattern, caseFold, powershell);
+      const exact = compileWildcard(pattern, caseFold, powershell);
+      let old: RegExp | null = null;
+      try { old = segmentRegex(pattern, caseFold, powershell); } catch { old = null; }
+      for (const name of names) {
+        // フォルダの中の名前に / と \ は無い（* ? も当てない）ので、区切りを含む名前は比べない（古い [^] や [--a] は区切りにも当たる）
+        if (/[\\/]/u.test(name)) continue;
+        // 読めた形は、読めた答えより少なく当てない
+        if (exact?.(name) && !loose(name)) wrong.push(`読めた形に当たらない: ${JSON.stringify(pattern)} ${JSON.stringify(name)}`);
+        if (exact === null && old !== null) {
+          unreadable++;
+          if (old.test(name)) { covered++; if (!loose(name)) wrong.push(`古い正規表現が当てた名前に当たらない: ${JSON.stringify(pattern)} caseFold=${caseFold} powershell=${powershell} name=${JSON.stringify(name)}`); }
+        }
+      }
+    }
+  }
+  assert.deepEqual(wrong.slice(0, 20), []);
+  assert.ok(unreadable > 2000 && covered > 200, `unreadable=${unreadable} covered=${covered}`);
+});
+
+test('looseWildcard: 本物の bash が展開する形（[ の入れ子・[:v:]・[[:alpha:]]・[[:alpha:][:digit:]]）に、.env が当たる。区切りには当たらない', () => {
+  for (const pattern of ['.en[[v]', '.en[:v:]', '.e[[n]v', '.en[[:alpha:]]', '.en[[:alpha:][:digit:]]', '.en[]v]', '.en[!a[]', '.en[a-c-e]', '.en[z-a]', '.en[a\\b]', '.en[[:alpha:]]*']) {
+    const loose = looseWildcard(pattern, false, false);
+    const wants = pattern.endsWith('*') ? ['.envx', '.env'] : ['.env'];
+    for (const name of wants) assert.equal(loose(name), true, `${pattern} / ${name}`);
+  }
+  const loose = looseWildcard('.en[[v]', false, false);
+  assert.deepEqual([loose('.en/'), loose('.en\\'), loose('.en'), loose('.envv')], [false, false, false, false]);
+  // 読めた形は、読めたとおりに当てる（緩めない）
+  assert.deepEqual([looseWildcard('.en[v]', false, false)('.enx'), looseWildcard('.en[v]', false, false)('.env')], [false, true]);
+});
+
+// 見落とし: wildcardMatches は、読めない形（null）を「当たる」としていたので、-Exclude に使うと除く側が増え、ガードが読むファイルが減った。呼ぶ側が include / exclude を言う
+test('wildcardMatches: 読めない形は、include では当たる（含める）、exclude では当たらない（除かない）。どちらもガードが多く読む側。読める形は同じ', () => {
+  for (const pattern of ['[[v]', '[:v:]', '[z-a]', 'a]', '[]a]']) {
+    assert.equal(wildcardMatches('anything', pattern, 'include'), true, `include ${pattern}`);
+    assert.equal(wildcardMatches('anything', pattern, 'exclude'), false, `exclude ${pattern}`);
+  }
+  for (const use of ['include', 'exclude'] as const) {
+    assert.deepEqual([wildcardMatches('a.ts', '*.ts', use), wildcardMatches('a.js', '*.ts', use)], [true, false], use);
+  }
+  // 3 つ目（include / exclude）は省けない: 省くと型が通らない
+  // @ts-expect-error use が無い
+  assert.equal(typeof wildcardMatches('a', 'a'), 'boolean');
 });

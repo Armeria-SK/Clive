@@ -357,7 +357,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     let complete = heads.complete;
     // 依存パッケージ（node_modules）の中で見つけた、秘密らしい名前のパス。止めずに、当たったパスを見せて今回だけの確かめにする
     const inDeps = new Set<string>();
-    const wanted = (name: string): boolean => (list.include.length === 0 || list.include.some(p => wildcardMatches(name, p))) && !list.exclude.some(p => wildcardMatches(name, p));
+    const wanted = (name: string): boolean => (list.include.length === 0 || list.include.some(p => wildcardMatches(name, p, 'include'))) && !list.exclude.some(p => wildcardMatches(name, p, 'exclude'));
     for (const head of heads.matches) {
       if (list.items || !isDirectory(head)) { evalAbs(head, head, false, false, false); continue; }
       const tree = listTree(head, list.deep, undefined, list.skipHidden);
