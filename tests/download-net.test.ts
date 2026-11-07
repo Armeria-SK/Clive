@@ -492,6 +492,22 @@ test('本物の通信: 本文を流して受け取り、Accept-Encoding は送�
   assert.ok(memory.written.length >= 2, '複数のかたまりに分かれて届く');
 });
 
+test('本物の通信: つなぐ先は確かめたアドレスに固定し、名前の引き直しはしない（引けない名前でも、固定したアドレスにつながる）', async t => {
+  let seenHost = '';
+  const { port } = await withServer(t, (request, response) => {
+    seenHost = String(request.headers.host);
+    response.writeHead(200, { 'content-type': 'text/plain' });
+    response.end('pinned');
+  });
+  // .invalid は決して引けない名前（RFC 6761）。引き直していれば ENOTFOUND で失敗する
+  const response = await defaultDownloadNetwork.open(new URL(`http://pinned-check.invalid:${port}/x`), '127.0.0.1', new AbortController().signal);
+  const chunks: Buffer[] = [];
+  for await (const chunk of response.body) chunks.push(Buffer.from(chunk));
+  assert.equal(response.status, 200);
+  assert.equal(Buffer.concat(chunks).toString(), 'pinned');
+  assert.equal(seenHost, `pinned-check.invalid:${port}`, 'Host は元の URL のまま');
+});
+
 test('本物の通信: 転送の応答は location を持って届き、圧縮の指定も見える', async t => {
   const { port } = await withServer(t, (request, response) => {
     if (request.url === '/r') { response.writeHead(302, { location: '/final' }); response.end('moved'); return; }

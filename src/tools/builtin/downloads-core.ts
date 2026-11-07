@@ -18,13 +18,16 @@ export function isUnderDownloads(abs: string, workspace: string): boolean {
 // 落とす文字: 制御文字・DEL・C1 制御・< > : " / バックスラッシュ | ? *・向きの印・幅の無い文字
 const DROP_RE = /[\u0000-\u001F\u007F-\u009F<>"\/\\:|?*]|[\u200E\u200F\u202A-\u202E\u2066-\u2069\u200B-\u200D\uFEFF]/gu;
 
-// 拡張子の前の部分が Windows の予約名（デバイス名）か。大文字小文字を問わない
-const RESERVED_BASE = /^(?:con|prn|aux|nul|com(?:[0-9]|[\u00B9\u00B2\u00B3])|lpt(?:[0-9]|[\u00B9\u00B2\u00B3]))$/iu;
+// 最初の . の前の部分（末尾の空白と . は除く。nul.tar.gz も「CON .txt」も予約名として扱われる）が Windows の予約名（デバイス名）か。大文字小文字を問わない
+const RESERVED_BASE = /^(?:con|prn|aux|nul|conin\$|conout\$|com(?:[0-9]|[\u00B9\u00B2\u00B3])|lpt(?:[0-9]|[\u00B9\u00B2\u00B3]))$/iu;
 
 // 危険な名前（小文字にして全名で比べる）
 const DANGEROUS_NAMES = new Set(['desktop.ini', 'autorun.inf', 'folder.htt']);
 // 危険な拡張子（. を含む、小文字）
-const DANGEROUS_EXTS = new Set(['.lnk', '.url', '.scf', '.library-ms', '.searchconnector-ms', '.appref-ms']);
+const DANGEROUS_EXTS = new Set([
+  '.lnk', '.url', '.scf', '.appref-ms', '.library-ms', '.searchconnector-ms', '.search-ms',
+  '.theme', '.themepack', '.desktopthemepackfile', '.settingcontent-ms', '.website',
+]);
 
 const MAX_NAME = 150;
 const MAX_EXT = 10;
@@ -39,20 +42,15 @@ export function safeDownloadName(candidate: string): { name: string; renamed: bo
   // 前後の空白と . を落とす
   name = name.replace(/^[\s.]+/u, '').replace(/[\s.]+$/u, '');
   if (name === '') return undefined;
-  // 拡張子の前の部分が予約名なら先頭に _
-  const dot = name.lastIndexOf('.');
-  const base = dot >= 0 ? name.slice(0, dot) : name;
+  // 最初の . の前の部分（末尾の空白と . を除く）が予約名なら先頭に _
+  const dot = name.indexOf('.');
+  const base = (dot >= 0 ? name.slice(0, dot) : name).replace(/[\s.]+$/u, '');
   if (RESERVED_BASE.test(base)) name = '_' + name;
-  // 長さは 150 文字まで（拡張子は最後の . から 10 文字まで。前を切る）
-  const dot2 = name.lastIndexOf('.');
-  if (dot2 > 0) {
-    const ext = name.slice(dot2);
-    if (ext.length <= MAX_EXT) {
-      const b = name.slice(0, dot2);
-      if (b.length + ext.length > MAX_NAME) name = b.slice(0, Math.max(0, MAX_NAME - ext.length)) + ext;
-    }
-  } else if (name.length > MAX_NAME) {
-    name = name.slice(0, MAX_NAME);
+  // 長さは 150 文字まで。最後の . から 10 文字までの拡張子は残して前を切り、拡張子が長すぎるときは名前全体を切る（切ったあとの末尾の空白と . は落とす）
+  if (name.length > MAX_NAME) {
+    const dot2 = name.lastIndexOf('.');
+    const ext = dot2 > 0 ? name.slice(dot2) : '';
+    name = ext !== '' && ext.length <= MAX_EXT ? name.slice(0, MAX_NAME - ext.length) + ext : name.slice(0, MAX_NAME).replace(/[\s.]+$/u, '');
   }
   // 危険な名前・拡張子・設定の名前なら .download を足す
   const lower = name.toLowerCase();

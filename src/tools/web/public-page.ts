@@ -314,7 +314,7 @@ export async function downloadPublic(
   }
 }
 
-const CHARSET_META =/<meta\s[^>]*?charset\s*=\s*["']?\s*([\w:.-]+)/iu;
+const CHARSET_META = /<meta\s[^>]*?charset\s*=\s*["']?\s*([\w:.-]+)/iu;
 
 export function decodeText(body: Buffer, contentType: string): string {
   const html = /^text\/html(?:;|$)/iu.test(contentType);

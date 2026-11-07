@@ -147,7 +147,9 @@ export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }>
     if (!statSync(abs, { throwIfNoEntry: false })?.isDirectory()) return { content: toolText(language, 'file.no_dir', { path: shown(abs, ctx) }), isError: true };
     const lines: string[] = [];
     const skipped = new Set<string>();
+    let fetched = false; // downloads/ の下の名前（相手が決めた名前）を一覧に入れたか
     const walk = (dir: string, depth: number, indent: string) => {
+      const inDownloads = isUnderDownloads(dir, ctx.workspace);
       for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
         if (lines.length >= 500) return;
         const full = resolve(dir, entry.name);
@@ -155,6 +157,7 @@ export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }>
         const heavy = entry.isDirectory() && !input.all && HEAVY_DIRS.has(entry.name);
         const mark = heavy && depth > 1 ? ` ${toolText(language, 'file.list_skipped_mark')}` : '';
         lines.push(`${indent}${entry.name}${entry.isDirectory() ? '/' : ''}${mark}`);
+        if (inDownloads) fetched = true;
         if (mark) skipped.add(`${entry.name}/`);
         if (entry.isDirectory() && depth > 1 && !heavy) walk(full, depth - 1, `${indent}  `);
       }
@@ -164,6 +167,6 @@ export const fileList: ToolDef<{ path?: string; depth?: number; all?: boolean }>
       ...(lines.length >= 500 ? [toolText(language, 'file.list_cut')] : []),
       ...(skipped.size ? [toolText(language, 'file.list_skipped_note', { names: [...skipped].join(', ') })] : []),
     ];
-    return { content: lines.length ? `${shown(abs, ctx)}/\n${lines.join('\n')}${notes.map(n => `\n${n}`).join('')}` : toolText(language, 'file.list_empty', { path: shown(abs, ctx) }) };
+    return { content: lines.length ? `${shown(abs, ctx)}/\n${lines.join('\n')}${notes.map(n => `\n${n}`).join('')}` : toolText(language, 'file.list_empty', { path: shown(abs, ctx) }), ...(fetched ? { fetched: true } : {}) };
   },
 };

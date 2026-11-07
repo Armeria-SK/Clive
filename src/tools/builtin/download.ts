@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, constants, linkSync, lstatSync, mkdirSync, openSync, statfsSync, unlinkSync, write, writeFileSync } from 'node:fs';
+import { closeSync, constants, linkSync, lstatSync, mkdirSync, openSync, readdirSync, statfsSync, unlinkSync, write, writeFileSync } from 'node:fs';
 import { copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Type } from '@sinclair/typebox';
@@ -16,6 +16,21 @@ import { checkFilePath } from './files.ts';
 import { exfiltrationCheck, webFailure } from './web.ts';
 
 const MAX_NUMBER = 999;
+
+// このツール自身の書きかけの名前（.<uuid>.part）。ほかの名前は、持ち主のファイルかもしれないので触らない
+const PART_NAME = /^\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.part$/u;
+// いま書いている最中の書きかけ（同時に走る別のダウンロードのものを消さないため）
+const activeParts = new Set<string>();
+
+// 落ちたり止められたりして残った、前の実行の書きかけを消す
+function removeStaleParts(dir: string): void {
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    const stale = join(dir, name);
+    if (PART_NAME.test(name) && !activeParts.has(stale)) try { unlinkSync(stale); } catch { }
+  }
+}
 
 const LINK_UNSUPPORTED = new Set(['EPERM', 'EXDEV', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EMLINK', 'EINVAL']);
 
@@ -63,8 +78,14 @@ async function place(part: string, dir: string, name: string): Promise<string | 
           linkable = false;
         }
       }
-      await copyFile(part, target, constants.COPYFILE_EXCL);
-      return candidate;
+      try {
+        await copyFile(part, target, constants.COPYFILE_EXCL);
+        return candidate;
+      } catch (error) {
+        // EEXIST 以外で失敗したときは、target は自分が（排他で）作った書きかけ。持ち主のファイルではないので消す
+        if (codeOf(error) !== 'EEXIST') try { unlinkSync(target); } catch { }
+        throw error;
+      }
     } catch (error) {
       if (codeOf(error) !== 'EEXIST') throw error;
     }
@@ -120,7 +141,9 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
       const free = freeBytesOf(dir);
       if (free < DOWNLOAD_LIMITS.minFreeBytes) return local(language, 'download.disk_low', { free });
 
+      removeStaleParts(dir);
       part = join(dir, `.${randomUUID()}.part`);
+      activeParts.add(part);
       fd = openSync(part, 'wx');
       const network = ctx.services?.web?.download;
       const downloaded = await downloadPublic(input.url, ctx.signal, partSink(fd, dir), network ? { network } : {});
@@ -153,7 +176,7 @@ export const webDownload: ToolDef<{ url: string; name?: string }> = {
       return error instanceof RetrievalFailure ? webFailure(error, language) : local(language, 'failed', { detail: safeDetail(error) });
     } finally {
       if (fd !== undefined) try { closeSync(fd); } catch { }
-      if (part !== undefined) try { unlinkSync(part); } catch { }
+      if (part !== undefined) { activeParts.delete(part); try { unlinkSync(part); } catch { } }
     }
   },
 };

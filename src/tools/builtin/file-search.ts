@@ -58,7 +58,7 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
     const caseFold = !input.case_sensitive;
     const nameMatches: string[] = [];
     const textMatches: string[] = [];
-    let fetched = false; // downloads/ の下のファイルの中身の行を結果に入れたか（名前だけの一致は印を付けない）
+    let fetched = false; // downloads/ の下のファイルの名前か中身の行を結果に入れたか（名前も相手が決める）
     const heavy = new Set<string>();
     let skippedFiles = 0;
     let scanned = 0;
@@ -98,6 +98,7 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
         const rel = shown(full, ctx);
         if (!input.text) {
           nameMatches.push(rel);
+          if (isUnderDownloads(full, ctx.workspace)) fetched = true;
           continue;
         }
         let buf: Buffer;

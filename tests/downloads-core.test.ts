@@ -34,6 +34,23 @@ test('ダウンロード: safeDownloadName は予約名に _ を付ける', () =
   assert.deepEqual(safeDownloadName('LPT\u00B9.log'), { name: '_LPT\u00B9.log', renamed: false });
 });
 
+test('ダウンロード: safeDownloadName は最初の . の前の部分（末尾の空白と . を除く）で予約名を見つける', () => {
+  assert.deepEqual(safeDownloadName('nul.tar.gz'), { name: '_nul.tar.gz', renamed: false });
+  assert.deepEqual(safeDownloadName('CON .txt'), { name: '_CON .txt', renamed: false });
+  assert.deepEqual(safeDownloadName('CONIN$'), { name: '_CONIN$', renamed: false });
+  assert.deepEqual(safeDownloadName('conin$.log'), { name: '_conin$.log', renamed: false });
+  assert.deepEqual(safeDownloadName('CONOUT$.txt'), { name: '_CONOUT$.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('com1.log'), { name: '_com1.log', renamed: false });
+  assert.deepEqual(safeDownloadName('Lpt².tar.gz'), { name: '_Lpt².tar.gz', renamed: false });
+});
+
+test('ダウンロード: safeDownloadName は予約名に似ているだけの名前には _ を付けない', () => {
+  assert.deepEqual(safeDownloadName('console.txt'), { name: 'console.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('a.nul'), { name: 'a.nul', renamed: false });
+  assert.deepEqual(safeDownloadName('conin.txt'), { name: 'conin.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('com10.txt'), { name: 'com10.txt', renamed: false });
+});
+
 test('ダウンロード: safeDownloadName は前後の空白とドットを落とす', () => {
   assert.deepEqual(safeDownloadName('report.txt.'), { name: 'report.txt', renamed: false });
   assert.deepEqual(safeDownloadName('report.txt   '), { name: 'report.txt', renamed: false });
@@ -65,6 +82,39 @@ test('ダウンロード: safeDownloadName は 150 文字まで切る', () => {
   assert.ok(r !== undefined);
   assert.ok(r!.name.length <= 150);
   assert.ok(r!.name.endsWith('.pdf'));
+});
+
+test('ダウンロード: safeDownloadName は拡張子が長すぎるときは名前全体を切り、.download と -999 を足しても 255 文字を超えない', () => {
+  const r = safeDownloadName('a'.repeat(10) + '.' + 'b'.repeat(240));
+  assert.ok(r !== undefined);
+  assert.ok(r!.name.length <= 150, String(r!.name.length));
+  assert.ok(r!.name.startsWith('aaaaaaaaaa.bbb'));
+  assert.ok(numberedName(r!.name, 999).length <= 255);
+  assert.ok((r!.name + '.download').length <= 255);
+  assert.ok(numberedName(r!.name + '.download', 999).length <= 255);
+});
+
+test('ダウンロード: safeDownloadName は切ったあとの末尾の . と空白を落とし、拡張子が危険なら .download を足しても 150 + 9 文字', () => {
+  const dotted = safeDownloadName('a'.repeat(149) + '.' + 'b'.repeat(20));
+  assert.deepEqual(dotted, { name: 'a'.repeat(149), renamed: false });
+  const spaced = safeDownloadName('a'.repeat(149) + ' ' + 'b'.repeat(20));
+  assert.deepEqual(spaced, { name: 'a'.repeat(149), renamed: false });
+  const lnk = safeDownloadName('a'.repeat(300) + '.LNK');
+  assert.ok(lnk !== undefined);
+  assert.equal(lnk!.renamed, true);
+  assert.equal(lnk!.name.length, 150 + '.download'.length);
+  assert.ok(lnk!.name.endsWith('.LNK.download'));
+});
+
+test('ダウンロード: safeDownloadName はエクスプローラーが開くと動く拡張子（大文字小文字を問わない）に .download を付ける', () => {
+  const exts = ['.lnk', '.url', '.scf', '.appref-ms', '.library-ms', '.searchconnector-ms', '.search-ms', '.theme', '.themepack', '.desktopthemepackfile', '.settingcontent-ms', '.website'];
+  for (const ext of exts) {
+    assert.deepEqual(safeDownloadName(`x${ext}`), { name: `x${ext}.download`, renamed: true }, ext);
+    const upper = ext.toUpperCase();
+    assert.deepEqual(safeDownloadName(`Y${upper}`), { name: `Y${upper}.download`, renamed: true }, upper);
+  }
+  assert.deepEqual(safeDownloadName('report.theme.txt'), { name: 'report.theme.txt', renamed: false });
+  assert.deepEqual(safeDownloadName('mywebsite'), { name: 'mywebsite', renamed: false });
 });
 
 test('ダウンロード: safeDownloadName は NFD を NFC にする', () => {

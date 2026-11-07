@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs, { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { createServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -250,6 +251,65 @@ test('上書きしない: ハードリンクが使えない保存先では、上
   assert.deepEqual(s.listing(), ['a-1.pdf', 'a.pdf']);
   assert.equal(readFileSync(join(s.downloads, 'a.pdf'), 'utf8'), 'first', 'コピーでも既にあるファイルを上書きしない');
   assert.equal(readFileSync(join(s.downloads, 'a-1.pdf'), 'utf8'), 'second');
+});
+
+test('上書きしない: コピーに切り替えた先で EEXIST 以外の失敗をしたら、書きかけの保存先を消し、失敗を伝える', async t => {
+  const w = world({ [URL_PDF]: { body: () => chunksOf('payload') } });
+  const s = setup(t, undefined, w.network);
+  patchFs(t, 'linkSync', () => () => { throw withError('EPERM', 'EPERM: operation not permitted, link'); });
+  const copy = mock.method(fsPromises, 'copyFile', (async (_from: string, to: string) => {
+    writeFileSync(to, 'half-written');
+    throw withError('ENOSPC', 'ENOSPC: no space left on device, copyfile');
+  }) as never);
+  syncBuiltinESMExports();
+  t.after(() => { copy.mock.restore(); syncBuiltinESMExports(); });
+  const out = await s.call({ url: URL_PDF });
+  assert.equal(copy.mock.callCount(), 1, 'コピーまで進んだ');
+  assert.equal(out.output.isError, true);
+  assert.match(out.output.content, /ENOSPC/u);
+  assert.ok(!out.output.content.includes(s.ctx.workspace));
+  assert.deepEqual(s.listing(), [], '書きかけの保存先も、隠した書きかけも残らない');
+});
+
+test('書きかけの掃除: 前の実行が残した .<uuid>.part だけを、次のダウンロードの前に消す（ほかの名前は触らない）', async t => {
+  const w = world({ [URL_PDF]: { body: () => chunksOf('x') } });
+  const s = setup(t, undefined, w.network);
+  mkdirSync(s.downloads, { recursive: true });
+  const stale = ['.0f8fad5b-d9cb-469f-a165-70867728950e.part', '.00000000-0000-4000-8000-000000000000.part'];
+  const keep = [
+    '.part', 'x.part', '.notes.part', '0f8fad5b-d9cb-469f-a165-70867728951e.part',
+    '.0f8fad5b-d9cb-469f-a165-70867728952e.part.txt', '..0f8fad5b-d9cb-469f-a165-70867728953e.part',
+    '.0f8fad5b-d9cb-469f-a165-70867728954e.PART', '.0F8FAD5B-D9CB-469F-A165-70867728955E.part',
+    'report.pdf.tmp', 'owner.txt',
+  ];
+  for (const name of [...stale, ...keep]) writeFileSync(join(s.downloads, name), `file ${name}`);
+  const out = await s.call({ url: URL_PDF });
+  assert.ok(!out.output.isError, out.output.content);
+  assert.deepEqual(s.listing(), [...keep, 'report.pdf'].sort());
+  for (const name of keep) assert.equal(readFileSync(join(s.downloads, name), 'utf8'), `file ${name}`, name);
+});
+
+test('書きかけの掃除: 同時に走っている別のダウンロードの書きかけは消さない', async t => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let stalled = false;
+  const w = world({
+    'https://files.example.com/slow.bin': { body: async function* () { yield Buffer.from('first'); stalled = true; await gate; yield Buffer.from('second'); } },
+    'https://files.example.com/fast.bin': { body: () => chunksOf('fast') },
+  });
+  const s = setup(t, undefined, w.network);
+  const slow = s.call({ url: 'https://files.example.com/slow.bin' });
+  while (!stalled) await tick();
+  await tick();
+  assert.equal(s.listing().length, 1, '遅い方の書きかけがある');
+  const fast = await s.call({ url: 'https://files.example.com/fast.bin' });
+  assert.ok(!fast.output.isError, fast.output.content);
+  assert.equal(s.listing().filter(name => name.endsWith('.part')).length, 1, '速い方の掃除は、遅い方の書きかけを消さない');
+  release();
+  const out = await slow;
+  assert.ok(!out.output.isError, out.output.content);
+  assert.deepEqual(s.listing(), ['fast.bin', 'slow.bin']);
+  assert.equal(readFileSync(join(s.downloads, 'slow.bin'), 'utf8'), 'firstsecond');
 });
 
 test('上書きしない: 名前が 1000 個とも取られていたら download.name_taken で、何も増えない', async t => {
