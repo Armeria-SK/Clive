@@ -254,6 +254,36 @@ for (const flag of ['-Include', '-Exclude']) {
   });
 }
 
+// 審査: コマンドは 8000 文字まで（src/tools/builtin/shell.ts）なので、1 つのセグメントに * が 4000 個並ぶパターンを 3000 個のフォルダに当てられる。* が連続しても意味は 1 つと同じなので、1 つにまとめる。
+// まとめないと、名前ごとに 4000 の状態を 1 文字ずつ進めて 2 秒を超える（まとめる前に測ったのは、全部 *: PowerShell 1.5 秒・bash 2.0 秒、* のあとに Z: どちらも 2.5 秒。長さ 200 の名前なら 11 秒）
+function manyEntriesWorkspace(t: { after: (fn: () => void) => void }): string {
+  const ws = realish(join(tempDir(t), 'workspace'));
+  mkdirSync(ws, { recursive: true });
+  for (let i = 0; i < 3000; i++) writeFileSync(join(ws, `${String(i).padStart(4, '0')}-${'a'.repeat(40)}.txt`), 'x');
+  return ws;
+}
+for (const [label, segment, decision] of [['全部 *', '*'.repeat(4000), 'ask'], ['* のあとに Z（どの名前にも当たらない）', `${'*'.repeat(3999)}Z`, 'allow']] as const) {
+  for (const shell of ['bash', 'powershell'] as const) {
+    test(`${shell}: 1 つのセグメントに * が 4000 個並ぶパターン（${label}）を 3000 個のフォルダに当てても 1 秒未満`, t => {
+      const command = shell === 'bash' ? `cat ${segment}` : `Get-Content '${segment}'`;
+      assert.ok(command.length <= 8000, 'コマンドの長さの上限（8000 文字）に収まる');
+      const { ms, value } = guardTimed(manyEntriesWorkspace(t), command, shell);
+      assert.equal(value, decision);
+      assert.ok(ms < 1000, `${ms}ms`);
+    });
+  }
+}
+
+test('compileWildcard: 連続する * は 1 つと同じ。まとめても、当たる名前は古い正規表現（segmentRegex）と変わらない', () => {
+  for (const [pattern, names] of [['a**b', ['ab', 'axb', 'a', 'b', 'axxb']], ['***', ['', 'x', 'xyz']], ['**a**', ['a', 'xax', 'x', '']], ['[ab]**c*?*', ['ac', 'bcx', 'acxy', 'cc']], ['*?*', ['', 'a', 'ab']], ['**.md', ['.md', 'a.md', 'a.mdx']]] as const) {
+    for (const powershell of [true, false]) {
+      const match = compileWildcard(pattern, true, powershell);
+      assert.notEqual(match, null, pattern);
+      for (const name of names) assert.equal(match!(name), segmentRegex(pattern, true, powershell).test(name), `${pattern} ${JSON.stringify(name)}`);
+    }
+  }
+});
+
 test('compileWildcard: * が 10 個並ぶパターンを、200 文字の a に当てても 1 秒未満（古い正規表現は固まる）', () => {
   for (const [pattern, want] of [[STARS, false], ['*a*a*a*a*a*a*a*a*a*a*Z', false], ['*?*?*?*?*?*?*?*?*?*?', true], ['[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*Z', false]] as const) {
     const { ms, value } = timedInChild(`const { compileWildcard } = await import(process.argv[1]); const match = compileWildcard(process.argv[2], true, true); console.log(JSON.stringify(timed(() => match('a'.repeat(200)))));`, [hooksUrl('path-expand.ts'), pattern]);

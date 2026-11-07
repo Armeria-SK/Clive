@@ -113,7 +113,7 @@ function tokenize(seg: string, caseFold: boolean, powershell: boolean, loose?: C
   const tokens: Token[] = [];
   for (let i = 0; i < chars.length; i++) {
     const ch = chars[i]!;
-    if (ch === '*') tokens.push(null);
+    if (ch === '*') { if (tokens.at(-1) !== null) tokens.push(null); }
     else if (ch === '?') tokens.push(NOT_SEP);
     else if (ch === '[') {
       const end = (loose ?? firstClose)(chars, i);
