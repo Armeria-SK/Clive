@@ -60,7 +60,7 @@ export interface ShellVerdict {
   ownHooksDir: string | null;
   // コマンドのどれかが外から取得する（curl・wget・Invoke-WebRequest など）か、外の中身を持ち込む（git の fetch・pull・clone・ls-remote・submodule、パッケージの導入）。実行すると外の中身を読むので、パイプラインは「外から読んだ」印を付ける
   fetched: boolean;
-  // 外へ送りうる: 取得・送信・持ち込み（fetched）、確かめの種類 egress、表が中身を知らない形（一覧に無い・形が分からない・持ち主の許可で外した確かめ）。自動承認が判定役に回さない材料なので、迷ったら true
+  // 外へ送りうる: 取得・送信・持ち込み（fetched）、確かめの種類 egress、npm・pip のどの形も（ローカルしか見ない形も。宛先を作業フォルダの設定が決める。fetched にはしない）、表が中身を知らない形（一覧に無い・形が分からない・持ち主の許可で外した確かめ）。自動承認が判定役に回さない材料なので、迷ったら true
   sends: boolean;
   // 消しうる: rm など、確かめの種類 git_write、表が中身を知らない形（sends と同じ）。ファイルの上書き（> cp mv tee sed -i など）は消すに入れない（持ち主の決め）。迷ったら true
   removes: boolean;
@@ -461,6 +461,7 @@ export function checkShellCommand(command: string, initialCwd: string, opts: She
     if (result.fetch) fetched = true;
     else if (fetched && name && SHELL_SINKS.has(name)) add('deny', text('guard.download_exec'));
     if (result.deletes) removes = true;
+    if (result.sends) sends = true;
 
     const allowedByConfig = allowEntries.some(entry => entryMatches(entry, st.words, windows));
     for (const reason of result.reasons) {
