@@ -340,11 +340,17 @@ gnu({ names: ['rm'], flags: '-r -R -f -v -d', pos: ['path-w…'] }, false, (p, a
 // ── tar・zip・unzip・gzip ──
 function archiveFile(value: Word, acc: Acc, write: boolean, ctx: MatchCtx): void {
   if (value.dynamic) { acc.add('once', 'list.dynamic', { cmd: 'tar', detail: value.text }, true); return; }
-  if (value.text.includes(':') && !(ctx.windows && /^[A-Za-z]:[\\/]/u.test(value.text))) { formOnce(acc, 'tar', `-f ${value.text}`); return; }
+  if (value.text.includes(':') && !(ctx.windows && /^[A-Za-z]:[\\/]/u.test(value.text))) { formOnce(acc, 'tar', `-f ${value.text}`, false); return; }
   checkValue(write ? 'path-w' : 'path-r', value, acc, 'tar', '-f', ctx);
 }
 const ABSOLUTE = /^(?:[A-Za-z]:)?[\\/]/u;
+const TAR_BUNDLE = /^[ctxvzjJ]*[fC]$/u;
+// 持ち主の許可が外せるのは、オプションが全部この集まり（短い c t x v z j J f C p と、長い綴りの完全一致）に入る tar だけ。集まりの外のオプションが 1 つでもあれば外せない list.form にする（省略形も外。版で別の綴りに展開される）
+const TAR_LONG_MODE = new Map([['--create', 'c'], ['--list', 't']]);
+const TAR_LONG_VALUE = new Map<string, 'f' | 'C'>([['--file', 'f'], ['--directory', 'C']]);
+const TAR_LONG_PLAIN = new Set(['--gzip', '--bzip2', '--xz', '--verbose', '--preserve-permissions']);
 const joinPath = (dir: string, name: string): string => `${dir.replace(/[\\/]+$/u, '')}/${name}`;
+const nested = (base: Word | undefined, v: Word): Word => (base && !v.dynamic && !base.dynamic && !ABSOLUTE.test(v.text) ? { ...v, text: joinPath(base.text, v.text) } : v);
 register(['tar'], (words, acc, ctx) => {
   const args = words.slice(1);
   const modes = new Set<string>();
@@ -356,43 +362,74 @@ register(['tar'], (words, acc, ctx) => {
   const baseOf = new Map<Word, Word | undefined>();
   let cdir: Word | undefined;
   const want = (rest: Word[]): void => { for (const w of rest) if (w.dynamic || w.glob) acc.add('once', 'list.dynamic', { cmd: 'tar', detail: w.text }, true); };
+  const flag = (name: string): void => acc.add('once', 'list.flag', { cmd: 'tar', flag: name }, true);
+  const unsafe = (detail: string): void => formOnce(acc, 'tar', detail, false);
   want(args);
   for (let i = 0; i < args.length; i++) {
     const w = args[i]!;
     let text = w.text;
     const bundle = i === 0 && literal(w) && !text.startsWith('-') && /^[A-Za-z]+$/u.test(text);
-    if (bundle) text = `-${text}`;
+    if (bundle) {
+      if (!TAR_BUNDLE.test(text)) formOnce(acc, 'tar', text, false);
+      text = `-${text}`;
+    }
     if (!bundle && (!literal(w) || !text.startsWith('-') || text === '-')) { pos.push(w); baseOf.set(w, cdir); continue; }
     if (text.startsWith('--')) {
       if (/^--exclude=/u.test(text)) continue;
-      acc.add('once', 'list.flag', { cmd: 'tar', flag: text.split('=')[0]! }, true);
+      const eq = text.indexOf('=');
+      const name = eq < 0 ? text : text.slice(0, eq);
+      flag(name);
+      const kind = TAR_LONG_VALUE.get(name);
+      if (kind) {
+        const v = eq < 0 ? args[++i] : { ...w, text: text.slice(eq + 1) };
+        if (!v || v.text === '') unsafe(`${name} の値`);
+        else if (kind === 'f') file = v;
+        else { dirs.push(v); cdir = nested(cdir, v); }
+        continue;
+      }
+      if (eq >= 0) { unsafe(text); continue; }
+      const mode = TAR_LONG_MODE.get(name);
+      if (mode) modes.add(mode);
+      else if (name === '--extract' || name === '--get') { acc.add('once', 'list.expand', { cmd: 'tar' }, false); expand = true; } else if (!TAR_LONG_PLAIN.has(name)) unsafe(text);
       continue;
     }
     for (let j = 1; j < text.length; j++) {
       const ch = text[j]!;
       if (ch === 'c' || ch === 't') modes.add(ch);
       else if ('vzjJ'.includes(ch)) continue;
+      else if (ch === 'p') flag('-p');
       else if (ch === 'f' || ch === 'C') {
         const rest = text.slice(j + 1);
         const v = rest !== '' ? { ...w, text: rest } : args[++i];
         if (!v) { formOnce(acc, 'tar', `-${ch} の値`); break; }
         if (ch === 'f') file = v;
-        else { dirs.push(v); cdir = cdir && !v.dynamic && !cdir.dynamic && !ABSOLUTE.test(v.text) ? { ...v, text: joinPath(cdir.text, v.text) } : v; }
+        else { dirs.push(v); cdir = nested(cdir, v); }
         break;
-      } else if (ch === 'x') { acc.add('once', 'list.expand', { cmd: 'tar' }, false); expand = true; break; } else { acc.add('once', 'list.flag', { cmd: 'tar', flag: `-${ch}` }, true); break; }
+      } else if (ch === 'x') { acc.add('once', 'list.expand', { cmd: 'tar' }, false); expand = true; break; } else {
+        flag(`-${ch}`);
+        unsafe(text);
+        break;
+      }
     }
   }
   if (expand) return;
-  if (modes.size !== 1) { formOnce(acc, 'tar', args.map(w => w.text).join(' ')); return; }
+  if (modes.size !== 1) { formOnce(acc, 'tar', args.map(w => w.text).join(' '), !file && dirs.length === 0); return; }
   const create = modes.has('c');
   if (file) archiveFile(file, acc, create, ctx);
   for (const d of dirs) checkValue('path-r', d, acc, 'tar', '-C', ctx);
   if (create) {
     // 元のフォルダの下の秘密のパスは、アーカイブにそのまま入る（out.tar という名前は秘密のパスではない）ので、歩いて調べる。-C のあとの名前は、その -C のフォルダの下
     for (const w of pos) {
-      acc.read(w, true);
       const base = baseOf.get(w);
-      acc.walk(base && !base.dynamic && !w.dynamic && !ABSOLUTE.test(w.text) ? { ...w, text: joinPath(base.text, w.text) } : w);
+      // bsdtar（tar.exe）は @ で始まる名前を「そのアーカイブを読んで、中の項目を写す」と読む。-C のあとなら、その -C のフォルダが基準。外せない確かめにして、@ を除いた名前を読み取りとして調べる（GNU tar ではただの名前だが、安全な側に倒す）
+      if (w.text.startsWith('@')) {
+        formOnce(acc, 'tar', w.text, false);
+        const name = { ...w, text: w.text.slice(1) };
+        if (name.text !== '') acc.read(nested(base, name));
+        continue;
+      }
+      acc.read(w, true);
+      acc.walk(nested(base, w));
     }
   }
 });

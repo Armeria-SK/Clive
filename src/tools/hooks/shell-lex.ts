@@ -472,7 +472,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
       }
       if (ch === '&' && src[i + 1] !== '>') { i++; cur.background = true; end(false); continue; }
       if (ch === '(' || ch === ')') {
-        if (ch === '(' && cur.words.length > 0 && !/\s/u.test(src[i - 1] ?? ' ')) cur.shapes.push('function');
+        if (ch === '(' && cur.words.length > 0) cur.shapes.push('function');
         // (( … )) は算術のコマンド。中は式として読まれ、# はコメントでない（(( ls # )); pwn は pwn も動かす）
         if (ch === '(' && src[i + 1] === '(') return fail('unexpected', '((');
         // NAME=( … ) は配列の代入。閉じ ) のあとに続く # もコメントでなく語の一部（ech=()#o } a | pwn）
@@ -589,6 +589,7 @@ function lexBash(src: string, depth: number, sink: Statement[], env: BashEnv): L
 interface Tok { t: 'word' | 'str' | 'var' | 'sub' | 'arr' | 'hash' | 'splat' | 'type' | 'member' | 'static' | 'p' | 'redir'; v: string; sp: boolean; dyn?: boolean; glob?: boolean; subs?: Tok[][] }
 
 const PS_WORD_STOPS = new Set([' ', '\t', '\r', '\n', ';', '|', '&', '(', ')', '{', '}', ',', "'", '"', '`', '$', '<', '>']);
+const PS_HASH_STARTS = new Set([';', '|', '&', '(', '{', ',', '\n']);
 const PS_OTHER_CONTROL = new Set([
   'function', 'filter', 'class', 'enum', 'param', 'begin', 'process', 'end', 'trap', 'try', 'catch', 'finally', 'switch', 'do', 'while', 'for', 'until', 'using',
   'return', 'throw', 'break', 'continue', 'exit', 'data', 'workflow', 'parallel', 'sequence', 'inlinescript', 'foreach-object-parallel',
@@ -605,6 +606,65 @@ const PS_METHOD_OK = new Set([
   'contains', 'indexof', 'lastindexof', 'padleft', 'padright', 'join', 'format',
 ]);
 const isNumberWord = (v: string): boolean => /^[-+]?[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
+
+// 語の中の # が、コマンドの引数の中かを見分ける。本物の PowerShell は、コマンドの引数の中の # は語の一部と読むが、式の位置では数（1 -1 1,2 1..2 0x1F 1kb）や演算子と数（$x*2 $x..2）のすぐあとの # をコメントと読む。
+// 文の頭（; 改行 | & の次・( { $( @( の次・代入の = の右）の語がコマンド名の形（英字・_ など）なら、その文の語は引数。数・符号・演算子・変数・文字列・予約語から始まる文、@{ } と [ ] の中は式の位置（迷えば式の位置）
+const PS_NEW_STATEMENT = new Set([';', '\n', '|', '&', '&&', '||']);
+const PS_EXPR_KEYWORDS = new Set([...PS_OTHER_CONTROL, 'if', 'elseif', 'else', 'foreach']);
+const isPsOpener = (t: Tok): boolean => t.t === 'sub' || t.t === 'arr' || t.t === 'hash' || (t.t === 'p' && (t.v === '(' || t.v === '{' || t.v === '['));
+const isPsCloser = (t: Tok): boolean => t.t === 'p' && (t.v === ')' || t.v === '}' || t.v === ']');
+const isPsCommandWord = (v: string): boolean => /^(?:[\p{L}_%?\\/~]|\.(?![0-9]))/u.test(v) && !PS_EXPR_KEYWORDS.has(v.toLowerCase());
+// DSC の資源ブロックの `名前 = 値`（Contents = 1・Contents= 1・Contents =1・Contents=1）は、名前がコマンド名の形でも代入。= のあとは式の位置
+const PS_ASSIGN_LEAD = /^[+\-*/%]?=/u;
+const PS_NAME_ASSIGN = /^[\p{L}_][\p{L}\p{N}_]*[+\-*/%]?=/u;
+
+function psInArguments(toks: readonly Tok[], text: string): boolean {
+  let start = -1;
+  let depth = 0;
+  let open = toks.length - 1;
+  for (; open >= 0; open--) {
+    const t = toks[open]!;
+    if (isPsCloser(t)) { depth++; continue; }
+    if (isPsOpener(t)) {
+      if (depth > 0) { depth--; continue; }
+      if (t.t === 'hash' || (t.t === 'p' && t.v === '[')) return false;
+      break;
+    }
+    if (start < 0 && depth === 0 && t.t === 'p' && PS_NEW_STATEMENT.has(t.v)) start = open + 1;
+  }
+  if (start < 0) start = open + 1;
+  for (let k = start; ;) {
+    const t = toks[k];
+    const head = t === undefined ? text : t.t === 'word' ? t.v : '';
+    const named = PS_NAME_ASSIGN.exec(head);
+    if (named) {
+      const rest = head.slice(named[0].length);
+      if (t === undefined || rest !== '') return isPsCommandWord(rest);
+      k++;
+      continue;
+    }
+    if (t === undefined) return isPsCommandWord(text);
+    if (t.t === 'word' && isPsCommandWord(t.v)) {
+      const next = toks[k + 1];
+      const lead = PS_ASSIGN_LEAD.exec(next === undefined ? text : next.t === 'word' ? next.v : '');
+      if (lead === null) return true;
+      const rest = (next === undefined ? text : next.v).slice(lead[0].length);
+      if (next === undefined || rest !== '') return isPsCommandWord(rest);
+      k += 2;
+      continue;
+    }
+    let eq = -1;
+    let d = 0;
+    for (let m = k; m < toks.length && eq < 0; m++) {
+      const u = toks[m]!;
+      if (isPsCloser(u)) d--;
+      else if (isPsOpener(u)) d++;
+      else if (d === 0 && u.t === 'word' && ASSIGN_OPS.has(u.v)) eq = m;
+    }
+    if (eq < 0) return false;
+    k = eq + 1;
+  }
+}
 
 function naiveSubEnd(src: string, from: number): number {
   let depth = 1;
@@ -632,12 +692,16 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
     if (!p) return false;
     return p.t === 'var' || p.t === 'str' || p.t === 'member' || p.t === 'static' || (p.t === 'p' && (p.v === ')' || p.v === ']' || p.v === '}')) || p.t === 'type';
   };
+  const atTokenStart = (): boolean => {
+    const p = toks.at(-1);
+    return sp || !p || (p.t === 'p' ? PS_HASH_STARTS.has(p.v) : p.t === 'arr' || p.t === 'hash' || p.t === 'sub');
+  };
   while (i < n) {
     const ch = src[i]!;
     if (ch === ' ' || ch === '\t') { sp = true; i++; continue; }
     if (ch === '\r') { i++; continue; }
     if (ch === '\n') { push({ t: 'p', v: '\n' }); sp = true; i++; continue; }
-    if (ch === '#') { if (sub) return fail('unexpected', '#'); while (i < n && src[i] !== '\n') i++; continue; }
+    if (ch === '#') { if (sub || !atTokenStart()) return fail('unexpected', '#'); while (i < n && src[i] !== '\n') i++; continue; }
     if (ch === '<') return fail(src[i + 1] === '#' ? 'block_comment' : 'unexpected', '<');
     if (ch === '`') return fail('backtick');
     if (ch === ';') { push({ t: 'p', v: ';' }); i++; continue; }
@@ -695,7 +759,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
       if (next === "'") {
         const m = /^@'\r?\n/u.exec(src.slice(i));
         if (!m) return fail('here_string');
-        const close = /\r?\n'@/u.exec(src.slice(i + m[0].length));
+        const close = /(^|\r?\n)'@/u.exec(src.slice(i + m[0].length));
         if (!close) return fail('unclosed', "@'");
         push({ t: 'str', v: src.slice(i + m[0].length, i + m[0].length + close.index), dyn: false });
         i += m[0].length + close.index + close[0].length; continue;
@@ -749,6 +813,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
     if (j === i) return fail('unexpected', ch);
     const text = src.slice(i, j);
     if (text.startsWith('--%')) return fail('parse_token', '--%');
+    if (text.includes('#') && ((!sp && (prevEndsValue() || toks.at(-1)?.t === 'splat')) || !psInArguments(toks, text))) return fail('unexpected', '#');
     push({ t: 'word', v: text, glob: /[*?[]/u.test(text) });
     i = j;
   }

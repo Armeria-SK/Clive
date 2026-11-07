@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { classifyStatements, noRepo, type Level, type MatchCtx, type RepoInfo } from '../src/tools/hooks/allowlist.ts';
 import { sedScriptOk } from '../src/tools/hooks/allowlist-tools.ts';
+import { realish, type ScopePolicy } from '../src/tools/hooks/scope.ts';
+import { checkShellCommand } from '../src/tools/hooks/shell-guard.ts';
 import type { ShellKind } from '../src/tools/hooks/shell-lex.ts';
+import { tempDir } from './helpers.ts';
 
 const isPs = (shell: ShellKind): boolean => shell === 'powershell' || shell === 'pwsh';
 const ctxFor = (shell: ShellKind, over: Partial<MatchCtx> = {}): MatchCtx => ({ shell, windows: isPs(shell), repo: noRepo, selfHosts: [], ...over });
@@ -545,4 +550,332 @@ test('Invoke-WebRequest・Invoke-RestMethod（5.1 の curl・wget も）: 転送
   const allow = ['Invoke-WebRequest -Uri https://e.example/ -MaximumRedirection 0', 'iwr https://e.example/ -MaximumRedirection 0 -UseBasicParsing', 'irm https://e.example/api -MaximumRedirection 0', 'curl https://e.example/ -MaximumRedirection 0'];
   assert.deepEqual(allow.filter(c => levelOf(c, 'powershell') !== 'allow'), []);
   assert.equal(levelOf('iwr https://e.example/ -MaximumRedirection 0 -Method Post -Body x', 'powershell'), 'ask', '送る形は、これまでどおりふつうの確かめ');
+});
+
+// ── 穴 3・5（clive-shell-holes）: 本物の判定（checkShellCommand）で確かめる。読み取り専用の場所と、守る場所（SOUL.md）を持つ作業場 ──
+function holeFixture(t: { after: (fn: () => void) => void }) {
+  const base = tempDir(t);
+  const ws = join(base, 'workspace');
+  const ro = join(base, 'reference');
+  mkdirSync(join(ws, 'sub'), { recursive: true });
+  mkdirSync(ro, { recursive: true });
+  writeFileSync(join(ws, 'SOUL.md'), 'persona');
+  const policy: ScopePolicy = {
+    roots: [{ path: realish(ws), mode: 'write' }, { path: realish(ro), mode: 'read' }],
+    deny: [],
+    askOnWrite: [join(ws, 'SOUL.md'), join(ws, 'USER.md'), join(ws, 'skills')],
+    skillsDir: join(ws, 'skills'),
+  };
+  const guard = (command: string, shell: 'bash' | 'powershell' = 'bash', allow?: string[], windows: boolean = shell === 'powershell') =>
+    checkShellCommand(command, realish(ws), { policy, outsideRoots: 'ask', shell, windows, ...(allow ? { allow } : {}) });
+  return { ro: ro.split('\\').join('/'), guard };
+}
+type GuardVerdict = ReturnType<ReturnType<typeof holeFixture>['guard']>;
+const whyOf = (v: GuardVerdict): string => `${v.decision} once=${v.onceOnly} sends=${v.sends} removes=${v.removes} :: ${v.reasons.join(' / ').slice(0, 140)}`;
+// 毎回確かめ（今回だけ）。理由は KNOWN_EFFECT_REASONS の外なので、送る・消すの両方が付く（Q16）
+const expectOnce = (v: GuardVerdict, label: string): void => assert.deepEqual([v.decision, v.onceOnly, v.sends, v.removes], ['ask', true, true, true], `${label} → ${whyOf(v)}`);
+
+// ループの変数は代入と同じ。bash の for NAME in … と PowerShell の foreach ($v in …) は、NAME・$v に代入する
+const LOOP_ASK: ReadonlyArray<readonly ['bash' | 'powershell', string]> = [
+  ['bash', 'for PATH in .; do ls; done'],
+  ['bash', 'for IFS in x; do echo a; done'],
+  ['bash', 'for F in a b; do echo $F; done'],
+  ['powershell', "foreach ($env:PATH in '.') { ls }"],
+  ['powershell', "foreach ($PSHOME in '.') { Get-ChildItem }"],
+  ['powershell', 'foreach ($_ in 1) { ls }'],
+];
+
+test('穴 3: ループの変数にも代入と同じ変数名の決まり（C8）をかける。PATH・IFS・$env:・予約の変数は毎回の確かめで、持ち主の許可でも外せない', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  for (const [shell, command] of LOOP_ASK) {
+    const plain = f.guard(command, shell);
+    // 持ち主の許可の一覧に、ループの名前・変数の名前・中のコマンドを入れても、この確かめは外れない
+    const allowed = f.guard(command, shell, ['for', 'foreach', 'PATH', 'IFS', 'F', '$PSHOME', '$_', 'ls', 'echo', 'Get-ChildItem']);
+    for (const [label, v] of [['', plain], ['（許可の一覧つき）', allowed]] as const) {
+      if (!(v.decision === 'ask' && v.onceOnly && v.sends && v.removes)) wrong.push(`${shell}: ${command}${label} → ${whyOf(v)}`);
+    }
+    const loopReasons = classify(command, shell).results.flatMap(r => r.reasons).filter(r => r.key === 'list.env');
+    if (loopReasons.length !== 1 || !loopReasons.every(r => r.level === 'once' && !r.exempt)) wrong.push(`${shell}: ${command} の list.env は外せない今回だけが 1 つのはず（${loopReasons.map(r => `${r.level}/${r.exempt}`).join(',')}）`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 3 の回帰: 普通のループ変数は確かめなし。ほかの変数の入り口（select・C 形式の for・read・alias・function・-OutVariable など）は今のまま止まる', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly ['bash' | 'powershell', string, 'allow' | 'ask' | 'deny']> = [
+    ['bash', 'for f in a b; do echo $f; done', 'allow'],
+    ['bash', 'for HOME in /tmp; do cat ~/.ssh/id_rsa; done', 'deny'],
+    ['bash', 'select PATH in .; do ls; done', 'deny'],
+    ['bash', 'for ((i=0;i<1;i++)); do ls; done', 'deny'],
+    ['bash', 'while read PATH; do ls; done', 'ask'],
+    ['bash', 'read PATH', 'ask'],
+    ['bash', 'alias ls=cat', 'ask'],
+    ['powershell', 'foreach ($f in 1,2) { echo $f }', 'allow'],
+    ['powershell', 'foreach ($f in Get-ChildItem) { $f.Name }', 'allow'],
+    ['powershell', 'for ($PATH=0;;) { ls }', 'ask'],
+    ['powershell', 'function ls { cat notes.md }', 'ask'],
+    ['powershell', 'filter ls { cat notes.md }', 'ask'],
+    ['powershell', 'Set-Alias ls cat', 'ask'],
+    ['powershell', 'sal ls cat', 'ask'],
+    ['powershell', 'New-Alias ls cat', 'ask'],
+    ['powershell', 'Get-ChildItem -PipelineVariable PATH', 'ask'],
+    ['powershell', 'Get-ChildItem -ov PATH', 'ask'],
+    ['powershell', 'Get-ChildItem -OutVariable PSDefaultParameterValues', 'ask'],
+  ];
+  const wrong = rows.flatMap(([shell, command, want]) => {
+    const v = f.guard(command, shell);
+    return v.decision === want ? [] : [`${shell}: ${command} → ${whyOf(v)} (want ${want})`];
+  });
+  assert.deepEqual(wrong, []);
+});
+
+// 穴 5: tar の最初の引数がダッシュなしの文字の束（tar cfC …）のとき、本物の tar は値を取る文字（f・C・T …）に、あとの引数を文字の順に 1 つずつ結び付ける。
+// 見張りは束を -cfC と同じに読んで、f の後ろの残りを書き込み先と取っていた。値を取る文字が 1 つでも、f の後ろに別の文字があれば同じ（cfz・cfv・cfP）。
+// 受け入れるのは「f か C が 1 つだけ、最後の文字で、ほかが c t x v z j J」の束だけ。それ以外は読み違えうるので、持ち主の許可でも外せない今回だけの確かめにする
+const TAR_SKEWED = [
+  'tar cfC SOUL.md sub b.txt', 'tar cCf sub SOUL.md b.txt', 'tar cfT SOUL.md list.txt',
+  'tar cfC RO/x.tar sub b.txt', 'tar cCf sub RO/x.tar b.txt', 'tar cfT RO/x.tar list.txt', 'tar cfz RO/x.tar sub', 'tar cfv RO/x.tar sub', 'tar cfP RO/x.tar sub',
+  'tar fc out.tar', 'tar cpf out.tar sub', 'tar c sub', 'tar cff a.tar b.tar', 'tar tfC a.tar sub', 'tar cvfz RO/x.tar sub',
+] as const;
+
+test('穴 5: ダッシュなしの tar の束は、f か C が 1 つだけ最後にある形以外なら毎回の確かめ。持ち主の許可の tar でも外せない', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  for (const row of TAR_SKEWED) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    for (const shell of ['bash', 'powershell'] as const) {
+      for (const allow of [undefined, ['tar']]) {
+        const v = f.guard(command, shell, allow);
+        if (!(v.decision === 'ask' && v.onceOnly && v.sends && v.removes)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${row} → ${whyOf(v)}`);
+      }
+    }
+    const bundleReasons = classify(command).results.flatMap(r => r.reasons).filter(r => r.key === 'list.form' && r.level === 'once' && !r.exempt);
+    if (bundleReasons.length === 0) wrong.push(`${row}: 外せない list.form が付いていない`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5: 持ち主の許可の tar が外すのは、束とは別の「一覧に無い引数」の確かめだけ（同じ許可で束の読み違えは外れない）', t => {
+  const f = holeFixture(t);
+  assert.equal(f.guard('tar -cf out.tar -p b.txt').decision, 'ask', '前提: 一覧に無い -p は確かめ');
+  assert.equal(f.guard('tar -cf out.tar -p b.txt', 'bash', ['tar']).decision, 'allow', '前提: 持ち主が tar を許可していれば、-p の確かめは外れる');
+  const bundle = classify('tar cpf out.tar sub').results[0]!.reasons;
+  assert.ok(bundle.some(r => r.key === 'list.flag' && r.exempt), '束の p は、今までどおり外せる確かめ');
+  assert.ok(bundle.some(r => r.key === 'list.form' && !r.exempt), 'それとは別に、束の読み違えは外せない確かめ');
+  assert.equal(f.guard('tar cpf out.tar sub', 'bash', ['tar']).decision, 'ask');
+});
+
+test('穴 5 の回帰: 受け入れる束（f か C が 1 つ最後・ほかは c t x v z j J）は、ダッシュ付きと同じに読む', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly [string, 'allow' | 'ask']> = [
+    ['tar cf out.tar b.txt', 'allow'], ['tar czf out.tgz sub', 'allow'], ['tar cvzf out.tgz sub', 'allow'], ['tar cJf out.txz sub', 'allow'], ['tar cjf out.tbz sub', 'allow'],
+    ['tar tf a.tar', 'allow'], ['tar tvf a.tar', 'allow'], ['tar tzf a.tgz', 'allow'], ['tar cC sub b.txt', 'allow'], ['tar tC sub', 'allow'],
+    ['tar -cf out.tar b.txt', 'allow'], ['tar -czvf out.tgz sub', 'allow'], ['tar -C sub -cf out.tar b.txt', 'allow'],
+    ['tar xf a.tar', 'ask'], ['tar xzf a.tgz', 'ask'], ['tar xvf a.tar', 'ask'], ['tar -cf SOUL.md b.txt', 'ask'], ['tar cf SOUL.md b.txt', 'ask'],
+  ];
+  const wrong = rows.flatMap(([command, want]) => {
+    const v = f.guard(command);
+    return v.decision === want ? [] : [`${command} → ${whyOf(v)} (want ${want})`];
+  });
+  assert.deepEqual(wrong, []);
+  // 束と、その束にダッシュを付けた形は、理由もパスも同じ
+  const shape = (command: string) => classify(command).results.map(r => ({ reasons: r.reasons.map(x => `${x.level}:${x.key}:${x.exempt}`), paths: r.paths.map(p => `${p.word.text}:${p.mode}`) }));
+  for (const [bundle, rest] of [['cf', 'out.tar sub'], ['czf', 'out.tgz sub'], ['cvzf', 'out.tgz sub'], ['cJf', 'out.txz sub'], ['tf', 'a.tar'], ['tvf', 'a.tar'], ['xf', 'a.tar'], ['xzf', 'a.tgz'], ['cC', 'sub b.txt'], ['tC', 'sub']] as const) {
+    assert.deepEqual(shape(`tar ${bundle} ${rest}`), shape(`tar -${bundle} ${rest}`), `tar ${bundle} ${rest}`);
+  }
+  assert.deepEqual(classify('tar cf out.tar b.txt').results[0]!.paths.slice(0, 1).map(p => [p.word.text, p.mode]), [['out.tar', 'write']], '書き込み先は out.tar');
+});
+
+// 穴 5 の続き（審査 2 回目の F2）: ダッシュ付きの束で値を取る文字（f・C）の前に一覧に無い文字（P・r・u など）があると、その文字で読み取りを打ち切って f の値を束縛しない。
+// --crea・--fi= のような長い綴りの省略形も束縛しない（本物の GNU tar 1.35 では --fi・--verb は曖昧でエラー、--gz は gzip になる。tar.exe〔bsdtar〕と版でも変わる）。どれも「一覧に無いフラグ」の確かめ（持ち主の許可で外せる）にしかならず、
+// 持ち主が allow: ['tar'] を置いた途端に、本物の tar が書く読み取り専用の場所（RO/x.tar）への書き込みが確かめなしで通っていた（本物の GNU tar 1.35 で、下の書き込みの行がどれも RO/x.tar を作ることを確かめた）。
+// 束縛できない f・C・長い綴りがあれば、外せない list.form にする
+const TAR_UNBOUND = [
+  'tar -cPf RO/x.tar sub', 'tar -Pcf RO/x.tar sub', 'tar -cPvf RO/x.tar sub', 'tar -rf RO/x.tar sub', 'tar -uf RO/x.tar sub',
+  'tar --crea -f RO/x.tar sub', 'tar --cre --fi=RO/x.tar sub',
+  'tar --append -f RO/x.tar sub', 'tar --update --file=RO/x.tar sub', 'tar -r -f RO/x.tar sub', 'tar -u -f RO/x.tar sub', 'tar -A -f RO/x.tar a.tar', 'tar --delete -f RO/x.tar a',
+  'tar -cPC sub -f out.tar b.txt',
+] as const;
+
+test('穴 5（F2）: 束縛できない f・C・長い綴りがあれば、毎回の確かめ。持ち主の許可の tar でも外せない（bash・PowerShell の tar・tar.exe）', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  for (const row of TAR_UNBOUND) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    const runs: ReadonlyArray<readonly ['bash' | 'powershell', string, boolean]> = [['bash', command, true], ['powershell', command, true], ['powershell', command.replace(/^tar /u, 'tar.exe '), true]];
+    for (const [shell, text, windows] of runs) {
+      for (const allow of [undefined, [text.startsWith('tar.exe ') ? 'tar.exe' : 'tar']]) {
+        const v = f.guard(text, shell, allow, windows);
+        if (!(v.decision === 'ask' && v.onceOnly)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${text.replace(f.ro, 'RO')} → ${whyOf(v)}`);
+      }
+    }
+    const fixed = classify(command, 'bash', { windows: true }).results.flatMap(r => r.reasons).filter(r => r.key === 'list.form' && r.level === 'once' && !r.exempt);
+    if (fixed.length === 0) wrong.push(`${row}: 外せない list.form が付いていない`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5（F2）の回帰: 束縛できる形・無関係な長い綴りは今のまま（読み取り専用の場所への tar -cf は止まり、持ち主の許可の tar が外すのは無関係なフラグだけ）', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly [string, 'allow' | 'ask' | 'deny', 'allow' | 'ask' | 'deny']> = [
+    // [コマンド, 許可なし, allow: ['tar'] つき]
+    ['tar -cf RO/x.tar sub', 'deny', 'deny'], ['tar -cf out.tar b.txt', 'allow', 'allow'], ['tar -czvf out.tgz sub', 'allow', 'allow'], ['tar -C sub -cf out.tar b.txt', 'allow', 'allow'],
+    ['tar -tf a.tar', 'allow', 'allow'], ['tar -tvf a.tar', 'allow', 'allow'], ['tar -cf out.tar --exclude=x sub', 'allow', 'allow'], ['tar -cf SOUL.md b.txt', 'ask', 'ask'],
+    ['tar -cf out.tar -p b.txt', 'ask', 'allow'], ['tar -cf out.tar --gzip sub', 'ask', 'allow'], ['tar -cvf out.tar --totals sub', 'ask', 'ask'],
+    ['tar -xf a.tar', 'ask', 'ask'], ['tar -tf RO/x.tar', 'allow', 'allow'],
+    // 長い綴りの --create・--list・--file・--directory と、束の中の p は、-c・-t・-f・-C・-p と同じに束縛して調べる（読み取り専用の場所は止まり、置ける場所は持ち主の許可で通る）
+    ['tar -cpf RO/x.tar sub', 'deny', 'deny'], ['tar --create -f RO/x.tar sub', 'deny', 'deny'], ['tar -c --file=RO/x.tar sub', 'deny', 'deny'], ['tar -c --file RO/x.tar sub', 'deny', 'deny'],
+    ['tar --create --file=RO/x.tar sub', 'deny', 'deny'], ['tar --create --file=out.tar b.txt', 'ask', 'allow'], ['tar --list --file=a.tar', 'ask', 'allow'], ['tar --list --file=RO/x.tar', 'ask', 'allow'],
+    ['tar -c --directory=sub -f out.tar b.txt', 'ask', 'allow'], ['tar -c --directory sub -f out.tar b.txt', 'ask', 'allow'], ['tar -czpf out.tgz sub', 'ask', 'allow'], ['tar -pcf out.tar b.txt', 'ask', 'allow'],
+    ['tar --create --file=SOUL.md b.txt', 'ask', 'ask'], ['tar --extract --file=a.tar', 'ask', 'ask'], ['tar --get -f a.tar', 'ask', 'ask'],
+  ];
+  const wrong: string[] = [];
+  for (const [row, plain, allowed] of rows) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    for (const [allow, want] of [[undefined, plain], [['tar'], allowed]] as const) {
+      const v = f.guard(command, 'bash', allow ? [...allow] : undefined, true);
+      if (v.decision !== want) wrong.push(`bash${allow ? '+allow' : ''}: ${row} → ${whyOf(v)} (want ${want})`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+// 穴 5 の続き（再審査 3 回目）: 一覧に無いオプションを 1 つずつ「外せない」に足していく方式（TAR_LONG_UNBOUND）は、足し漏れが続いた（bsdtar の --cd・-T・--files-from・--index-file・-g・--remove-files、host:out.tar という名前、プログラムを動かす -I・--to-command・-F など）。
+// 逆にして、持ち主の許可が外せるのは「コマンドラインのオプションが全部、既知の安全な綴りの集まり（短い c t x v z j J f C p と、長い --create --list --extract --get --file --directory --gzip --bzip2 --xz --verbose --preserve-permissions〔--exclude= も〕）に入っている」tar だけ。
+// 集まりの外のオプションが 1 つでもあれば、ほかが安全な綴りだけでも、外せない list.form にする。長い綴りは名前の完全一致だけ（省略形は版で別の綴りに展開されうる: 本物の GNU tar 1.35 では --fi・--verb は曖昧でエラー、--gz は gzip、tar.exe〔bsdtar 3.8〕は --cd が --directory の別名）
+const TAR_NOT_WAIVABLE = [
+  // bsdtar の --cd（--directory の別名）: 元の名前の基準が作業フォルダの外に変わる（本物の tar.exe 3.8.9 で ../config.json が入るのを確かめた）
+  'tar -cf out.tar --cd=.. config.json', 'tar -c --cd=.. -f out.tar config.json', 'tar -cf out.tar --cd .. config.json', 'tar -cf out.tar -C sub --cd=.. config.json',
+  // 名前・除外の一覧のファイルを読む
+  'tar -cf out.tar -T names.txt', 'tar -cf out.tar -Tnames.txt', 'tar -cf out.tar --files-from=names.txt', 'tar -cf out.tar --files-from names.txt', 'tar -cf out.tar -X skip.txt b.txt', 'tar -cf out.tar --exclude-from=skip.txt b.txt',
+  // 書き込み先・読み取り先を増やす、元を消す、リンクの先まで読む
+  'tar -cf out.tar --index-file=idx.txt b.txt', 'tar -cf out.tar -g snap.snar b.txt', 'tar -cf out.tar --listed-incremental=snap.snar b.txt', 'tar -cf out.tar --remove-files b.txt', 'tar -chf out.tar b.txt', 'tar -cf out.tar --dereference b.txt',
+  // host:out.tar は、リモートのシェル（rsh・ssh）を動かす
+  'tar -cf host:out.tar b.txt', 'tar -cf user@host:out.tar b.txt', 'tar -c --file=host:out.tar b.txt', 'tar -tf host:a.tar', 'tar -t --file host:a.tar',
+  // プログラムを動かす
+  'tar -cf out.tar -I evil b.txt', 'tar -cf out.tar -Ievil b.txt', 'tar -cIf evil out.tar b.txt', 'tar -cf out.tar --use-compress-program=evil b.txt', 'tar -cf out.tar --use-compress-program evil b.txt',
+  'tar -tf a.tar --to-command=evil', 'tar -cf out.tar --checkpoint=1 --checkpoint-action=exec=evil b.txt', 'tar -cf out.tar -F evil b.txt', 'tar -cf out.tar --info-script=evil b.txt',
+  'tar -cf out.tar --new-volume-script=evil b.txt', 'tar -cf out.tar --rsh-command=evil b.txt', 'tar -cf out.tar --rmt-command=evil b.txt',
+  // そのほか集まりに無いオプション（-- も）
+  'tar -cf out.tar -P b.txt', 'tar -cf out.tar --absolute-names b.txt', 'tar -cf out.tar --totals b.txt', 'tar -cf out.tar --transform=s/a/b/ b.txt', 'tar -cf out.tar -- b.txt', 'tar -cf out.tar -a b.txt', 'tar -cf out.tar --one-file-system b.txt',
+  // 長い綴りの省略形
+  'tar -cf out.tar --gz b.txt', 'tar -cf out.tar --verb b.txt', 'tar -cf out.tar --preserve b.txt', 'tar -cf out.tar --bz b.txt', 'tar --crea -f out.tar b.txt', 'tar --creat --fil=out.tar b.txt',
+  // 安全な綴りでも、値の付け方が違う形
+  'tar -c --create=x -f out.tar b.txt', 'tar -cf out.tar --gzip=x b.txt', 'tar -c --file=', 'tar -c --file',
+  // 安全な綴りだけの束・長い綴りに混ざっても
+  'tar -czf out.tgz -T names.txt sub', 'tar -cpf out.tar -I evil b.txt', 'tar -c --file=out.tar --gzip --verbose --cd=.. config.json',
+] as const;
+
+test('穴 5（F3）: 既知の安全な綴りに入らないオプションが 1 つでもある tar は、持ち主の許可でも外せない毎回の確かめ（bash の tar・PowerShell の tar・tar.exe）', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  for (const row of TAR_NOT_WAIVABLE) {
+    const runs: ReadonlyArray<readonly ['bash' | 'powershell', string, string]> = [['bash', row, 'tar'], ['powershell', row, 'tar'], ['powershell', row.replace(/^tar /u, 'tar.exe '), 'tar.exe']];
+    for (const [shell, text, entry] of runs) {
+      for (const allow of [undefined, [entry]]) {
+        const v = f.guard(text, shell, allow, shell === 'powershell');
+        if (!(v.decision === 'ask' && v.onceOnly)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${text} → ${whyOf(v)}`);
+      }
+    }
+    const fixed = classify(row, 'bash', { windows: true }).results.flatMap(r => r.reasons).filter(r => r.key === 'list.form' && r.level === 'once' && !r.exempt);
+    if (fixed.length === 0) wrong.push(`${row}: 外せない list.form が付いていない`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5（F3）の回帰: 既知の安全な綴りだけの tar は今のまま（許可なしは同じ判定、持ち主の許可の tar.exe も同じに外せる）', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly [string, 'allow' | 'ask' | 'deny', 'allow' | 'ask' | 'deny']> = [
+    ['tar -cf out.tar b.txt', 'allow', 'allow'], ['tar -cf RO/x.tar sub', 'deny', 'deny'], ['tar -czf out.tgz sub', 'allow', 'allow'], ['tar -cjf out.tbz sub', 'allow', 'allow'], ['tar -cJf out.txz sub', 'allow', 'allow'],
+    ['tar -tf a.tar', 'allow', 'allow'], ['tar -C sub -cf out.tar b.txt', 'allow', 'allow'], ['tar -cf out.tar --exclude=x sub', 'allow', 'allow'],
+    ['tar -cf out.tar -p b.txt', 'ask', 'allow'], ['tar -cf out.tar --gzip sub', 'ask', 'allow'], ['tar -cf out.tar --bzip2 sub', 'ask', 'allow'], ['tar -cf out.tar --xz sub', 'ask', 'allow'],
+    ['tar -cf out.tar --verbose sub', 'ask', 'allow'], ['tar -cf out.tar --preserve-permissions sub', 'ask', 'allow'], ['tar --create --file=out.tar --gzip --verbose sub', 'ask', 'allow'],
+  ];
+  const wrong: string[] = [];
+  for (const [row, plain, allowed] of rows) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    for (const [text, entry] of [[command, 'tar'], [command.replace(/^tar /u, 'tar.exe '), 'tar.exe']] as const) {
+      for (const [allow, want] of [[undefined, plain], [[entry], allowed]] as const) {
+        const v = f.guard(text, 'powershell', allow ? [...allow] : undefined, true);
+        if (v.decision !== want) wrong.push(`powershell${allow ? '+allow' : ''}: ${text.replace(f.ro, 'RO')} → ${whyOf(v)} (want ${want})`);
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+// 穴 5（F4）: bsdtar（Windows の tar.exe。PowerShell の tar もこれに解決される）は、-c のとき「@ で始まる名前」を「その名前のアーカイブを読んで、中の項目をそのまま写す」と読む
+// （本物の tar.exe 3.8.9 で、作業フォルダの外の ../inner.tar の中身が out.tar に入るのを確かめた。-C のあとなら、その -C のフォルダが基準。一覧モード -t では ただの名前の型で、読まない。GNU tar 1.35 では ただの名前）。
+// 以前は @../inner.tar という名前の通常のファイルとして調べていたので、外のアーカイブを持ち込む形が確かめなしで通っていた。@ を除いた名前を読み取りとして調べ、さらに持ち主の許可でも外せない確かめにする
+const TAR_AT_ARCHIVE = [
+  'tar -cf out.tar @../inner.tar', 'tar -C sub -cf out.tar @../../inner.tar', 'tar -cf out.tar @inner.tar', 'tar -C sub -cf out.tar @inner.tar', 'tar cf out.tar @inner.tar', 'tar --create --file=out.tar @inner.tar',
+  'tar -czf out.tgz sub @inner.tar', 'tar -cf out.tar b.txt @inner.tar', 'tar -cf out.tar @-', 'tar -cf out.tar @', "tar -cf out.tar '@inner.tar'", 'tar -cf out.tar "@../inner.tar"',
+] as const;
+
+test('穴 5（F4）: tar -c の @ で始まる名前は、読み取りの調べをして、持ち主の許可でも外せない毎回の確かめ（bash の tar・PowerShell の tar・tar.exe）', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  const rows: Array<readonly ['bash' | 'powershell', string, string]> = [];
+  for (const row of TAR_AT_ARCHIVE) rows.push(['bash', row, 'tar'], ['powershell', row, 'tar'], ['powershell', row.replace(/^tar /u, 'tar.exe '), 'tar.exe']);
+  rows.push(['powershell', 'tar.exe -cf out.tar @..\\inner.tar', 'tar.exe'], ['powershell', 'tar.exe -cf out.tar @inner.tar', 'tar.exe']);
+  for (const [shell, text, entry] of rows) {
+    for (const allow of [undefined, [entry]]) {
+      const v = f.guard(text, shell, allow, shell === 'powershell');
+      if (!(v.decision === 'ask' && v.onceOnly)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${text} → ${whyOf(v)}`);
+    }
+  }
+  for (const row of TAR_AT_ARCHIVE) {
+    const fixed = classify(row, 'bash', { windows: true }).results.flatMap(r => r.reasons).filter(r => r.key === 'list.form' && r.level === 'once' && !r.exempt);
+    if (fixed.length === 0) wrong.push(`${row}: 外せない list.form が付いていない`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5（F4）: @ のあとの名前は、ほかの読み取りと同じに調べる（外のフォルダは確かめ・秘密のパスは拒否・-C のあとは -C のフォルダが基準）', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  const rows: ReadonlyArray<readonly [string, 'ask' | 'deny', RegExp]> = [
+    ['tar -cf out.tar @../inner.tar', 'ask', /許可フォルダの外/u],
+    ['tar -C sub -cf out.tar @../../inner.tar', 'ask', /許可フォルダの外/u],
+    ['tar -cf out.tar @.env', 'deny', /秘密/u],
+    ['tar -cf out.tar @sub/.env', 'deny', /秘密/u],
+    ['tar -C sub -cf out.tar @.env', 'deny', /秘密/u],
+    // -C sub のあとの @../inner.tar は、作業フォルダの中の inner.tar（-C を無視して読むと、作業フォルダの外に見える）
+    ['tar -C sub -cf out.tar @../inner.tar', 'ask', /^(?![\s\S]*(?:許可フォルダの外|秘密))/u],
+    ['tar -cf out.tar @RO/inner.tar', 'ask',/^(?![\s\S]*(?:許可フォルダの外|秘密))/u],
+  ];
+  for (const [row, want, why] of rows) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    const runs = [['bash', command, 'tar'], ['powershell', command, 'tar'], ['powershell', command.replace(/^tar /u, 'tar.exe '), 'tar.exe']] as const;
+    for (const [shell, text, entry] of row.includes('RO/') ? runs.slice(1) : runs) {
+      for (const allow of [undefined, [entry]]) {
+        const v = f.guard(text, shell, allow ? [...allow] : undefined, shell === 'powershell');
+        if (v.decision !== want || !why.test(v.reasons.join(' / '))) wrong.push(`${shell}${allow ? '+allow' : ''}: ${row} → ${whyOf(v)} (want ${want} ${why})`);
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5（F4）の回帰: @ のない tar と、先頭が @ でない名前は今のまま（読む・書く場所の調べも同じ）', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly [string, 'allow' | 'ask' | 'deny', 'allow' | 'ask' | 'deny']> = [
+    ['tar -cf out.tar b.txt', 'allow', 'allow'], ['tar -czf out.tgz sub', 'allow', 'allow'], ['tar -cf out.tar a@b.txt', 'allow', 'allow'], ['tar -cf out.tar b.txt sub', 'allow', 'allow'],
+    ['tar -C sub -cf out.tar b.txt', 'allow', 'allow'], ['tar -tf a.tar', 'allow', 'allow'], ['tar -tf RO/x.tar', 'allow', 'allow'], ['tar -cf RO/x.tar sub', 'deny', 'deny'],
+    ['tar -cf @out.tar b.txt', 'allow', 'allow'], ['tar -cf out.tar ../inner.tar', 'ask', 'ask'], ['tar -cf out.tar .env', 'deny', 'deny'],
+  ];
+  const wrong: string[] = [];
+  for (const [row, plain, allowed] of rows) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    const runs = [['bash', command, 'tar'], ['powershell', command, 'tar'], ['powershell', command.replace(/^tar /u, 'tar.exe '), 'tar.exe']] as const;
+    // RO/ は C:/ の絶対パスで、bash（windows でない）ではリモートの名前に読まれる。PowerShell で @名前 は splatting の変数（別の確かめ）
+    for (const [shell, text, entry] of row.includes('RO/') ? runs.slice(1) : row.includes('@out.tar') ? runs.slice(0, 1) : runs) {
+      for (const [allow, want] of [[undefined, plain], [[entry], allowed]] as const) {
+        const v = f.guard(text, shell, allow ? [...allow] : undefined, shell === 'powershell');
+        if (v.decision !== want) wrong.push(`${shell}${allow ? '+allow' : ''}: ${text.replace(f.ro, 'RO')} → ${whyOf(v)} (want ${want})`);
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
 });

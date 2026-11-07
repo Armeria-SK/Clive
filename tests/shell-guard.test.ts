@@ -155,6 +155,218 @@ test('shell: 表形式のプローブ（PowerShell）', t => {
   }
 });
 
+// 空の here-string（@' の次の行がすぐ '@）の閉じを見逃して、次の here-string の閉じまでを文字列として飲み込み、間の行を隠していた（本物の PowerShell は最初の '@ で閉じて、そのあとの行を動かす）
+test('shell（PowerShell）: 空の here-string のあとの行も、コマンドとして調べる（閉じを見逃して隠さない）', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const rows: Array<[string, Decision, boolean | null]> = [
+    ["$x = @'\n'@\nRemove-Item -Recurse -Force sub\n$y = @'\nz\n'@", 'ask', true],
+    ["$x = @'\r\n'@\r\nRemove-Item -Recurse -Force sub\r\n$y = @'\r\nz\r\n'@", 'ask', true],
+    ["$x = @'\n'@\nGet-Content .env\n$y = @'\nz\n'@", 'deny', null],
+    ["$x = @'\r\n'@\r\nGet-Content .env\r\n$y = @'\r\nz\r\n'@", 'deny', null],
+    ["$x = @'\n'@\nRemove-Item -Recurse -Force sub", 'ask', true],
+    ["$x = @'\n'@ + @'\n'@\nRemove-Item -Recurse -Force sub", 'ask', true],
+    // 今までどおり
+    ["$x = @'\nhello\n'@\nRemove-Item -Recurse -Force sub", 'ask', true],
+    ["$x = @'\n\n'@\nGet-ChildItem sub", 'allow', false],
+    ["$x = @'\n'@\nGet-ChildItem sub", 'allow', false],
+    // 緩めていない: 開きの後ろに空白は読めない形のまま止める。閉じが無いのも止める
+    ["$x = @'  \n'@\nRemove-Item -Recurse -Force sub", 'deny', null],
+    ["$x = @'\nRemove-Item -Recurse -Force sub", 'deny', null],
+  ];
+  for (const [command, decision, removes] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+    if (removes !== null) assert.equal(v.removes, removes, `${shell}: ${JSON.stringify(command)} の removes`);
+  }
+});
+
+// 前の語に空白なしでくっついた # は、本物の PowerShell でもコメントか文字か分かれる（$x# は文字、'a'# (1)# $x.Length# は行末までコメント）。全部をコメントと読むと Remove-Item を隠し、
+// 全部を文字と読むと 'a'#'<改行>Remove-Item …<改行>#' のように Remove-Item を引用符の中に隠す。どちらに読み違えても隠せるので、読まずに止める
+test('shell（PowerShell）: 前の語に空白なしでくっついた # は止める（コメントとも文字とも読まない）。空白・行頭・; のあとの # は今までどおりコメント', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const hidden = "#'\nRemove-Item -Recurse -Force sub\n#'";
+  const rows: Array<[string, Decision, boolean | null]> = [
+    ['Write-Output $x#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ['Write-Output $x#; Get-Content .env', 'deny', null],
+    ['Write-Output $x.y#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ['Write-Output $x]#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ["Write-Output a'b'#; Remove-Item -Recurse -Force sub", 'deny', null],
+    ['Write-Output $env:x#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ['Write-Output @x#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ["Write-Output 'a'" + hidden, 'deny', null],
+    ['Write-Output "a"' + hidden, 'deny', null],
+    ['Write-Output (1)' + hidden, 'deny', null],
+    ['Write-Output $x.Length' + hidden, 'deny', null],
+    ['Write-Output $x' + hidden, 'deny', null],
+    ["$x = @'\n'@" + hidden, 'deny', null],
+    // 語の中の # は語の一部。-# % 1,2# も語なので、あとの文は隠れない
+    ['Write-Output a#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output -#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output %#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output 1,2#; Remove-Item -Recurse -Force sub', 'ask', true],
+    // 今までどおり: 空白・行頭・; のあとはコメント
+    ['echo a #; Remove-Item -Recurse -Force sub', 'allow', false],
+    ['# comment\nGet-ChildItem sub', 'allow', false],
+    ['# comment\r\nGet-ChildItem sub', 'allow', false],
+    ['Get-ChildItem sub # note', 'allow', false],
+    ['Get-ChildItem sub;# note', 'allow', false],
+    ['Get-ChildItem sub\r\n# note\r\nGet-ChildItem sub', 'allow', false],
+    ["echo 'a#b'", 'allow', false],
+    ['echo "a#b"', 'allow', false],
+    ['<# block #>\nGet-ChildItem sub', 'deny', null],
+  ];
+  for (const [command, decision, removes] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+    if (removes !== null) assert.equal(v.removes, removes, `${shell}: ${JSON.stringify(command)} の removes`);
+  }
+});
+
+// bash の関数定義 name () { … }（括弧の前に空白）を関数と読まず、関数が隠した許可コマンドを呼ぶ文として通していた。
+// echo () { grep "$@"; }; echo x .env は、作業フォルダの grep を .env に動かせる。4 つの書き方（name() / name () / function name / function name()）はどれも確かめ
+test('shell（bash）: 関数定義 name () { … } も、name() { … } と同じ確かめにする（関数が隠した許可コマンドを通さない）', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'bash' | 'sh' = 'bash') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: false });
+  const rows: Array<[string, Decision]> = [
+    ['echo () { grep "$@"; }; echo x .env', 'ask'],
+    ['ls () { cat notes.md; }; ls', 'ask'],
+    ['ls  ()  { cat notes.md; }; ls', 'ask'],
+    ['ls\t() { cat notes.md; }; ls', 'ask'],
+    ['ls ()\n{ cat notes.md; }\nls', 'ask'],
+    // 今までどおり: ほかの 3 つの書き方も確かめ。関数を定義しない文は確かめなし
+    ['ls() { cat notes.md; }; ls', 'ask'],
+    ['function ls { cat notes.md; }; ls', 'ask'],
+    ['function ls() { cat notes.md; }; ls', 'ask'],
+    ['function ls () { cat notes.md; }; ls', 'ask'],
+    ['ls', 'allow'],
+    ['echo hi', 'allow'],
+    ['(cd sub; ls)', 'allow'],
+    ['ls | (cat)', 'allow'],
+    ['echo $(ls)', 'allow'],
+    ['[[ ( -n x ) ]] && ls', 'allow'],
+    // 関数と同じく、同名の許可コマンドを隠せるもの（alias）は今までどおり確かめ
+    ["alias ls='cat notes.md'; ls", 'ask'],
+    ["alias ll='ls -l'", 'ask'],
+    // ループの変数・読み取りの変数が PATH などを書き換える形は、今までどおり（止める・確かめ）
+    ['select PATH in .; do ls; done', 'deny'],
+    ['for ((i=0;i<3;i++)); do ls; done', 'deny'],
+    ['while read PATH; do ls; done', 'ask'],
+    ['read PATH', 'ask'],
+  ];
+  for (const [command, decision] of rows) for (const shell of ['bash', 'sh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+    if (decision === 'ask') assert.deepEqual([v.sends, v.removes], [true, true], `${shell}: ${JSON.stringify(command)} の sends・removes（理由が分からない確かめは両方立つ）`);
+    if (decision === 'allow') assert.deepEqual([v.sends, v.removes], [false, false], `${shell}: ${JSON.stringify(command)} の sends・removes`);
+  }
+});
+
+// PowerShell で同名のコマンドを隠せる関数・フィルター・別名（Set-Alias・sal・New-Alias）と、変数名を渡すパラメータが、今までどおり確かめになる（緩めていない）
+test('shell（PowerShell）: 同名のコマンドを隠せる関数・別名と、変数名を取るパラメータは、今までどおり確かめ', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const rows: Array<[string, Decision]> = [
+    ['function ls { Get-Content notes.md }; ls', 'ask'],
+    ['filter ls { Get-Content notes.md }; ls', 'ask'],
+    ['function Get-Content { Remove-Item -Recurse -Force sub }; Get-Content notes.md', 'ask'],
+    ['Set-Alias ls Get-Content; ls notes.md', 'ask'],
+    ['sal ls gc; ls notes.md', 'ask'],
+    ['New-Alias ls gc; ls notes.md', 'ask'],
+    ['Get-ChildItem | ForEach-Object -PipelineVariable PATH { $_ }', 'ask'],
+    ['Get-ChildItem -ov PATH', 'ask'],
+    ['Get-ChildItem -OutVariable PSDefaultParameterValues', 'ask'],
+    ['for ($PATH=0;$PATH -lt 1;$PATH++) { ls }', 'ask'],
+    ['foreach ($f in 1,2) { echo $f }', 'allow'],
+    ['Get-ChildItem sub', 'allow'],
+  ];
+  for (const [command, decision] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+  }
+});
+
+// 式の位置（= の右・文の頭・$( ) @( ) { } の頭・演算子のあと）では、本物の PowerShell は数や「演算子と数」のすぐあとの # をコメントと読む（$a = 1#'<改行>Remove-Item …<改行>#' は Remove-Item を動かす）。
+// 字句の読み取りが # を語の一部と読むと、Remove-Item が引用符の中に隠れて、確かめなしで通る。式の位置の語の中の # は止める。コマンドの引数の中（Write-Output 1#）は、本物の Parser も語の一部なので今までどおり
+test('shell（PowerShell）: 式の位置で数・符号・演算子につながった # は止める。コマンドの引数の中の # は今までどおり', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const hidden = "#'\nRemove-Item -Recurse -Force sub\n#'";
+  const rows: Array<[string, Decision, boolean | null]> = [
+    ['$a = 1' + hidden, 'deny', null],
+    ['1' + hidden, 'deny', null],
+    [`Write-Output $(1${hidden}\n)`, 'deny', null],
+    [`Write-Output @(1${hidden}\n)`, 'deny', null],
+    ['$a = -1' + hidden, 'deny', null],
+    ['$a = 1,2' + hidden, 'deny', null],
+    ['$a = 1..2' + hidden, 'deny', null],
+    ['$a = 1.5' + hidden, 'deny', null],
+    ['$a = .5' + hidden, 'deny', null],
+    ['$a = 0x1F' + hidden, 'deny', null],
+    ['$a = 1kb' + hidden, 'deny', null],
+    ['$a = $x*2' + hidden, 'deny', null],
+    ['$a = $x..2' + hidden, 'deny', null],
+    ['$a = $x-1' + hidden, 'deny', null],
+    ['$a=1' + hidden, 'deny', null],
+    ['return 1' + hidden, 'deny', null],
+    ['& { 1' + hidden + '\n}', 'deny', null],
+    ['$a = 1#; Get-Content .env', 'deny', null],
+    // 変数・文字列・閉じ括弧につながった語の中の # は、本物が語の一部と読む形（$x*2#）も、変数 → メンバー → コメントと読む形（$a?.b# $a::b#）と見分けられないので止める
+    ['Write-Output $x*2#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ["Write-Output $a?.b#'\nRemove-Item -Recurse -Force sub\n#'", 'deny', null],
+    ["Write-Output $a::b#'\nRemove-Item -Recurse -Force sub\n#'", 'deny', null],
+    ["Write-Output $a?[0]#'\nGet-Content .env\n#'", 'deny', null],
+    // ハッシュテーブルの値は文として動く（本物の PowerShell は b = Remove-Item … を動かす）
+    ["$x = @{ a = 1#'\nb = Remove-Item -Recurse -Force sub\n#'\n}", 'deny', null],
+    ["$x = @{ a = 1; b = 2#'\nc = Remove-Item -Recurse -Force sub\n#'\n}", 'deny', null],
+    // コマンドの引数の中の # は語の一部（本物の Parser も同じ）。; のあとの Remove-Item は動くので確かめ、引用符の中に入った Remove-Item は文字なので動かない
+    ['Write-Output 1#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output -1#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output 1,2#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output 1..2#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['$a = Write-Output 1#; Remove-Item -Recurse -Force sub', 'ask', true],
+    ['Write-Output 1' + hidden, 'allow', false],
+    ['Write-Output -1' + hidden, 'allow', false],
+    ['$a = Write-Output 1' + hidden, 'allow', false],
+    // 今までどおり
+    ['$a = 1', 'allow', false],
+    ['$a = 1 # note', 'allow', false],
+    ['$a = 1 + 2 # note', 'allow', false],
+    ["$a = 'x#y'", 'allow', false],
+    ['Write-Output a#b', 'allow', false],
+    ['echo a #; Remove-Item -Recurse -Force sub', 'allow', false],
+  ];
+  for (const [command, decision, removes] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+    if (removes !== null) assert.equal(v.removes, removes, `${shell}: ${JSON.stringify(command)} の removes`);
+  }
+});
+
+// DSC の資源ブロックの中の `名前 = 値` は、名前がコマンド名の形でも、= の右が式（右辺の数のあとの # はコメント）。引数の位置と読むと、隠した Get-Content が引用符の中に入って、確かめなしで通っていた（本物の PowerShell 5.1 は動かす）。
+// 読み取れない形（#）として拒否にする（隠した行を、許可フォルダの外を読む確かめや、中身の分からない確かめに落とさない）。右辺がコマンドなら引数の位置のままで、引用符の中の Get-Content は動かない文字
+test('shell（PowerShell）: DSC の `名前 = 値` で = のあとの数につながった # は止める（隠した Get-Content は、そのまま書いたときと同じに止まる）。右辺がコマンドなら今までどおり', t => {
+  const f = fixture(t);
+  const verdict = (command: string, shell: 'powershell' | 'pwsh' = 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: true });
+  const dsc = (property: string, payload: string): string => `configuration C { File f { DestinationPath = 'x'\n${property}#'\n${payload}\n#'\n}\n}; C`;
+  const secret = 'Type = Get-Content .env';
+  const rows: Array<[string, Decision]> = [
+    [dsc('Contents = 1', secret), 'deny'], [dsc('Contents= 1', secret), 'deny'], [dsc('Contents =1', secret), 'deny'], [dsc('Contents=1', secret), 'deny'],
+    [dsc('Contents = -1', secret), 'deny'], [dsc('Contents = $x*2', secret), 'deny'], [dsc('Contents = 1,2', secret), 'deny'], [dsc('Contents += 1', secret), 'deny'],
+    [dsc('Contents = 1', 'Type = Get-Content ..\\config.json'), 'deny'], [dsc('Contents=1', 'Type = Get-Content ..\\config.json'), 'deny'],
+    [dsc('Contents = 1', 'Type = Remove-Item -Recurse -Force sub'), 'deny'],
+    // 右辺がコマンドの形は引数の位置（引用符の中の Get-Content .env は文字で、動かない）。確かめにはなるが、秘密のパスの拒否にはならない
+    [dsc('Contents = Write-Output 1', secret), 'ask'], [dsc('Contents=Write-Output 1', secret), 'ask'],
+  ];
+  for (const [command, decision] of rows) for (const shell of ['powershell', 'pwsh'] as const) {
+    const v = verdict(command, shell);
+    assert.equal(v.decision, decision, `${shell}: ${JSON.stringify(command)} → ${v.reasons.join(' / ')}`);
+  }
+  assert.equal(verdict('Get-Content .env').decision, 'deny', '前提: 隠した行をそのまま書けば止まる');
+  assert.equal(verdict('Get-Content ..\\config.json').decision, 'ask', '前提: 許可フォルダの外のファイルをそのまま読む行は確かめ（隠した形は、確かめにも拒否にもならず通っていた）');
+});
+
 test('shell: 外から取得するコマンドは、確かめの結果にかかわらず fetched になる（実行すると外の中身を読むので、「外から読んだ」印の材料）', t => {
   const f = fixture(t);
   const verdict = (command: string, shell: 'bash' | 'powershell') => checkShellCommand(command, realish(f.ws), { policy: f.policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' });

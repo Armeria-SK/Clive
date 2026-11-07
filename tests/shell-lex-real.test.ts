@@ -328,16 +328,22 @@ const PS_DQ_ROWS = [
   // "$1" "$0" "$é" "$日" は、数字・Unicode の文字の変数名として展開する（空）。Get-Content ".env$1" は .env を読む。$@ $% $+ $, $; $.x $² $‿ $Ⅷ は文字のまま。"$:x" は : のあとの名前つき
   'Write-Output "$1"', 'Write-Output "$0"', 'Write-Output "$9"', 'Write-Output "$12"', 'Write-Output "a$1b"', 'Write-Output "$é"', 'Write-Output "$日"', 'Write-Output "$Ａ"', 'Write-Output "$ǅ"', 'Write-Output "$٣"', 'Write-Output "$ª"',
   'Write-Output "$_"', 'Write-Output "$:x"', 'Write-Output "$global:x"', 'Get-Content ".env$1"', 'Get-Content ".env$é"', 'Get-Content ".env$日"', 'Get-Content -Path ".env$0"',
-  // # の行コメントは、語の頭（空白・; ( ) { } , ' " | & のあと）だけ。中の引用符は始まりにならない。a#b は語
-  "Write-Output a # it's\nWrite-Output b", 'Write-Output a # "\nWrite-Output b', "Write-Output 'a' # x\nWrite-Output b", "Write-Output 'a'#x\nWrite-Output b", 'Write-Output "a"#x\nWrite-Output b', 'Write-Output (1)#x\nWrite-Output b',
-  "Write-Output a;#x'\nWrite-Output b", 'Write-Output a#b', "Write-Output a#b'c'", 'Write-Output a # ＡＢ\nWrite-Output b', "Write-Output {1}#x'\nWrite-Output b", 'Write-Output @(1)#x\nWrite-Output b',
+  // # の行コメントは、行頭・空白・; ( { , | のあとのトークンの先頭だけ。中の引用符は始まりにならない。a#b は語。前の語にくっついた # は読みが分かれるので、字句の読み取りが止める（下の PS_GLUED_HASH_RUNS / PS_GLUED_HASH_SWALLOWED）
+  "Write-Output a # it's\nWrite-Output b", 'Write-Output a # "\nWrite-Output b', "Write-Output 'a' # x\nWrite-Output b",
+  "Write-Output a;#x'\nWrite-Output b", 'Write-Output a#b', "Write-Output a#b'c'", 'Write-Output a # ＡＢ\nWrite-Output b',
+  'Get-ChildItem sub # note', 'Write-Output a;# note\nGet-ChildItem sub', '# c\r\nGet-ChildItem sub', 'Get-ChildItem sub\r\n# note\r\nGet-ChildItem sub', "Get-ChildItem |#'\nRemove-Item -Recurse -Force sub\n#'",
+  'Write-Output (#c\n1)', 'Write-Output @(#c\n1)', 'Write-Output @{#c\na=1}', 'Write-Output @(1,#c\n2)', 'ForEach-Object {#c\n1}', 'echo a #; Remove-Item -Recurse -Force sub',
+  'Write-Output a#; Remove-Item -Recurse -Force sub', 'Write-Output -#; Remove-Item -Recurse -Force sub', 'Write-Output %#; Remove-Item -Recurse -Force sub',
+  // 空の here-string（@' の次の行がすぐ '@）は最初の '@ で閉じ、そのあとの行はコマンド。閉じを見逃すと次の here-string の閉じまでが文字列になり、Remove-Item などが隠れる
+  "$x = @'\n'@\nRemove-Item -Recurse -Force sub\n$y = @'\nz\n'@", "$x = @'\n'@\nGet-Content .env\n$y = @'\nz\n'@", "$x = @'\r\n'@\r\nRemove-Item -Recurse -Force sub\r\n$y = @'\r\nz\r\n'@",
+  "$x = @'\n'@\nRemove-Item -Recurse -Force sub", "$x = @'\n'@ + @'\n'@\nRemove-Item -Recurse -Force sub", "Write-Output @'\n'@", "$x = @'\nhello\n'@\nRemove-Item -Recurse -Force sub", "$x = @'\n\n'@\nGet-ChildItem sub",
   'Write-Output "$@"', 'Write-Output "$%"', 'Write-Output "$+"', 'Write-Output "$,"', 'Write-Output "$;"', 'Write-Output "$.x"', 'Write-Output "$²"', 'Write-Output "$‿"', 'Write-Output "$Ⅷ"', 'Write-Output "$&"',
 ];
 
-const PS_DQ_SCRIPT = `
+const psDqScript = (rowsExpr: string): string => `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$rows = $env:CLIVE_ROWS | ConvertFrom-Json
+$rows = ${rowsExpr}
 for ($i = 0; $i -lt $rows.Count; $i++) {
   $errors = $null; $tokens = $null
   $ast = [System.Management.Automation.Language.Parser]::ParseInput($rows[$i], [ref]$tokens, [ref]$errors)
@@ -358,12 +364,14 @@ for ($i = 0; $i -lt $rows.Count; $i++) {
 }
 `;
 
-function realWordsOf(rows: readonly string[]): { byRow: Map<number, string[][]>; errored: Set<number> } {
-  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_DQ_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS: JSON.stringify(rows) } });
-  assert.equal(real.status, 0, real.stderr);
+const PS_DQ_SCRIPT = psDqScript('$env:CLIVE_ROWS | ConvertFrom-Json');
+// 行が多いときは環境変数の上限（32767 文字）に収まらないので、ファイルで渡す
+const PS_DQ_FILE_SCRIPT = psDqScript('[System.IO.File]::ReadAllText($env:CLIVE_ROWS_FILE, [System.Text.Encoding]::UTF8) | ConvertFrom-Json');
+
+function parseRealWords(stdout: string): { byRow: Map<number, string[][]>; errored: Set<number> } {
   const byRow = new Map<number, string[][]>();
   const errored = new Set<number>();
-  for (const line of real.stdout.split(/\r?\n/u)) {
+  for (const line of stdout.split(/\r?\n/u)) {
     const parts = line.split('|');
     if (parts[0] === 'ERR') { errored.add(Number(parts[1])); continue; }
     if (parts[0] !== 'CMD') continue;
@@ -371,6 +379,20 @@ function realWordsOf(rows: readonly string[]): { byRow: Map<number, string[][]>;
     byRow.set(i, [...(byRow.get(i) ?? []), parts.slice(2).join('|').split(SEP)]);
   }
   return { byRow, errored };
+}
+
+function realWordsOf(rows: readonly string[]): { byRow: Map<number, string[][]>; errored: Set<number> } {
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_DQ_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS: JSON.stringify(rows) } });
+  assert.equal(real.status, 0, real.stderr);
+  return parseRealWords(real.stdout);
+}
+
+function realWordsOfFile(dir: string, rows: readonly string[]): { byRow: Map<number, string[][]>; errored: Set<number> } {
+  const file = join(dir, 'rows.json');
+  writeFileSync(file, JSON.stringify(rows), 'utf8');
+  const real = spawnSync(host!, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PS_DQ_FILE_SCRIPT, 'utf16le').toString('base64')], { encoding: 'utf8', env: { ...process.env, CLIVE_ROWS_FILE: file } });
+  assert.equal(real.status, 0, real.stderr);
+  return parseRealWords(real.stdout);
 }
 
 test('PowerShell 5.1: "…" の中の $( … ) は、字句の読み取りが読んだコマンド（中の文を含む）の語が、本物の Parser と同じ', { skip: !host && 'Windows の PowerShell が無い' }, () => {
@@ -408,4 +430,243 @@ test('PowerShell 5.1: "…" の中の $( の読みきれない形（${・$$(・�
   assert.deepEqual(byRow.get(6) ?? [], [['Write-Output', 'a$(Get-Date)']], 'バッククォートで打ち消した $( は文字');
   // 本物の Parser は、"…" の中の $( の終わりを、引用符やコメントに関わらず ( と ) の数だけで決める。括弧が引用符・ヒア文字列・コメントの中にある形は、本物は構文エラーになる（読み方が割れる）ので、字句の読み取りは止める
   for (const i of [9, 10, 11, 12, 13, 14]) assert.ok(errored.has(i), `${rows[i]}: 本物の Parser は ( ) を数だけで数えるので構文エラー`);
+});
+
+// 前の語に空白なしでくっついた # は、本物の Parser でも前の語で読みが分かれる。$x# $x]# a'b'# $env:x# @x# [int]# は文字（# 以降も語・引数）、'a'# "a"# (1)# $x.Length# $x.y# $x[0]# {1}# @(1)# は # から行末までがコメント。
+// 字句の読み取りが全部をコメントと読むと、文字の側の Write-Output $x#; Remove-Item … が Remove-Item を隠す。全部を文字と読むと、コメントの側の Write-Output 'a'#'<改行>Remove-Item …<改行>#' が Remove-Item を引用符の中に隠す。
+// どちらに読み違えても本物では動くコマンドが隠れる（または逆に、動かないものを動くと見る）ので、くっついた # は読まずに止める
+const AS_CHAR = ['Write-Output $x', 'Write-Output $x]', "Write-Output a'b'", 'Write-Output $env:x', 'Write-Output @x', 'Write-Output [int]'];
+const AS_COMMENT = ["Write-Output 'a'", 'Write-Output "a"', 'Write-Output (1)', 'Write-Output $x.Length', 'Write-Output $x.y', 'Write-Output $x[0]', 'Write-Output {1}', 'Write-Output @(1)', '$a = $b', "$x = @'\n'@"];
+const REST_AS_LINE = "#'\nRemove-Item -Recurse -Force sub\n#'";
+const REST_AS_SAME_LINE = '#; Remove-Item -Recurse -Force sub';
+// 本物の Parser が Remove-Item・Get-Content を動かす形（読み違えて隠すと、確かめなしで通る）
+const PS_GLUED_HASH_RUNS = [...AS_CHAR.map(p => p + REST_AS_SAME_LINE), ...AS_COMMENT.map(p => p + REST_AS_LINE), 'Write-Output $x#; Get-Content .env'];
+// 本物の Parser では # 以降が引用符の中・コメントになって動かない形（文字と読み違えると、動かないものを動くと見る）
+const PS_GLUED_HASH_SWALLOWED = [...AS_CHAR.map(p => p + REST_AS_LINE), ...AS_COMMENT.map(p => p + REST_AS_SAME_LINE)];
+
+test('PowerShell 5.1: 前の語にくっついた # は、本物の Parser では前の語で文字かコメントかが分かれる。字句の読み取りは、どちらの形も止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const rows = [...PS_GLUED_HASH_RUNS, ...PS_GLUED_HASH_SWALLOWED];
+  const { byRow, errored } = realWordsOf(rows);
+  const ran = (i: number): boolean => (byRow.get(i) ?? []).some(c => c[0] === 'Remove-Item' || c[0] === 'Get-Content');
+  const wrong: string[] = [];
+  for (const [i, row] of rows.entries()) {
+    if (errored.has(i)) { wrong.push(`${JSON.stringify(row)}: 本物の Parser が構文エラー`); continue; }
+    const runs = i < PS_GLUED_HASH_RUNS.length;
+    if (ran(i) !== runs) wrong.push(`${JSON.stringify(row)}: 本物の Parser は Remove-Item・Get-Content を${runs ? '動かす' : '動かさない'}はず`);
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (lexed.ok) wrong.push(`${shell}: ${JSON.stringify(row)}: 読めてしまった（止めるはず）`);
+      else if (lexed.fail.code !== 'unexpected') wrong.push(`${shell}: ${JSON.stringify(row)}: 止めた理由が ${lexed.fail.code}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+// 式の位置（= の右・文の頭・$( ) @( ) { } の頭・演算子のあと）の数、または値と演算子と数（$x*2 $x..2）のすぐあとの # は、本物の Parser ではコメント。
+// $a = 1#'<改行>Remove-Item …<改行>#' は、# 以降が行末までコメントなので、次の行の Remove-Item は本物では動く。字句の読み取りが 1# を語、'…' を文字列と読むと、Remove-Item が文字列の中に隠れる。
+// 式の位置の語の中の # は止める。コマンドの引数の中（Write-Output 1# など）は、本物の Parser も語の一部と読むので、今までどおり読んで、本物と同じ語・同じ文になる
+const EXPR_HASH_CONTEXTS: ReadonlyArray<readonly [string, string]> = [
+  ['', ''], ['$a = ', ''], ['$a=', ''], ['Write-Output $(', '\n)'], ['Write-Output @(', '\n)'], ['& { ', '\n}'], ['$a = 1 + ', ''], ['$a = 1,', ''], ['$a -eq ', ''], ['ls | % { ', '\n}'], ['return ', ''], ['Write-Output a; ', ''], ['Write-Output a\n', ''],
+];
+const EXPR_HASH_NUMBERS = ['1', '-1', '+1', '1,2', '1..2', '1.5', '.5', '0x1F', '1kb', '1e3', '1L', '1d', '1-2'];
+const EXPR_HASH_VALUE_CONTEXTS = ['$a = $x', "$a = 'a'", '$a = "a"', '$a = (1)', '$a = $x.y', '$a = $x[0]', '$a = @(1)', '$a = {1}', '$a = [int]$x', '$x', "'a'"];
+const EXPR_HASH_OPERATORS = ['*2', '/2', '%2', '..2', '+2', '-2', ',2'];
+const EXPR_HASH_HIDING = "#'\nRemove-Item x\n#'";
+// ハッシュテーブルの値は文として動く。; と改行が項目を分けるので、a = 1; b = 2# のように文の頭に見える語も、式の位置の一部
+const EXPR_HASH_TABLE_ROWS = [
+  "$x = @{ a = 1#'\nb = Remove-Item x\n#'\n}", "$x = @{ a = 1; b = 2#'\nc = Remove-Item x\n#'\n}", "@{ a=1#'\nb = Remove-Item x\n#'\n}",
+];
+const EXPR_HASH_ROWS = [
+  ...EXPR_HASH_TABLE_ROWS,
+  ...EXPR_HASH_CONTEXTS.flatMap(([pre, post]) => EXPR_HASH_NUMBERS.map(n => `${pre}${n}${EXPR_HASH_HIDING}${post}`)),
+  ...EXPR_HASH_VALUE_CONTEXTS.flatMap(pre => EXPR_HASH_OPERATORS.map(op => `${pre}${op}${EXPR_HASH_HIDING}`)),
+];
+
+test('PowerShell 5.1: 式の位置の数・符号・演算子につながった # は本物の Parser ではコメントで、次の行の Remove-Item は動く。字句の読み取りは止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const { byRow, errored } = realWordsOf(EXPR_HASH_ROWS);
+  const wrong: string[] = [];
+  for (const [i, row] of EXPR_HASH_ROWS.entries()) {
+    if (errored.has(i)) { wrong.push(`${JSON.stringify(row)}: 本物の Parser が構文エラー`); continue; }
+    if (!(byRow.get(i) ?? []).some(c => c[0] === 'Remove-Item')) wrong.push(`${JSON.stringify(row)}: 本物の Parser は Remove-Item を動かすはず`);
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (lexed.ok) wrong.push(`${shell}: ${JSON.stringify(row)}: 読めてしまった（止めるはず）`);
+      else if (lexed.fail.code !== 'unexpected') wrong.push(`${shell}: ${JSON.stringify(row)}: 止めた理由が ${lexed.fail.code}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+  // 読み違えの確認: 引数の位置なら本物も語の一部（# 以降の Remove-Item は動かない）。上の行との違いは「文の頭が数か、コマンド名か」だけ
+  const arg = realWordsOf(["Write-Output 1#'\nRemove-Item x\n#'", "Write-Output -1#'\nRemove-Item x\n#'", "$a = Write-Output 1#'\nRemove-Item x\n#'"]);
+  for (const i of [0, 1, 2]) assert.ok(!(arg.byRow.get(i) ?? []).some(c => c[0] === 'Remove-Item') && !arg.errored.has(i), `引数の位置の行 ${i}: 本物は Remove-Item を動かさない`);
+});
+
+test('PowerShell 5.1: コマンドの引数の中の数・符号・演算子につながった # は本物の Parser でも語の一部。字句の読み取りが読んだ文は本物と同じ', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const rows = [
+    'Write-Output 1#; Remove-Item x', 'Write-Output -1#; Remove-Item x', 'Write-Output +1#; Remove-Item x', 'Write-Output 1,2#; Remove-Item x', 'Write-Output 1..2#; Remove-Item x', 'Write-Output 1.5#; Remove-Item x',
+    'Write-Output .5#; Remove-Item x', 'Write-Output 0x1F#; Remove-Item x', 'Write-Output 1kb#; Remove-Item x',
+    '$a = Write-Output 1#; Remove-Item x', '& { Write-Output 1#; Remove-Item x }', 'Write-Output a | Write-Output 1#; Remove-Item x', 'Write-Output $(Write-Output 1#; Remove-Item x)', 'Write-Output a#b', 'Write-Output -Name:1#; Remove-Item x',
+    'Write-Output 1#', 'Write-Output a; Write-Output 1#; Remove-Item x', 'if ($true) { Write-Output 1#; Remove-Item x }',
+  ];
+  const { byRow, errored } = realWordsOf(rows);
+  const wrong: string[] = [];
+  for (const [i, row] of rows.entries()) {
+    if (errored.has(i)) { wrong.push(`${JSON.stringify(row)}: 本物の Parser が構文エラー`); continue; }
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (!lexed.ok) { wrong.push(`${shell}: ${JSON.stringify(row)}: 読めない (${lexed.fail.code})`); continue; }
+      const mine = lexed.statements.filter(s => s.kind === 'command').map(s => s.words.map(w => (w.dynamic ? '<<dyn>>' : w.text)));
+      const theirs = byRow.get(i) ?? [];
+      // カンマの並びの引数（1,2#）は、本物の Parser では配列で語の文字を持たない。コマンドの名前の並びだけを比べる
+      const key = (list: string[][]) => list.map(w => JSON.stringify(row.includes(',') ? w.slice(0, 1) : w)).sort();
+      if (JSON.stringify(key(mine)) !== JSON.stringify(key(theirs))) wrong.push(`${shell}: ${JSON.stringify(row)}: 字句 ${JSON.stringify(mine)} / 本物 ${JSON.stringify(theirs)}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+// 変数・メンバー・文字列・閉じ括弧にくっついた語の中の # は、本物の Parser が語の一部と読む形（$x*2# 'a'*2# (1)*2#）と、変数 → メンバー → コメントと読む形（$a?.b# $a?[0]#）が、
+// 字句の読み取りでは見分けられない（読み違えると後ろの行の Remove-Item を隠す）ので、どちらも止める。前者は本物では安全だが、止める側に倒す
+test('PowerShell 5.1: 値にくっついた語の中の # は、本物の Parser で語の一部になる形（$x*2#）も、字句の読み取りは止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const rows = ['Write-Output $x*2#; Remove-Item x', "Write-Output 'a'*2#; Remove-Item x", 'Write-Output (1)*2#; Remove-Item x', 'Write-Output $x.y*2#; Remove-Item x'];
+  const { byRow, errored } = realWordsOf(rows);
+  for (const [i, row] of rows.entries()) {
+    assert.ok(!errored.has(i), `${JSON.stringify(row)}: 本物の Parser が構文エラー`);
+    assert.ok((byRow.get(i) ?? []).some(c => c[0] === 'Remove-Item'), `${JSON.stringify(row)}: 本物の Parser は # を語の一部と読んで Remove-Item を動かす`);
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      assert.ok(!lexed.ok && lexed.fail.code === 'unexpected', `${shell}: ${JSON.stringify(row)}: 止めるはず`);
+    }
+  }
+});
+
+// DSC（configuration { File f { … } }）の資源ブロックの中の `名前 = 値` は、名前がコマンド名の形（Contents など）でも、本物の Parser は名前と = と式として読む。右辺の数・符号・演算子のあとの # は行末までコメント。
+// `Contents = 1#'<改行>Type = Get-Content ..\config.json<改行>#'` は、# 以降がコメントなので、次の行の Get-Content は本物では動く（本物の PowerShell 5.1 の Parser で CommandAst になるのを確かめた）。
+// 字句の読み取りが、文の頭がコマンド名の形だからと引数の位置（# は語の一部）と読むと、Get-Content が引用符の中に隠れる。= がすぐ続くときは代入と同じに、= のあとを式の位置として読んで止める
+const DSC_HEAD = "configuration C { File f { DestinationPath = 'x'\n";
+const DSC_TAIL = '\n}\n}; C';
+const DSC_HIDING = "#'\nType = Get-Content ..\\config.json\n#'";
+const DSC_PROPERTIES = [
+  'Contents = 1', 'Contents= 1', 'Contents =1', 'Contents=1', 'Contents = -1', 'Contents = +1', 'Contents = 1,2', 'Contents = 1..2', 'Contents = 1.5', 'Contents = 0x1F', 'Contents = 1kb', 'Contents = $x*2', 'Contents = $x..2',
+];
+const DSC_ROWS = [
+  ...DSC_PROPERTIES.map(p => `${DSC_HEAD}${p}${DSC_HIDING}${DSC_TAIL}`),
+  `configuration C { Node n { File f { DestinationPath = 'x'\nContents = 1${DSC_HIDING}\n} } }; C`,
+  `configuration C { File f { DestinationPath = 'x'; Contents = 1${DSC_HIDING}\n}\n}; C`,
+];
+
+test('PowerShell 5.1: DSC の `名前 = 値` で = のあとの数・符号・演算子につながった # は本物の Parser ではコメントで、次の行の Get-Content は動く。字句の読み取りは止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const { byRow, errored } = realWordsOf(DSC_ROWS);
+  const wrong: string[] = [];
+  for (const [i, row] of DSC_ROWS.entries()) {
+    if (errored.has(i)) { wrong.push(`${JSON.stringify(row)}: 本物の Parser が構文エラー`); continue; }
+    if (!(byRow.get(i) ?? []).some(c => c[0] === 'Get-Content' && c[1] === '..\\config.json')) wrong.push(`${JSON.stringify(row)}: 本物の Parser は Get-Content ..\\config.json を動かすはず`);
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (lexed.ok) wrong.push(`${shell}: ${JSON.stringify(row)}: 読めてしまった（止めるはず）`);
+      else if (lexed.fail.code !== 'unexpected') wrong.push(`${shell}: ${JSON.stringify(row)}: 止めた理由が ${lexed.fail.code}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+  // 読み違えの確認: 右辺がコマンドなら引数の位置なので、本物も # は語の一部（引用符の中の Get-Content は動かない）。字句の読み取りはこれを止めず、本物と同じに Get-Content を動くコマンドとして数えない
+  const arg = [`${DSC_HEAD}Type = Write-Output 1${DSC_HIDING.replace('Type = Get-Content ..\\config.json', 'Get-Content ..\\config.json')}${DSC_TAIL}`, `${DSC_HEAD}Contents = Write-Output 1${DSC_HIDING}${DSC_TAIL}`];
+  const real = realWordsOf(arg);
+  for (const [i, row] of arg.entries()) {
+    assert.ok(!real.errored.has(i), `${JSON.stringify(row)}: 本物の Parser が構文エラー`);
+    assert.ok(!(real.byRow.get(i) ?? []).some(c => c[0] === 'Get-Content'), `${JSON.stringify(row)}: 本物は引用符の中の Get-Content を動かさない`);
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      assert.ok(lexed.ok, `${shell}: ${JSON.stringify(row)}: 引数の位置なので読めるはず`);
+      if (lexed.ok) assert.ok(!lexed.statements.some(s => s.kind === 'command' && s.words[0]?.text === 'Get-Content'), `${shell}: ${JSON.stringify(row)}: Get-Content を動くコマンドと読んではいけない`);
+    }
+  }
+});
+
+// 検証で見つかった同じ類い: 静的メンバーの `$a::b#'`（`::` も変数のあとに残って裸の語になる）。
+// 審査で見つかった: 変数の名前の読み方が本物より狭い（本物の 5.1 は ? を名前に含め、7 は $a?.b を null 条件のメンバーと読む）ので、`$a` のあとに残った `?.b#` が裸の語になり、
+// 文の頭がコマンド名なら引数の位置として通っていた。本物は 変数 → メンバー → コメント と読み、次の行の Remove-Item が動く。個別の形でなく、前の値にくっついた語の中の # を止める（psInArguments の前）。
+// 次の変種を審査でなく試験で見つけるため、頭 × つなぎ × 尻尾 を作って本物の Parser と突き合わせる
+const DIFF_HEADS: ReadonlyArray<readonly [string, string]> = [
+  ['Write-Output', ''], ['echo', ''], ['Get-Date', ''], ['git', ''],
+  ['$a', ''], ['$a?', ''], ['$a.b', ''], ['$a?.b', ''], ['$a.b?.c', ''], ['$a?.b?.c', ''], ['$a[0]', ''], ['$a?[0]', ''], ['$a?[0].b', ''], ['${a}', ''], ['$日本', ''], ['$?', ''], ['$_', ''], ['$env:x', ''], ['@x', ''],
+  ['$a::b', ''], ['$a::b.c', ''], ['$env:x::y', ''], ['$a.b::c', ''], ['$a[0]::b', ''], ['$a::b::c', ''], ['$a::b[0]', ''], ['$a?::b', ''],
+  ["'s'", ''], ['"s"', ''], ['(1)', ''], ['@(1)', ''], ['{1}', ''], ['.x', ''], ['[int]', ''], ['[int]::MaxValue', ''],
+  ['configuration C {', '\n}'], ['dynamicparam {', '\n}'], ['hidden', ''], ['static', ''],
+  ['1', ''], ['-1', ''], ['1..2', ''], ['1,2', ''],
+];
+const DIFF_CONTEXTS = ['', 'Write-Output ', '$z = '];
+const DIFF_GLUES = ['#', ' #'];
+const DIFF_TAILS = ["'\nRemove-Item x\n#'", '"\nRemove-Item x\n#"', '; Remove-Item x'];
+const DIFF_ROWS = DIFF_CONTEXTS.flatMap(pre => DIFF_HEADS.flatMap(([head, post]) => DIFF_GLUES.flatMap(glue => DIFF_TAILS.map(tail => `${pre}${head}${glue}${tail}${post}`))));
+const isRemoveItem = (name: string | undefined): boolean => name?.toLowerCase() === 'remove-item';
+
+test('PowerShell 5.1: 生成した差分試験。本物の Parser が Remove-Item を動かす行は、字句の読み取りが Remove-Item をコマンドとして読むか、止めるかのどちらか（読んで見落とすことがない）', { skip: !host && 'Windows の PowerShell が無い' }, t => {
+  const dir = tempDir(t);
+  const { byRow, errored } = realWordsOfFile(dir, DIFF_ROWS);
+  const hidden: string[] = [];
+  let ran = 0;
+  let reported = 0;
+  let stopped = 0;
+  for (const [i, row] of DIFF_ROWS.entries()) {
+    if (errored.has(i) || !(byRow.get(i) ?? []).some(c => isRemoveItem(c[0]))) continue;
+    ran++;
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (!lexed.ok) stopped++;
+      else if (lexed.statements.some(s => s.kind === 'command' && isRemoveItem(s.words[0]?.text))) reported++;
+      else hidden.push(`${shell}: ${JSON.stringify(row)}`);
+    }
+  }
+  assert.deepEqual(hidden, [], `本物の Parser が Remove-Item を動かすのに、字句の読み取りが見ないまま読めたことにした行（${hidden.length} / 本物が動かす ${ran} 行 / ${DIFF_ROWS.length} 行中）`);
+  // 試験が空振りでないこと: 本物が動かす行が十分あり、止める側と読む側のどちらも実際に起きている
+  assert.ok(ran >= 100 && ran < DIFF_ROWS.length, `本物の Parser が Remove-Item を動かす行が ${ran} / ${DIFF_ROWS.length}`);
+  assert.ok(stopped >= 100 && reported >= 20, `止めた ${stopped}・読んだ ${reported}（どちらも起きているはず）`);
+  assert.ok(errored.size < DIFF_ROWS.length / 4, `本物の Parser の構文エラーが多すぎる: ${errored.size} / ${DIFF_ROWS.length}`);
+});
+
+test('PowerShell 5.1: 変数のあとの ?.b# ?[0]# は、本物の Parser では 変数 → メンバー・添字 → コメントで、次の行の Remove-Item・Get-Content は動く。字句の読み取りは止める', { skip: !host && 'Windows の PowerShell が無い' }, () => {
+  const rows = [
+    "Write-Output $a?.b#'\nRemove-Item x\n#'", "Write-Output $a?[0]#'\nRemove-Item x\n#'", "Write-Output $a?#'\nRemove-Item x\n#'", "Write-Output $a.b?.c#'\nRemove-Item x\n#'", "Write-Output $a?[0].b#'\nGet-Content .env\n#'",
+    "$a?.b#'\nRemove-Item x\n#'", "$z = $a?.b#'\nRemove-Item x\n#'", "Write-Output 'a'x#'\nRemove-Item x\n#'", "Write-Output (1)x#'\nRemove-Item x\n#'", "Write-Output {1}x#'\nRemove-Item x\n#'",
+    // 静的メンバーの `::`（検証で見つかった: 本物の 5.1 は 変数 → :: → 名前 → コメントと読み、次の行の Remove-Item を動かす）
+    ...['$a::b', '$a::b.c', '$env:x::y', '$a.b::c', '$a[0]::b', '$a::b::c', '$a::b[0]'].flatMap(head => ["'", '"'].map(q => `Write-Output ${head}#${q}\nRemove-Item x\n#${q}`)),
+  ];
+  const { byRow, errored } = realWordsOf(rows);
+  const wrong: string[] = [];
+  for (const [i, row] of rows.entries()) {
+    if (errored.has(i)) { wrong.push(`${JSON.stringify(row)}: 本物の Parser が構文エラー`); continue; }
+    const real = byRow.get(i) ?? [];
+    const runs = real.some(c => isRemoveItem(c[0]) || c[0] === 'Get-Content');
+    for (const shell of ['powershell', 'pwsh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (lexed.ok) { if (runs) wrong.push(`${shell}: ${JSON.stringify(row)}: 読めてしまった（止めるはず）`); }
+      else if (lexed.fail.code !== 'unexpected') wrong.push(`${shell}: ${JSON.stringify(row)}: 止めた理由が ${lexed.fail.code}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+  // 本物が動かす行が 1 つもないと、上の確認が空振りになる
+  assert.ok(['?.b', '?[0]', '$a::b#', '$a::b#"', '$env:x::y', '$a.b::c', '$a[0]::b', '$a::b::c', '$a::b[0]'].every(j => rows.some((r, i) => r.includes(j) && (byRow.get(i) ?? []).some(c => isRemoveItem(c[0])))), '前提: ?.b# ?[0]# ::b# の行で本物の Parser が Remove-Item を動かす');
+});
+
+// bash の関数定義は name () { … } のように括弧の前に空白があってもよい。本物の bash では関数が定義されて、同名の許可コマンド（ls など）を隠す
+test('bash: name () { … }（括弧の前に空白・タブ・改行）も本物の bash では関数の定義で、同名のコマンドを隠す。字句の読み取りは function の印を付ける', { skip: !bashPath && 'bash が無い' }, t => {
+  const dir = scratch(t);
+  const ran = join(dir, 'cwd', 'ran.txt');
+  const rows = ['pwn() { echo ran >> ran.txt; }; pwn', 'pwn () { echo ran >> ran.txt; }; pwn', 'pwn  () { echo ran >> ran.txt; }; pwn', 'pwn\t() { echo ran >> ran.txt; }; pwn', 'pwn ()\n{ echo ran >> ran.txt; }\npwn', 'ls () { echo ran >> ran.txt; }; ls'];
+  const notFunction: string[] = [];
+  const notRun: string[] = [];
+  for (const row of rows) {
+    rmSync(ran, { force: true });
+    viaFile(dir, row);
+    if (!existsSync(ran)) notRun.push(row);
+    for (const shell of ['bash', 'sh'] as ShellKind[]) {
+      const lexed = lexShell(row, shell);
+      if (!lexed.ok || !lexed.statements.some(s => s.shapes.includes('function'))) notFunction.push(`${shell}: ${row}`);
+    }
+  }
+  assert.deepEqual(notRun, [], '前提: 本物の bash では関数が定義されて動く');
+  assert.deepEqual(notFunction, [], '字句の読み取りが function の印を付けなかった');
+  rmSync(ran, { force: true });
+  viaFile(dir, '(echo ran >> ran.txt); echo ran | (cat >> ran.txt)');
+  assert.equal(existsSync(ran), true);
+  for (const row of ['(echo ran >> ran.txt)', 'echo ran | (cat >> ran.txt)']) assert.ok(!(lexShell(row, 'bash') as { statements?: Array<{ shapes: string[] }> }).statements?.some(s => s.shapes.includes('function')), `${row}: 文の頭の ( は部分シェルで、関数ではない`);
 });

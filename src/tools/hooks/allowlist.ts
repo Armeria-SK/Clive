@@ -65,6 +65,14 @@ function assignments(st: Statement, ps: boolean, acc: Acc): void {
   }
 }
 
+function loopVariable(st: Statement, acc: Acc): void {
+  const raw = st.words[0]?.text;
+  if (raw === undefined) return;
+  const name = st.header === 'foreach' ? raw.replace(/^\$/u, '') : raw;
+  const ok = st.header === 'foreach' ? !/^env:/iu.test(name) && psVarOk(name) : bashVarOk(name);
+  if (!ok) acc.add('once', 'list.env', { name }, false);
+}
+
 function external(key: string, acc: Acc, ctx: MatchCtx): string {
   if (!ctx.external) return '.exe';
   const r = ctx.external(key);
@@ -104,6 +112,7 @@ export function matchStatement(st: Statement, ctx: MatchCtx): StatementResult {
   shapes(st, acc);
   redirects(st, acc, ps);
   if (st.kind === 'control') {
+    if (st.header === 'for' || st.header === 'foreach') loopVariable(st, acc);
     if (st.header === 'for') for (const w of st.words.slice(2)) if (w.glob) acc.read(w);
     return acc.result();
   }
