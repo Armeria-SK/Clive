@@ -420,9 +420,16 @@ register(['tar'], (words, acc, ctx) => {
   if (create) {
     // 元のフォルダの下の秘密のパスは、アーカイブにそのまま入る（out.tar という名前は秘密のパスではない）ので、歩いて調べる。-C のあとの名前は、その -C のフォルダの下
     for (const w of pos) {
-      acc.read(w, true);
       const base = baseOf.get(w);
-      acc.walk(base && !base.dynamic && !w.dynamic && !ABSOLUTE.test(w.text) ? { ...w, text: joinPath(base.text, w.text) } : w);
+      // bsdtar（tar.exe）は @ で始まる名前を「そのアーカイブを読んで、中の項目を写す」と読む。-C のあとなら、その -C のフォルダが基準。外せない確かめにして、@ を除いた名前を読み取りとして調べる（GNU tar ではただの名前だが、安全な側に倒す）
+      if (w.text.startsWith('@')) {
+        formOnce(acc, 'tar', w.text, false);
+        const name = { ...w, text: w.text.slice(1) };
+        if (name.text !== '') acc.read(nested(base, name));
+        continue;
+      }
+      acc.read(w, true);
+      acc.walk(nested(base, w));
     }
   }
 });

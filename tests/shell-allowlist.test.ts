@@ -804,3 +804,78 @@ test('穴 5（F3）の回帰: 既知の安全な綴りだけの tar は今のま
   }
   assert.deepEqual(wrong, []);
 });
+
+// 穴 5（F4）: bsdtar（Windows の tar.exe。PowerShell の tar もこれに解決される）は、-c のとき「@ で始まる名前」を「その名前のアーカイブを読んで、中の項目をそのまま写す」と読む
+// （本物の tar.exe 3.8.9 で、作業フォルダの外の ../inner.tar の中身が out.tar に入るのを確かめた。-C のあとなら、その -C のフォルダが基準。一覧モード -t では ただの名前の型で、読まない。GNU tar 1.35 では ただの名前）。
+// 以前は @../inner.tar という名前の通常のファイルとして調べていたので、外のアーカイブを持ち込む形が確かめなしで通っていた。@ を除いた名前を読み取りとして調べ、さらに持ち主の許可でも外せない確かめにする
+const TAR_AT_ARCHIVE = [
+  'tar -cf out.tar @../inner.tar', 'tar -C sub -cf out.tar @../../inner.tar', 'tar -cf out.tar @inner.tar', 'tar -C sub -cf out.tar @inner.tar', 'tar cf out.tar @inner.tar', 'tar --create --file=out.tar @inner.tar',
+  'tar -czf out.tgz sub @inner.tar', 'tar -cf out.tar b.txt @inner.tar', 'tar -cf out.tar @-', 'tar -cf out.tar @', "tar -cf out.tar '@inner.tar'", 'tar -cf out.tar "@../inner.tar"',
+] as const;
+
+test('穴 5（F4）: tar -c の @ で始まる名前は、読み取りの調べをして、持ち主の許可でも外せない毎回の確かめ（bash の tar・PowerShell の tar・tar.exe）', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  const rows: Array<readonly ['bash' | 'powershell', string, string]> = [];
+  for (const row of TAR_AT_ARCHIVE) rows.push(['bash', row, 'tar'], ['powershell', row, 'tar'], ['powershell', row.replace(/^tar /u, 'tar.exe '), 'tar.exe']);
+  rows.push(['powershell', 'tar.exe -cf out.tar @..\\inner.tar', 'tar.exe'], ['powershell', 'tar.exe -cf out.tar @inner.tar', 'tar.exe']);
+  for (const [shell, text, entry] of rows) {
+    for (const allow of [undefined, [entry]]) {
+      const v = f.guard(text, shell, allow, shell === 'powershell');
+      if (!(v.decision === 'ask' && v.onceOnly)) wrong.push(`${shell}${allow ? '+allow' : ''}: ${text} → ${whyOf(v)}`);
+    }
+  }
+  for (const row of TAR_AT_ARCHIVE) {
+    const fixed = classify(row, 'bash', { windows: true }).results.flatMap(r => r.reasons).filter(r => r.key === 'list.form' && r.level === 'once' && !r.exempt);
+    if (fixed.length === 0) wrong.push(`${row}: 外せない list.form が付いていない`);
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5（F4）: @ のあとの名前は、ほかの読み取りと同じに調べる（外のフォルダは確かめ・秘密のパスは拒否・-C のあとは -C のフォルダが基準）', t => {
+  const f = holeFixture(t);
+  const wrong: string[] = [];
+  const rows: ReadonlyArray<readonly [string, 'ask' | 'deny', RegExp]> = [
+    ['tar -cf out.tar @../inner.tar', 'ask', /許可フォルダの外/u],
+    ['tar -C sub -cf out.tar @../../inner.tar', 'ask', /許可フォルダの外/u],
+    ['tar -cf out.tar @.env', 'deny', /秘密/u],
+    ['tar -cf out.tar @sub/.env', 'deny', /秘密/u],
+    ['tar -C sub -cf out.tar @.env', 'deny', /秘密/u],
+    // -C sub のあとの @../inner.tar は、作業フォルダの中の inner.tar（-C を無視して読むと、作業フォルダの外に見える）
+    ['tar -C sub -cf out.tar @../inner.tar', 'ask', /^(?![\s\S]*(?:許可フォルダの外|秘密))/u],
+    ['tar -cf out.tar @RO/inner.tar', 'ask',/^(?![\s\S]*(?:許可フォルダの外|秘密))/u],
+  ];
+  for (const [row, want, why] of rows) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    const runs = [['bash', command, 'tar'], ['powershell', command, 'tar'], ['powershell', command.replace(/^tar /u, 'tar.exe '), 'tar.exe']] as const;
+    for (const [shell, text, entry] of row.includes('RO/') ? runs.slice(1) : runs) {
+      for (const allow of [undefined, [entry]]) {
+        const v = f.guard(text, shell, allow ? [...allow] : undefined, shell === 'powershell');
+        if (v.decision !== want || !why.test(v.reasons.join(' / '))) wrong.push(`${shell}${allow ? '+allow' : ''}: ${row} → ${whyOf(v)} (want ${want} ${why})`);
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
+test('穴 5（F4）の回帰: @ のない tar と、先頭が @ でない名前は今のまま（読む・書く場所の調べも同じ）', t => {
+  const f = holeFixture(t);
+  const rows: ReadonlyArray<readonly [string, 'allow' | 'ask' | 'deny', 'allow' | 'ask' | 'deny']> = [
+    ['tar -cf out.tar b.txt', 'allow', 'allow'], ['tar -czf out.tgz sub', 'allow', 'allow'], ['tar -cf out.tar a@b.txt', 'allow', 'allow'], ['tar -cf out.tar b.txt sub', 'allow', 'allow'],
+    ['tar -C sub -cf out.tar b.txt', 'allow', 'allow'], ['tar -tf a.tar', 'allow', 'allow'], ['tar -tf RO/x.tar', 'allow', 'allow'], ['tar -cf RO/x.tar sub', 'deny', 'deny'],
+    ['tar -cf @out.tar b.txt', 'allow', 'allow'], ['tar -cf out.tar ../inner.tar', 'ask', 'ask'], ['tar -cf out.tar .env', 'deny', 'deny'],
+  ];
+  const wrong: string[] = [];
+  for (const [row, plain, allowed] of rows) {
+    const command = row.replace('RO/', `${f.ro}/`);
+    const runs = [['bash', command, 'tar'], ['powershell', command, 'tar'], ['powershell', command.replace(/^tar /u, 'tar.exe '), 'tar.exe']] as const;
+    // RO/ は C:/ の絶対パスで、bash（windows でない）ではリモートの名前に読まれる。PowerShell で @名前 は splatting の変数（別の確かめ）
+    for (const [shell, text, entry] of row.includes('RO/') ? runs.slice(1) : row.includes('@out.tar') ? runs.slice(0, 1) : runs) {
+      for (const [allow, want] of [[undefined, plain], [[entry], allowed]] as const) {
+        const v = f.guard(text, shell, allow ? [...allow] : undefined, shell === 'powershell');
+        if (v.decision !== want) wrong.push(`${shell}${allow ? '+allow' : ''}: ${text.replace(f.ro, 'RO')} → ${whyOf(v)} (want ${want})`);
+      }
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
