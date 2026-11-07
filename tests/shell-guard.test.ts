@@ -312,6 +312,11 @@ test('shell（PowerShell）: 式の位置で数・符号・演算子につなが
     ['return 1' + hidden, 'deny', null],
     ['& { 1' + hidden + '\n}', 'deny', null],
     ['$a = 1#; Get-Content .env', 'deny', null],
+    // 変数・文字列・閉じ括弧につながった語の中の # は、本物が語の一部と読む形（$x*2#）も、変数 → メンバー → コメントと読む形（$a?.b# $a::b#）と見分けられないので止める
+    ['Write-Output $x*2#; Remove-Item -Recurse -Force sub', 'deny', null],
+    ["Write-Output $a?.b#'\nRemove-Item -Recurse -Force sub\n#'", 'deny', null],
+    ["Write-Output $a::b#'\nRemove-Item -Recurse -Force sub\n#'", 'deny', null],
+    ["Write-Output $a?[0]#'\nGet-Content .env\n#'", 'deny', null],
     // ハッシュテーブルの値は文として動く（本物の PowerShell は b = Remove-Item … を動かす）
     ["$x = @{ a = 1#'\nb = Remove-Item -Recurse -Force sub\n#'\n}", 'deny', null],
     ["$x = @{ a = 1; b = 2#'\nc = Remove-Item -Recurse -Force sub\n#'\n}", 'deny', null],
@@ -320,7 +325,6 @@ test('shell（PowerShell）: 式の位置で数・符号・演算子につなが
     ['Write-Output -1#; Remove-Item -Recurse -Force sub', 'ask', true],
     ['Write-Output 1,2#; Remove-Item -Recurse -Force sub', 'ask', true],
     ['Write-Output 1..2#; Remove-Item -Recurse -Force sub', 'ask', true],
-    ['Write-Output $x*2#; Remove-Item -Recurse -Force sub', 'ask', true],
     ['$a = Write-Output 1#; Remove-Item -Recurse -Force sub', 'ask', true],
     ['Write-Output 1' + hidden, 'allow', false],
     ['Write-Output -1' + hidden, 'allow', false],

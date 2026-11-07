@@ -448,6 +448,9 @@ test('字句 PowerShell: 式の位置で数・符号・演算子につながっ�
     "$x = @{ a = 1#'\nb = Remove-Item -Recurse -Force sub\n#'\n}", "$x = @{ a = 1; b = 2#'\nc = Remove-Item -Recurse -Force sub\n#'\n}", "@{ a=1#'\nb = Remove-Item -Recurse -Force sub\n#'\n}",
     '$x = @{ a = Write-Output 1#; b = Remove-Item -Recurse -Force sub }', "$x = @{ a = 1; b = Write-Output 2#'\nc = Remove-Item -Recurse -Force sub\n#'\n}",
   );
+  // 変数・メンバー・文字列・閉じ括弧に空白なしでつながった語の中の # は、引数の位置でも止める（本物が語の一部と読む $x*2# も、変数 → メンバー → コメントと読む $a?.b# $a::b# $a?[0]# も、見分けられない）
+  const hash = "#'\nRemove-Item -Recurse -Force sub\n#'";
+  for (const w of ['$x*2', "'a'*2", '(1)*2', '$x.y*2', '$a?.b', '$a?[0]', '$a?[0].b', '$a?', '$a.b?.c', '$a::b', '$a::b.c', '$env:x::y', '$a.b::c', '$a[0]::b', '$a::b::c', '$a::b[0]', '$a?::b', "'a'x", '(1)x', '{1}x', '@(1)x', '$(1)x', '@x?']) glued.push(`Write-Output ${w}${hash}`, `Write-Output ${w}#; Remove-Item -Recurse -Force sub`, `Write-Output ${w}#"\nRemove-Item -Recurse -Force sub\n#"`);
   for (const shell of ['powershell', 'pwsh'] as const) for (const command of glued) assert.equal(failure(command, shell), 'unexpected', `${shell}: ${JSON.stringify(command)}`);
   const commands = (command: string, shell: ShellKind) => read(command, shell).filter(s => s.kind === 'command').map(line);
   const args: Array<[string, string[]]> = [
@@ -457,7 +460,6 @@ test('字句 PowerShell: 式の位置で数・符号・演算子につながっ�
     ['Write-Output 1..2#; Remove-Item -Recurse -Force sub', ['Write-Output 1..2#', 'Remove-Item -Recurse -Force sub']],
     ['Write-Output .5#; Remove-Item -Recurse -Force sub', ['Write-Output .5#', 'Remove-Item -Recurse -Force sub']],
     ['Write-Output 0x1F#; Remove-Item -Recurse -Force sub', ['Write-Output 0x1F#', 'Remove-Item -Recurse -Force sub']],
-    ['Write-Output $x*2#; Remove-Item -Recurse -Force sub', ['Write-Output $x*2#', 'Remove-Item -Recurse -Force sub']],
     ['$a = Write-Output 1#; Remove-Item -Recurse -Force sub', ['Write-Output 1#', 'Remove-Item -Recurse -Force sub']],
     ['& { Write-Output 1#; Remove-Item -Recurse -Force sub }', ['Write-Output 1#', 'Remove-Item -Recurse -Force sub', '{…}']],
     ['Write-Output a | Write-Output 1#; Remove-Item -Recurse -Force sub', ['Write-Output a', 'Write-Output 1#', 'Remove-Item -Recurse -Force sub']],

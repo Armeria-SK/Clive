@@ -813,7 +813,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
     if (j === i) return fail('unexpected', ch);
     const text = src.slice(i, j);
     if (text.startsWith('--%')) return fail('parse_token', '--%');
-    if (text.includes('#') && !psInArguments(toks, text)) return fail('unexpected', '#');
+    if (text.includes('#') && ((!sp && (prevEndsValue() || toks.at(-1)?.t === 'splat')) || !psInArguments(toks, text))) return fail('unexpected', '#');
     push({ t: 'word', v: text, glob: /[*?[]/u.test(text) });
     i = j;
   }
