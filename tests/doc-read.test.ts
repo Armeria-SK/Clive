@@ -12,11 +12,13 @@ import { resolvePaths, type AppPaths } from '../src/paths.ts';
 import { zipWrite } from '../src/shared/zip.ts';
 import { ApprovalBroker, approvalPublic } from '../src/tools/approvals.ts';
 import { DOC_MAX_BYTES, docRead } from '../src/tools/builtin/docs.ts';
+import { fileWrite } from '../src/tools/builtin/files.ts';
 import { xlsxBytes } from '../src/tools/builtin/table-core.ts';
 import { runToolCall } from '../src/tools/pipeline.ts';
 import { buildPolicy, defaultWorkspace } from '../src/tools/policy.ts';
 import { ToolRegistry } from '../src/tools/registry.ts';
 import type { ToolContext } from '../src/tools/types.ts';
+import { waitFor } from './app-setup.ts';
 import { tempDir, testConfig } from './helpers.ts';
 
 // tests/file-search.test.ts の setup を写したもの。registry には docRead だけ
@@ -33,16 +35,16 @@ function setup(t: { after: (fn: () => void) => void }, mutate: (c: AppConfig) =>
   const approvals = new ApprovalBroker(db, e => events.push(e.type === 'requested'
     ? { type: 'approval.requested', runId: e.view.runId, conversationId: e.view.conversationId, approval: approvalPublic(e.view) }
     : { type: 'approval.resolved', runId: e.view.runId, conversationId: e.view.conversationId, approvalId: e.view.id, outcome: e.outcome }));
-  const registry = new ToolRegistry().register(docRead);
+  const registry = new ToolRegistry().register(docRead).register(fileWrite);
   const policy = buildPolicy(parsed, paths);
   const controller = new AbortController();
   const ctx: ToolContext = {
     runId: 'r1', conversationId: 'c1', kind: 'chat', signal: controller.signal, config: parsed, paths, policy,
     workspace: defaultWorkspace(policy, paths), taint: { tainted: false, sources: [] }, log: () => undefined,
   };
-  const call = (args: unknown, c: ToolContext = ctx) =>
-    runToolCall({ id: `call-${Math.random()}`, name: 'doc_read', arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
-  return { paths, ctx, call, events };
+  const call = (args: unknown, name = 'doc_read', c: ToolContext = ctx) =>
+    runToolCall({ id: `call-${Math.random()}`, name, arguments: args }, c, { registry, approvals, db, emit: e => events.push(e), conversationAutoRead: () => false });
+  return { paths, ctx, call, events, approvals };
 }
 
 // tests/uploads.test.ts の tinyPdf を写したもの（その試験を import すると、あちらの試験も動いてしまうため）
@@ -374,4 +376,30 @@ test('doc_read: 英語の設定では、結果にも失敗の文にも日本語�
   assert.equal(results[0]!.output.content, framed('[Sheet: Sheet1]\nname\tcount\napple\t3', FRAME_EN));
   assert.match(results[1]!.output.content, /\[Lines 2 to 2 of 3\. Read on with offset=3\]/u);
   assert.match(results[2]!.output.content, /\[Because it is long, the extracted text was cut off at 200,000 characters\]$/u);
+});
+
+test('doc_read: 文書を読んだ実行は「外から読んだ」印を付け、同じ実行のあとの書き込みは確かめを求める（Web の読み取りと同じ）', async t => {
+  const s = setup(t);
+  put(s, 'a.docx', docxBytes('hello doc'));
+  const read = await s.call({ path: 'a.docx' });
+  assert.equal(read.decision, 'allow');
+  assert.ok(!read.output.isError);
+  assert.equal(s.ctx.taint.tainted, true, '文書を読んだ実行は「外から読んだ」印を持つ');
+  assert.deepEqual(s.ctx.taint.sources, ['doc_read']);
+  // 印のついた実行で、同じ実行のあとの書き込みは確かめ（ask）になる
+  const write = s.call({ path: 'out.txt', content: 'x' }, 'file_write');
+  await waitFor(() => s.approvals.pending().length === 1, '外から読んだあとの書き込みの確かめ');
+  assert.match(s.approvals.pending()[0]!.reasons.join(' '), /doc_read/u, '確かめの理由に doc_read が載る');
+  s.approvals.decide(s.approvals.pending()[0]!.id, 'deny');
+  await write;
+  assert.equal(s.approvals.pending().length, 0);
+});
+
+test('doc_read: パスの確かめで断られた読み取りは「外から読んだ」印を付けない', async t => {
+  const s = setup(t);
+  writeFileSync(join(s.paths.data, 'outside.pdf'), tinyPdf('Outside text'));
+  const outside = await s.call({ path: '../outside.pdf' });
+  assert.equal(outside.decision, 'deny');
+  assert.equal(s.ctx.taint.tainted, false, '断られた読み取りは印を付けない');
+  assert.deepEqual(s.ctx.taint.sources, []);
 });
