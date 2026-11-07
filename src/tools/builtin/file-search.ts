@@ -4,6 +4,7 @@ import { Type } from '@sinclair/typebox';
 import { languageOf } from '../../shared/language.ts';
 import { toolText } from '../../shared/messages/tools.ts';
 import { placePath } from '../hooks/scope.ts';
+import { isUnderDownloads } from './downloads-core.ts';
 import { checkFilePath, HEAVY_DIRS } from './files.ts';
 import type { ToolContext, ToolDef } from '../types.ts';
 
@@ -57,6 +58,7 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
     const caseFold = !input.case_sensitive;
     const nameMatches: string[] = [];
     const textMatches: string[] = [];
+    let fetched = false; // downloads/ の下のファイルの中身の行を結果に入れたか（名前だけの一致は印を付けない）
     const heavy = new Set<string>();
     let skippedFiles = 0;
     let scanned = 0;
@@ -115,6 +117,7 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
           const hay = caseFold ? line.toLowerCase() : line;
           if (!hay.includes(needle)) continue;
           found++;
+          if (isUnderDownloads(full, ctx.workspace)) fetched = true;
           textMatches.push(`${rel}:${i + 1}: ${line.trim().slice(0, MAX_LINE_CHARS)}`);
         }
       }
@@ -128,6 +131,6 @@ export const fileSearch: ToolDef<{ path?: string; name?: string; text?: string; 
     if (partial) notes.push(toolText(language, 'search.partial', { count: scanned }));
     if (nameMatches.length + textMatches.length >= maxResults) notes.push(toolText(language, 'search.cut', { max: maxResults }));
     if (!parts.length) return { content: toolText(language, 'search.none', { path: shown(abs, ctx) }) };
-    return { content: parts.join('\n\n') + (notes.length ? `\n${notes.join('\n')}` : '') };
+    return { content: parts.join('\n\n') + (notes.length ? `\n${notes.join('\n')}` : ''), ...(fetched ? { fetched: true } : {}) };
   },
 };

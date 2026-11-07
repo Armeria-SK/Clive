@@ -8,6 +8,7 @@ import { toolText } from '../../shared/messages/tools.ts';
 import { approvalPaths } from '../approvals.ts';
 import { expandPath, placePath, writeApprovalKind } from '../hooks/scope.ts';
 import { isToolConfigPath } from '../hooks/tool-config.ts';
+import { isUnderDownloads } from './downloads-core.ts';
 import type { PreCheck, ToolContext, ToolDef } from '../types.ts';
 
 const FILE_KEYS = { persona: 'file.persona', skill: 'file.skill', git: 'file.git' } as const;
@@ -53,7 +54,11 @@ export const fileRead: ToolDef<{ path: string; offset?: number; limit?: number }
   input: Type.Object({ path: PathArg, offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })) }, { additionalProperties: false }),
   effect: 'read',
   allowedIn: ['chat', 'task'],
-  preCheck: (input, ctx) => checkFilePath(input.path, 'read', ctx).check,
+  // downloads/ の下は外の中身なので、読んだ実行に「外から読んだ」印を付ける（doc_read と同じ）。断られた読み取りは印を付けない
+  preCheck: (input, ctx) => {
+    const { abs, check } = checkFilePath(input.path, 'read', ctx);
+    return check.decision !== 'deny' && isUnderDownloads(abs, ctx.workspace) ? { ...check, fetched: true } : check;
+  },
   async execute(input, ctx) {
     const { abs } = checkFilePath(input.path, 'read', ctx);
     const language = languageOf(ctx.config);
