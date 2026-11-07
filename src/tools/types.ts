@@ -6,7 +6,7 @@ import type { MemoryStore } from '../memory/store.ts';
 import type { TaskStore } from '../tasks/store.ts';
 import type { CuriosityStore } from '../curiosity/store.ts';
 import type { SkillStore } from './skills/store.ts';
-import type { PageNetwork } from './web/public-page.ts';
+import type { DownloadNetwork, PageNetwork } from './web/public-page.ts';
 import type { SearchThrottle } from './web/search.ts';
 import type { AppPaths } from '../paths.ts';
 import type { Decision } from './hooks/shell-guard.ts';
@@ -92,7 +92,7 @@ export interface ToolContext {
     tasks?: TaskStore | undefined; curiosity?: CuriosityStore | undefined; skills?: SkillStore | undefined;
     // 持ち主へのお知らせ（同じ dedupKey は 1 日に重ねない）
     notify?: ((input: { kind: 'info' | 'health_alert'; title: string; body?: string; link?: string; dedupKey: string }) => unknown) | undefined;
-    web?: { network?: PageNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
+    web?: { network?: PageNetwork | undefined; download?: DownloadNetwork | undefined; fetch?: ((url: string | URL, init?: RequestInit) => Promise<Response>) | undefined; throttle?: SearchThrottle | undefined } | undefined;
   } | undefined;
   task?: { id: string; control: TaskControl } | undefined;
   // 道具の結果を返せる量の上限（見積もりのトークン。モデルのコンテキストの残りに合わせて、エンジンが呼ぶたびに決める）。

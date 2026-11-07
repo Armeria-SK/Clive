@@ -38,7 +38,7 @@ import { checklistWrite } from './tools/builtin/checklist.ts';
 import { notifyOwner } from './tools/builtin/notify.ts';
 import { docRead } from './tools/builtin/docs.ts';
 import { tableWrite } from './tools/builtin/tables.ts';
-import type { PageNetwork } from './tools/web/public-page.ts';
+import type { DownloadNetwork, PageNetwork } from './tools/web/public-page.ts';
 import { SearchThrottle } from './tools/web/search.ts';
 import { SkillStore } from './tools/skills/store.ts';
 import { TaskStore, taskView } from './tasks/store.ts';
@@ -72,6 +72,7 @@ export interface AppOptions {
   now?: () => number;
   workerTimers?: boolean;
   webNetwork?: PageNetwork;
+  downloadNetwork?: DownloadNetwork;
 }
 
 export class App {
@@ -157,7 +158,7 @@ export class App {
       registry: this.registry, status: this.status, bus: this.bus, limiter: this.limiter, paths: this.paths,
       tools: { registry: this.tools, approvals: this.approvals }, memory: this.memory, tasks: this.tasks,
       curiosity: this.curiosity, skills: this.skills, log: this.log,
-      web: { network: options.webNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
+      web: { network: options.webNetwork, download: options.downloadNetwork, fetch: options.fetch, throttle: new SearchThrottle(now) },
       notify: input => this.notifications.notify(input),
       ...(options.now ? { now: () => new Date(now()) } : {}),
     });
