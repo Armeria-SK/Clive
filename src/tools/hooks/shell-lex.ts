@@ -607,6 +607,46 @@ const PS_METHOD_OK = new Set([
 ]);
 const isNumberWord = (v: string): boolean => /^[-+]?[0-9][0-9_]*(?:\.[0-9]+)?(?:kb|mb|gb|tb|pb)?$/iu.test(v) || /^[0-9]+\.\.[0-9]+$/u.test(v);
 
+// 語の中の # が、コマンドの引数の中かを見分ける。本物の PowerShell は、コマンドの引数の中の # は語の一部と読むが、式の位置では数（1 -1 1,2 1..2 0x1F 1kb）や演算子と数（$x*2 $x..2）のすぐあとの # をコメントと読む。
+// 文の頭（; 改行 | & の次・( { $( @( の次・代入の = の右）の語がコマンド名の形（英字・_ など）なら、その文の語は引数。数・符号・演算子・変数・文字列・予約語から始まる文、@{ } と [ ] の中は式の位置（迷えば式の位置）
+const PS_NEW_STATEMENT = new Set([';', '\n', '|', '&', '&&', '||']);
+const PS_EXPR_KEYWORDS = new Set([...PS_OTHER_CONTROL, 'if', 'elseif', 'else', 'foreach']);
+const isPsOpener = (t: Tok): boolean => t.t === 'sub' || t.t === 'arr' || t.t === 'hash' || (t.t === 'p' && (t.v === '(' || t.v === '{' || t.v === '['));
+const isPsCloser = (t: Tok): boolean => t.t === 'p' && (t.v === ')' || t.v === '}' || t.v === ']');
+const isPsCommandWord = (v: string): boolean => /^(?:[\p{L}_%?\\/~]|\.(?![0-9]))/u.test(v) && !PS_EXPR_KEYWORDS.has(v.toLowerCase());
+
+function psInArguments(toks: readonly Tok[], text: string): boolean {
+  let start = -1;
+  let depth = 0;
+  let open = toks.length - 1;
+  for (; open >= 0; open--) {
+    const t = toks[open]!;
+    if (isPsCloser(t)) { depth++; continue; }
+    if (isPsOpener(t)) {
+      if (depth > 0) { depth--; continue; }
+      if (t.t === 'hash' || (t.t === 'p' && t.v === '[')) return false;
+      break;
+    }
+    if (start < 0 && depth === 0 && t.t === 'p' && PS_NEW_STATEMENT.has(t.v)) start = open + 1;
+  }
+  if (start < 0) start = open + 1;
+  for (let k = start; ;) {
+    const t = toks[k];
+    if (t === undefined) return isPsCommandWord(text);
+    if (t.t === 'word' && isPsCommandWord(t.v)) return true;
+    let eq = -1;
+    let d = 0;
+    for (let m = k; m < toks.length && eq < 0; m++) {
+      const u = toks[m]!;
+      if (isPsCloser(u)) d--;
+      else if (isPsOpener(u)) d++;
+      else if (d === 0 && u.t === 'word' && ASSIGN_OPS.has(u.v)) eq = m;
+    }
+    if (eq < 0) return false;
+    k = eq + 1;
+  }
+}
+
 function naiveSubEnd(src: string, from: number): number {
   let depth = 1;
   for (let i = from; i < src.length; i++) {
@@ -754,6 +794,7 @@ function scanPs(src: string, shell: ShellKind, from: number, level: number, sub:
     if (j === i) return fail('unexpected', ch);
     const text = src.slice(i, j);
     if (text.startsWith('--%')) return fail('parse_token', '--%');
+    if (text.includes('#') && !psInArguments(toks, text)) return fail('unexpected', '#');
     push({ t: 'word', v: text, glob: /[*?[]/u.test(text) });
     i = j;
   }

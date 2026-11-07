@@ -426,3 +426,47 @@ test('字句 bash: 関数定義 name () { … } は、括弧の前に空白（�
     assert.equal(failure('x=(a b)', shell), 'unexpected');
   }
 });
+
+// 式の位置（= の右・演算子のあと・文の頭・$( ) @( ) { } の頭）では、本物の PowerShell は数（1 -1 1,2 1..2 1.5 0x1F 1kb …）や演算子と数（$x*2 $x..2）のすぐあとの # をコメントと読む。
+// 字句の読み取りが # を語の一部と読むと、$a = 1#'<改行>Remove-Item …<改行>#' は Remove-Item を引用符の中に隠す（本物はコメントなので動かす）。式の位置の語の中の # は読まずに止める。
+// コマンドの引数の中（Write-Output 1# など）は、本物の Parser も語の一部と読むので今までどおり
+test('字句 PowerShell: 式の位置で数・符号・演算子につながった # は止める。コマンドの引数の中の # は今までどおり語の一部', () => {
+  const tails = ["#'\nRemove-Item -Recurse -Force sub\n#'", '#; Remove-Item -Recurse -Force sub'];
+  const prefixes: ReadonlyArray<readonly [string, string]> = [
+    ['$a = ', ''], ['$a=', ''], ['', ''], ['Write-Output $(', '\n)'], ['Write-Output @(', '\n)'], ['& { ', '\n}'], ['return ', ''], ['$a -eq ', ''], ['$a = 1 + ', ''], ['$a = 1,', ''],
+    ['ls | % { ', '\n}'], ['Write-Output a; ', ''], ['Write-Output a\n', ''], ['$a = [int]', ''], ['throw ', ''], ['exit ', ''],
+  ];
+  const numbers = ['1', '-1', '+1', '1,2', '1..2', '1.5', '.5', '-.5', '0x1F', '1kb', '1e3', '1L', '1d', '1-2', '12'];
+  const glued: string[] = [];
+  for (const tail of tails) {
+    for (const [pre, post] of prefixes) for (const n of numbers) glued.push(`${pre}${n}${tail}${post}`);
+    for (const w of ['$x*2', '$x/2', '$x%2', '$x..2', '$x+2', '$x-2', '$x,2', "'a'*2", '(1)*2', '$x.y*2', '$x[0]*2', '@(1)*2', '[int]$x*2', '$x -eq 1', '$x=1', '$x+=1']) glued.push(`$a = ${w}${tail}`);
+    glued.push(`$x*2${tail}`, `'a'*2${tail}`, `$x-1${tail}`);
+  }
+  // ハッシュテーブルの中は、; と改行が項目を分け、値は文として動く。中の語はコマンドの引数ではないので、# は止める
+  glued.push(
+    "$x = @{ a = 1#'\nb = Remove-Item -Recurse -Force sub\n#'\n}", "$x = @{ a = 1; b = 2#'\nc = Remove-Item -Recurse -Force sub\n#'\n}", "@{ a=1#'\nb = Remove-Item -Recurse -Force sub\n#'\n}",
+    '$x = @{ a = Write-Output 1#; b = Remove-Item -Recurse -Force sub }', "$x = @{ a = 1; b = Write-Output 2#'\nc = Remove-Item -Recurse -Force sub\n#'\n}",
+  );
+  for (const shell of ['powershell', 'pwsh'] as const) for (const command of glued) assert.equal(failure(command, shell), 'unexpected', `${shell}: ${JSON.stringify(command)}`);
+  const commands = (command: string, shell: ShellKind) => read(command, shell).filter(s => s.kind === 'command').map(line);
+  const args: Array<[string, string[]]> = [
+    ['Write-Output 1#; Remove-Item -Recurse -Force sub', ['Write-Output 1#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output -1#; Remove-Item -Recurse -Force sub', ['Write-Output -1#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output 1,2#; Remove-Item -Recurse -Force sub', ['Write-Output 1,2#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output 1..2#; Remove-Item -Recurse -Force sub', ['Write-Output 1..2#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output .5#; Remove-Item -Recurse -Force sub', ['Write-Output .5#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output 0x1F#; Remove-Item -Recurse -Force sub', ['Write-Output 0x1F#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output $x*2#; Remove-Item -Recurse -Force sub', ['Write-Output $x*2#', 'Remove-Item -Recurse -Force sub']],
+    ['$a = Write-Output 1#; Remove-Item -Recurse -Force sub', ['Write-Output 1#', 'Remove-Item -Recurse -Force sub']],
+    ['& { Write-Output 1#; Remove-Item -Recurse -Force sub }', ['Write-Output 1#', 'Remove-Item -Recurse -Force sub', '{…}']],
+    ['Write-Output a | Write-Output 1#; Remove-Item -Recurse -Force sub', ['Write-Output a', 'Write-Output 1#', 'Remove-Item -Recurse -Force sub']],
+    ['Write-Output (Write-Output 1#; Remove-Item -Recurse -Force sub)', ['Write-Output $(…)', 'Write-Output 1#', 'Remove-Item -Recurse -Force sub']],
+    ["Write-Output 1#'\nRemove-Item -Recurse -Force sub\n#'", ['Write-Output 1#\nRemove-Item -Recurse -Force sub\n#']],
+    ["Write-Output -1#'\nRemove-Item -Recurse -Force sub\n#'", ['Write-Output -1#\nRemove-Item -Recurse -Force sub\n#']],
+    ['Write-Output a#b', ['Write-Output a#b']],
+  ];
+  for (const shell of ['powershell', 'pwsh'] as const) for (const [command, expected] of args) {
+    assert.deepEqual(commands(command, shell).sort(), [...expected].sort(), `${shell}: ${JSON.stringify(command)}`);
+  }
+});
