@@ -211,10 +211,71 @@ function timedInChild(body: string, args: string[], limitMs = 8000): { ms: numbe
 const hooksUrl = (file: string): string => pathToFileURL(join(import.meta.dirname, '..', 'src', 'tools', 'hooks', file)).href;
 const STARS = '*?*?*?*?*?*?*?*?*?*?Z';
 
+// 呼ぶ側（wildcardMatches・expandGlob を通る checkShellCommand）も、本物のファイル名（a が 60 個）に * が並ぶパターンを当てて固まらないこと。ファイルが実際にフォルダにあるときだけ、照合が走る
+const LONG_NAME = 'a'.repeat(60);
+function heavyWorkspace(t: { after: (fn: () => void) => void }): string {
+  const ws = realish(join(tempDir(t), 'workspace'));
+  mkdirSync(join(ws, 'sub'), { recursive: true });
+  for (const dir of [ws, join(ws, 'sub')]) writeFileSync(join(dir, LONG_NAME), 'x');
+  return ws;
+}
+function guardTimed(ws: string, command: string, shell: 'bash' | 'powershell'): { ms: number; value: string } {
+  return timedInChild(
+    `const [guard, ws, command, shell] = process.argv.slice(1); const { checkShellCommand } = await import(guard);
+const policy = { roots: [{ path: ws, mode: 'write' }], deny: [] };
+console.log(JSON.stringify(timed(() => checkShellCommand(command, ws, { policy, outsideRoots: 'ask', shell, windows: shell === 'powershell' }).decision)));`,
+    [hooksUrl('shell-guard.ts'), ws, command, shell],
+  );
+}
+
+test('wildcardMatches: * が並ぶパターンを、200 文字の a に当てても 1 秒未満', () => {
+  const { ms, value } = timedInChild(`const { wildcardMatches } = await import(process.argv[1]); console.log(JSON.stringify(timed(() => wildcardMatches('a'.repeat(200), process.argv[2]))));`, [hooksUrl('path-expand.ts'), STARS]);
+  assert.equal(value, false);
+  assert.ok(ms < 1000, `${ms}ms`);
+});
+
+test('bash の ls *?*?…Z（展開）は、a が 60 個のファイルがあっても 1 秒未満で返る', t => {
+  const { ms, value } = guardTimed(heavyWorkspace(t), `ls ${STARS}`, 'bash');
+  assert.equal(value, 'allow');
+  assert.ok(ms < 1000, `${ms}ms`);
+});
+
+test('PowerShell の Get-ChildItem *?*?…Z（展開）は、a が 60 個のファイルがあっても 1 秒未満で返る', t => {
+  const { ms, value } = guardTimed(heavyWorkspace(t), `Get-ChildItem ${STARS}`, 'powershell');
+  assert.equal(value, 'allow');
+  assert.ok(ms < 1000, `${ms}ms`);
+});
+
+for (const flag of ['-Include', '-Exclude']) {
+  test(`PowerShell の Get-ChildItem -Recurse ${flag} *?*?…Z | Get-Content（流れるファイルの絞り込み）は、a が 60 個のファイルがあっても 1 秒未満で返る`, t => {
+    const { ms, value } = guardTimed(heavyWorkspace(t), `Get-ChildItem -Recurse ${flag} '${STARS}' | Get-Content`, 'powershell');
+    assert.equal(value, 'allow');
+    assert.ok(ms < 1000, `${ms}ms`);
+  });
+}
+
 test('compileWildcard: * が 10 個並ぶパターンを、200 文字の a に当てても 1 秒未満（古い正規表現は固まる）', () => {
   for (const [pattern, want] of [[STARS, false], ['*a*a*a*a*a*a*a*a*a*a*Z', false], ['*?*?*?*?*?*?*?*?*?*?', true], ['[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*[ab]*Z', false]] as const) {
     const { ms, value } = timedInChild(`const { compileWildcard } = await import(process.argv[1]); const match = compileWildcard(process.argv[2], true, true); console.log(JSON.stringify(timed(() => match('a'.repeat(200)))));`, [hooksUrl('path-expand.ts'), pattern]);
     assert.equal(value, want, pattern);
     assert.ok(ms < 1000, `${pattern}: ${ms}ms`);
   }
+});
+
+test('分からない形のワイルドカード（先頭が ] の組・組の外の ]・逆向きの範囲）は、展開しきれない扱い。古い正規表現は例外を投げ、checkShellCommand ごと落ちていた', t => {
+  const f = fixture(t);
+  const dir = tempDir(t);
+  for (const [pattern, powershell] of [['[]a]', false], ['a*]', true], ['[z-a]', false]] as const) {
+    const globbed = expandGlob(join(dir, pattern), powershell);
+    assert.deepEqual([globbed.complete, globbed.matches], [false, []], pattern);
+  }
+  for (const c of ['ls []a]', 'cat a*]', 'cat [z-a]', 'rm a*]']) assert.equal(f.bash(c).decision, 'ask', c);
+  for (const c of ["Get-ChildItem '[]a]'", "Get-Content 'a*]'", "Remove-Item 'a*]'"]) assert.equal(f.ps(c).decision, 'ask', c);
+});
+
+test('PowerShell のワイルドカードの * は先頭が . の名前にも当たる（bash は当たらない）。切り替えのあとも変わらない', t => {
+  const f = fixture(t);
+  assert.equal(f.ps('Get-Content *').decision, 'deny');
+  assert.equal(f.bash('cat *').decision, 'allow');
+  assert.equal(f.bash('cat .*').decision, 'deny');
 });

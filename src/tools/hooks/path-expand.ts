@@ -160,13 +160,15 @@ export function expandGlob(pattern: string, dotfiles: boolean, secrets: SecretSc
       const next: string[] = [];
       let overflow = false;
       if (/[*?[]/u.test(seg)) {
-        const re = segmentRegex(seg, WINDOWS, dotfiles);
+        const match = compileWildcard(seg, WINDOWS, dotfiles);
+        // 分からない形の組は、当たるものを数えられないので、展開しきれない扱い（呼ぶ側が確かめにする）
+        if (!match) return { prefix, matches, complete: false, ...found() };
         scan: for (const dir of level) {
           let names: string[];
           try { names = readdirSync(dir); } catch { continue; }
           for (const name of names) {
             if (name.startsWith('.') && !dotfiles && !seg.startsWith('.')) continue;
-            if (re.test(name)) {
+            if (match(name)) {
               const full = join(dir, name);
               if (secret === undefined && isSecretPath(full, secrets)) secret = full;
               // 上限を超えても、秘密のパスを探すために、名前を数え続ける（一覧には足さない）
@@ -188,8 +190,16 @@ export function expandGlob(pattern: string, dotfiles: boolean, secrets: SecretSc
 const LIST_CAP = 20_000;
 
 // PowerShell のワイルドカードを、名前 1 つに当てる（大文字小文字は、Windows では区別しない）
+// 分からない形（null）は「当たる」扱い（-Include では多めに調べる側）。-Exclude に使うと引きすぎるので、呼ぶ側は [ ] を含むパターンを渡さないこと
+const wildcardCache = new Map<string, Wildcard | null>();
 export function wildcardMatches(name: string, pattern: string): boolean {
-  return segmentRegex(pattern, WINDOWS, true).test(name);
+  let match = wildcardCache.get(pattern);
+  if (match === undefined) {
+    match = compileWildcard(pattern, WINDOWS, true);
+    if (wildcardCache.size >= 256) wildcardCache.clear();
+    wildcardCache.set(pattern, match);
+  }
+  return match === null || match(name);
 }
 
 // フォルダの中身（deep なら下の階層まで）の一覧。幅優先で、上限を超えたら途中まで返して complete: false。入れないフォルダ・たどれないリンクがあっても complete: false
